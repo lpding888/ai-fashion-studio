@@ -1,0 +1,3 @@
+{
+    "body": "{\"referenceImageUrls\":[],\"prompt\":\"A beautiful fashion model in urban setting, professional photography, 4K, cinematic lighting\",\"shotId\":\"test_shot_001\",\"config\":{\"painterApiUrl\":\"https://api.vectorengine.ai/v1\",\"apiKey\":\"YOUR_PAINTER_API_KEY\",\"painterModel\":\"gemini-3-pro-image-preview\",\"painterParams\":{\"aspectRatio\":\"16:9\",\"imageSize\":\"1K\"}}}"
+}

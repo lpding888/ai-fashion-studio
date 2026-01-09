@@ -1,0 +1,25 @@
+{
+    "name": "scf-painter",
+    "version": "1.0.0",
+    "description": "腾讯云SCF函数 - Painter图片生成",
+    "main": "index.js",
+    "scripts": {
+        "test": "node test-local.js"
+    },
+    "dependencies": {
+        "axios": "^1.6.0",
+        "cos-nodejs-sdk-v5": "^2.12.0",
+        "dotenv": "^17.2.3"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "keywords": [
+        "scf",
+        "serverless",
+        "painter",
+        "image-generation"
+    ],
+    "author": "",
+    "license": "MIT"
+}

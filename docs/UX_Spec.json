@@ -1,0 +1,202 @@
+{
+  "ia": {
+    "sitemap": [
+      { "id": "home", "name": "任务列表", "path": "/" },
+      { "id": "new_task", "name": "新建任务", "path": "/new" },
+      { "id": "task_detail", "name": "任务详情", "path": "/task/:id" },
+      { "id": "settings", "name": "设置", "path": "/settings" }
+    ],
+    "navigation_labels": ["任务列表", "新建任务", "设置"]
+  },
+  "task_model": {
+    "top_tasks": [
+      "创建任务并生成计划（Shot List）",
+      "编辑 GARMENT LOCK 与 Shot 行",
+      "逐张生成图片（失败可重试）",
+      "人工质检通过或触发修复",
+      "生成修复方案并执行改图（仅改衣服）",
+      "导出图片与 Shot List"
+    ]
+  },
+  "flows": [
+    {
+      "id": "flow_a_create_plan",
+      "name": "新建任务 → 生成计划",
+      "happy_path": [
+        "上传衣服参考图（≥1）与可选 face_ref",
+        "填写平台/风格/大场景/张数/约束",
+        "点击「生成计划」",
+        "进入任务详情 Step1（计划），展示结构化结果与 Shot List"
+      ],
+      "exceptions": [
+        "未上传衣服图：按钮置灰并提示",
+        "接口失败：展示错误原因与「重试」"
+      ]
+    },
+    {
+      "id": "flow_b_render",
+      "name": "确认计划 → 逐张出图",
+      "happy_path": [
+        "编辑 GARMENT LOCK（可选）与 Shot（可选）",
+        "点击「开始出图」进入 Step2（出图）",
+        "队列逐张生成（每个 Shot 1 次调用）",
+        "全部完成后进入 Step3（质检）"
+      ],
+      "exceptions": ["单张失败：显示摘要 +「重试本张」，不阻塞其他"]
+    },
+    {
+      "id": "flow_c_review_fix",
+      "name": "人工质检 →（可选）修复闭环",
+      "happy_path": [
+        "逐张对比参考图 vs 输出图",
+        "通过：该 Shot 标记 APPROVED",
+        "需要修复：打开修复弹窗",
+        "生成修复方案（差异清单 + 修复指令草稿）→ 用户确认",
+        "执行修复生成新版本 → 用户通过或继续修复"
+      ],
+      "exceptions": [
+        "修复超过 2 次：提示改为「重生本张」",
+        "修复调用失败：保留修复指令 + 支持重试"
+      ]
+    },
+    {
+      "id": "flow_d_export",
+      "name": "导出",
+      "happy_path": ["单张下载 PNG", "整任务打包下载（含 Prompt/参数/版本记录）"]
+    }
+  ],
+  "screens": [
+    {
+      "id": "home",
+      "name": "任务列表",
+      "purpose": "进入最近任务、创建新任务",
+      "states": ["empty", "loading", "error", "ready"],
+      "primary_actions": ["新建任务", "进入任务详情", "打开设置"]
+    },
+    {
+      "id": "new_task",
+      "name": "新建任务",
+      "purpose": "上传参考图并填写需求，生成计划",
+      "states": ["editing", "submitting", "error"],
+      "fields": [
+        "衣服参考图（多张）",
+        "face_ref（可选）",
+        "平台/用途（默认小红书）",
+        "风格关键词",
+        "统一大场景",
+        "张数 N（默认 4）",
+        "动作偏好（可选）",
+        "约束（默认勾选）",
+        "NEG（默认 OFF）"
+      ],
+      "primary_actions": ["生成计划"]
+    },
+    {
+      "id": "task_detail_plan",
+      "name": "任务详情-计划（Step1）",
+      "purpose": "查看并编辑 GARMENT LOCK 与 Shot List，为出图做准备",
+      "primary_actions": ["开始出图"],
+      "secondary_actions": ["复制 Prompt", "编辑 Shot", "编辑 GARMENT LOCK"]
+    },
+    {
+      "id": "task_detail_render",
+      "name": "任务详情-出图（Step2）",
+      "purpose": "逐张生成，提供进度与单张重试",
+      "primary_actions": ["重试本张", "预览/下载", "跳到质检"]
+    },
+    {
+      "id": "task_detail_review",
+      "name": "任务详情-质检（Step3）",
+      "purpose": "人工对比参考图与输出图，决定通过或修复",
+      "primary_actions": ["通过", "需要修复", "重生本张"]
+    },
+    {
+      "id": "fix_modal",
+      "name": "修复弹窗",
+      "purpose": "仅修复衣服细节：差异清单→修复指令→执行修复→版本对比",
+      "primary_actions": ["生成修复方案", "执行修复", "通过", "继续修复", "回退旧版"]
+    },
+    {
+      "id": "settings",
+      "name": "设置",
+      "purpose": "配置 Base URL / API Key / 默认输出，并测试连通性",
+      "fields": ["Base URL", "API Key", "默认比例", "默认清晰度"],
+      "primary_actions": ["测试连接", "清除本地配置"]
+    }
+  ],
+  "content": {
+    "tone": "清晰、简短、无责备",
+    "microcopy": [
+      {
+        "key": "empty_home",
+        "location": "Home 空状态",
+        "text": "还没有任务，先创建一个吧。"
+      },
+      {
+        "key": "need_upload",
+        "location": "New Task 校验",
+        "text": "至少上传 1 张衣服参考图。"
+      },
+      {
+        "key": "loading_generic",
+        "location": "全局",
+        "text": "正在生成..."
+      },
+      {
+        "key": "fix_title",
+        "location": "Fix Modal 标题",
+        "text": "仅修复衣服细节（其它保持不变）"
+      },
+      {
+        "key": "fix_default_sentence",
+        "location": "Fix Prompt 默认句",
+        "text": "Keep the model face, pose, background, lighting and camera unchanged; only correct the garment to match the reference images and the GARMENT LOCK items."
+      }
+    ]
+  },
+  "usability": {
+    "test_plan": {
+      "participants": 5,
+      "tasks": [
+        "创建任务并生成计划",
+        "编辑 GARMENT LOCK 并开始出图",
+        "对 1 张图触发修复并完成修复通过",
+        "导出整任务"
+      ],
+      "success_criteria": [
+        "用户无需解释即可找到「生成计划/开始出图/需要修复」",
+        "能在 30 秒内完成一张图的修复闭环（不含生成耗时）",
+        "能清楚知道当前在哪一步、下一步做什么"
+      ]
+    },
+    "findings": []
+  },
+  "accessibility": {
+    "checklist_results": [
+      "按钮/输入有可见焦点态",
+      "关键操作可用键盘触达（Tab 顺序合理）",
+      "状态提示不只靠颜色区分"
+    ]
+  },
+  "handoff": {
+    "open_questions": [
+      "实际 Base URL（网关域名）与鉴权方式",
+      "本地 API Key 的保存方式与清除策略",
+      "修复最大次数阈值（默认建议 2）"
+    ],
+    "assumptions": [
+      "首版单机单用户，不做登录与权限隔离",
+      "质检以人工为准，自动仅辅助"
+    ],
+    "design_decisions": [
+      "任务详情使用 Stepper（可点击回退）",
+      "质检页使用左列表右大图布局",
+      "GARMENT LOCK 使用 Tag 展示 + 编辑弹窗"
+    ],
+    "pm_acceptance_support": [
+      "P0 流程可从上传到导出闭环跑通",
+      "每个 Shot 支持失败重试与版本回退"
+    ]
+  }
+}
+

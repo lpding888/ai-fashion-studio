@@ -1,0 +1,31 @@
+# Node / pnpm
+**/node_modules/
+**/.pnpm-store/
+
+# Next.js
+ai-fashion-studio/client/.next/
+ai-fashion-studio/client/out/
+
+# NestJS / TS build
+ai-fashion-studio/server/dist/
+**/*.tsbuildinfo
+coverage/
+
+# Local data & uploads
+ai-fashion-studio/server/uploads/
+ai-fashion-studio/server/data/
+
+# Env / secrets
+**/.env
+**/.env.*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.gemini/
+
+# Misc
+temp_painter_options.txt
+

@@ -1,0 +1,20 @@
+Type: TencentCloud::Serverless::Component
+Name: painter-generator
+Component: scf
+Provider: tencent
+
+Inputs:
+  name: painter-generator
+  runtime: Nodejs20.17
+  handler: index.main_handler
+  memorySize: 1024
+  timeout: 150
+  region: ${env:COS_REGION}
+  
+  environment:
+    variables:
+      TENCENT_SECRET_ID: ${env:TENCENT_SECRET_ID}
+      TENCENT_SECRET_KEY: ${env:TENCENT_SECRET_KEY}
+      COS_BUCKET: ${env:COS_BUCKET}
+      COS_REGION: ${env:COS_REGION}
+      NODE_ENV: development

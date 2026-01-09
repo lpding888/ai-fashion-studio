@@ -1,0 +1,43 @@
+{
+    "prompt": "Low-angle full-body shot, model walking confidently across a crosswalk in a busy European city street, wearing an oversized black and white striped long-sleeve shirt and beige cargo pants, dynamic motion blur, urban streetwear fashion editorial, high contrast, cinematic lighting, 35mm lens.",
+    "label": "Dynamic Street Crossing"
+  },
+  {
+    "prompt": "Medium shot, side profile, model leaning against a vintage stone building facade, soft natural sunlight casting shadows, wearing a beige 5-panel cap and striped shirt, minimalist composition, City Boy aesthetic, clean lines, muted tones, high-resolution photography.",
+    "label": "Architectural Minimalist"
+  },
+  {
+    "prompt": "Close-up rear view detail shot, focus on the texture of the black and white striped fabric and the back of the beige cap, blurred urban background with bokeh, moody atmosphere, golden hour lighting, fashion magazine style, sharp focus on clothing details.",
+    "label": "Textured Detail"
+  }
+]
+```
+
+
+```json
+{
+  "style_analysis": "The image features a 'City Boy' or urban streetwear aesthetic, characterized by an oversized black and white horizontal striped long-sleeve t-shirt, a beige 5-panel camp cap, and light-colored trousers. The setting is an urban street with European-style stone architecture. The vibe is relaxed, clean, and minimalist.",
+  "shots": [
+    {
+      "id": 1,
+      "type": "Dynamic Street Motion",
+      "prompt": "Low-angle full-body fashion shot, a model walking confidently across a city crosswalk, wearing an oversized black and white striped long-sleeve shirt and beige cargo pants. The background features blurred European architecture and street lines to emphasize motion. Natural daylight, high contrast, 35mm lens, streetwear editorial style, dynamic composition.",
+      "camera_angle": "Low Angle",
+      "lighting": "Natural Daylight"
+    },
+    {
+      "id": 2,
+      "type": "Architectural Geometry",
+      "prompt": "Medium shot, side profile view. The model stands still against a textured beige stone building facade, creating a geometric contrast between the horizontal stripes of the shirt and the vertical lines of the architecture. Wearing a beige cap, looking away from the camera. Soft shadows, minimalist composition, muted color palette, high-end fashion photography.",
+      "camera_angle": "Eye Level",
+      "lighting": "Soft Directional Light"
+    },
+    {
+      "id": 3,
+      "type": "Cinematic Detail",
+      "prompt": "Close-up rear view, focusing on the texture of the striped fabric and the fit of the beige cap. The background is a heavy bokeh of city street lights and grey asphalt. Moody atmosphere, cinematic color grading with cool tones, shallow depth of field, capturing the essence of modern urban solitude.",
+      "camera_angle": "Close-up / Over the Shoulder",
+      "lighting": "Cinematic / Moody"
+    }
+  ]
+}

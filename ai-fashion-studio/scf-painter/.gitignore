@@ -1,0 +1,13 @@
+# 本地开发文件（不上传到SCF）
+.env.local
+node_modules/
+*.log
+
+# 开发工具
+.DS_Store
+.vscode/
+.idea/
+
+# 测试文件
+test-local.js
+.env.local.example

@@ -1,0 +1,147 @@
+{
+  "golden_path": {
+    "stack": "全栈TS：Next.js(15) + NestJS(11) + Prisma(7) + Postgres(15)",
+    "repo_layout": "multi-package (client/server split, docs at root)",
+    "contract_first": true,
+    "notes": [
+      "本项目是本地单机 MVP，默认不做登录与权限隔离；但 API 契约与校验仍需严格执行",
+      "偏离 constraints.yaml 的 forbidden_by_default 必须 ADR 并写回滚计划"
+    ]
+  },
+  "guardrails": {
+    "constraints": [
+      "runtime 固定 Node 24.x + pnpm 10.x",
+      "API 边界必须做 Zod 校验（入参/出参/Brain 输出）",
+      "禁止提交 secrets、node_modules/.next/dist/uploads 等生成物",
+      "引入新数据库/队列/缓存/架构拆分默认禁止，需 ADR"
+    ],
+    "adr_required_for": [
+      "new database/queue/cache",
+      "microservices / distributed split",
+      "bypass validation",
+      "remote access / multi-user auth introduction"
+    ]
+  },
+  "working_agreements": {
+    "agents_md_rules": [
+      "计划先行：满足条件必须写 ExecPlan",
+      "危险操作需明确确认（删除/Git/系统配置/数据操作/敏感网络请求/全局包管理）",
+      "命令执行：路径双引号、优先使用 rg"
+    ],
+    "plan_first_rules": [
+      "预计 >2h 或涉及契约/DB/鉴权/跨端联动必须写计划",
+      "ExecPlan 必须包含：范围、文件清单、契约/数据变更、回滚、测试计划"
+    ],
+    "forbidden_without_adr": [
+      "新基础设施（DB/队列/缓存）",
+      "架构拆分为微服务",
+      "绕过 Zod 校验",
+      "引入远程访问/多用户而不做 RBAC+审计"
+    ]
+  },
+  "quality_gates": {
+    "ci_checks": ["lint (client)", "unit_test (server)", "build (client/server)"],
+    "definition_of_done": [
+      "P0 流程可跑通且至少 1 条失败路径可恢复",
+      "契约（docs/Contracts.md + Zod 校验）与实现一致",
+      "不提交 secrets 与生成物",
+      "runbook 可用于发布/回滚/备份恢复"
+    ]
+  },
+  "operations_baseline": {
+    "observability": [
+      "日志最小字段：request_id/latency/route/method/status_code",
+      "外部模型调用记录阶段与错误摘要（不泄露 key）"
+    ],
+    "release": ["见 docs/runbooks/release.md（含迁移与回滚）"],
+    "backup_restore": ["见 docs/runbooks/backup_restore.md（docker compose + pg_dump/pg_restore）"],
+    "incident_postmortem": [
+      "事故处理：docs/runbooks/incident.md",
+      "复盘模板：docs/runbooks/postmortem_template.md"
+    ]
+  },
+  "delivery_metrics": {
+    "dora_like": ["deploy_frequency", "lead_time", "change_failure_rate", "time_to_restore"],
+    "how_to_collect": [
+      "本地 MVP：先用变更日志（changelog/发布记录）+ 手工统计",
+      "后续上 CI/CD 后，可用 GitHub Actions + issue 模板补齐"
+    ]
+  },
+  "files_to_create": [
+    {
+      "path": "constraints.yaml",
+      "from_template": "platform-architect/assets/constraints.yaml",
+      "why": "固化技术栈与禁止项，减少隐性偏离"
+    },
+    {
+      "path": "AGENTS.md",
+      "from_template": "platform-architect/assets/AGENTS.md",
+      "why": "固化协作规则、危险操作确认与门禁命令"
+    },
+    {
+      "path": "docs/PLANS.md",
+      "from_template": "platform-architect/assets/PLANS.md",
+      "why": "计划先行模板，降低大改返工概率"
+    },
+    {
+      "path": "docs/adr/ADR-TEMPLATE.md",
+      "from_template": "platform-architect/assets/ADR-TEMPLATE.md",
+      "why": "偏离护栏的变更可追溯且可回滚"
+    },
+    {
+      "path": "docs/pr_checklist.md",
+      "from_template": "platform-architect/assets/pr_checklist.md",
+      "why": "把验收点固化成可打勾清单"
+    },
+    {
+      "path": "docs/scorecard.md",
+      "from_template": "platform-architect/assets/scorecard.md",
+      "why": "定期评估是否走在黄金路径上"
+    },
+    {
+      "path": "docs/runbooks/release.md",
+      "from_template": "platform-architect/assets/runbook_release.md",
+      "why": "发布/回滚可执行步骤"
+    },
+    {
+      "path": "docs/runbooks/incident.md",
+      "from_template": "platform-architect/assets/runbook_incident.md",
+      "why": "事故止血、定位、恢复、复盘闭环"
+    },
+    {
+      "path": "docs/runbooks/postmortem_template.md",
+      "from_template": "platform-architect/assets/postmortem_template.md",
+      "why": "复盘模板保证行动项闭环"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "from_template": "platform-architect/assets/ci.yml",
+      "why": "质量门禁：lint/test/build"
+    }
+  ],
+  "rollout_plan": {
+    "phases": [
+      {
+        "name": "Phase 1: Guardrails & Templates",
+        "scope": ["constraints.yaml", "AGENTS.md", "PLANS/ADR templates", "PR checklist", "scorecard"],
+        "exit_criteria": ["团队能按模板写计划/ADR", "PR 按 checklist 评审"]
+      },
+      {
+        "name": "Phase 2: CI Quality Gates",
+        "scope": [".github/workflows/ci.yml"],
+        "exit_criteria": ["CI 在 PR 上执行并阻断失败合并"]
+      },
+      {
+        "name": "Phase 3: Ops Baseline",
+        "scope": ["runbooks", "backup/restore drill"],
+        "exit_criteria": ["至少完成 1 次备份恢复演练并记录改进项"]
+      }
+    ]
+  },
+  "open_questions": [
+    "仓库的 git 根目录是否计划提升到“生图项目/”以统一管理 client+server+docs？（当前 server 目录内存在独立 .git）"
+  ],
+  "risks": [
+    "如果 git 根目录仍停留在 ai-fashion-studio/server，则 docs/ 与 client/ 的治理文件无法进入版本控制，CI 也不会生效"
+  ]
+}

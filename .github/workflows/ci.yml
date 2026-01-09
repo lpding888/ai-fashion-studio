@@ -1,0 +1,42 @@
+# CI（质量门禁）
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            ai-fashion-studio/client/pnpm-lock.yaml
+            ai-fashion-studio/server/pnpm-lock.yaml
+
+      - name: Install (server)
+        run: pnpm -C "ai-fashion-studio/server" install --frozen-lockfile
+
+      - name: Install (client)
+        run: pnpm -C "ai-fashion-studio/client" install --frozen-lockfile
+
+      - name: Test (server)
+        run: pnpm -C "ai-fashion-studio/server" test
+
+      - name: Build (server)
+        run: pnpm -C "ai-fashion-studio/server" build
+
+      - name: Lint (client)
+        run: pnpm -C "ai-fashion-studio/client" lint
+
+      - name: Build (client)
+        run: pnpm -C "ai-fashion-studio/client" build

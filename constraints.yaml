@@ -1,0 +1,52 @@
+# constraints.yaml（平台级黄金路径护栏）
+# 说明：偏离 forbidden_by_default 必须在 docs/adr/ 里写 ADR 并明确回滚方案。
+
+stack:
+  runtime:
+    node: "24.x"
+    package_manager: "pnpm@10.x"
+    typescript: "5.x"
+  frontend:
+    framework: "Next.js@15.x (stable)"
+    react: "19.x"
+    ui: "TailwindCSS + Radix（保持一致，不引入第二套 UI 框架）"
+    state: "Zustand（本地状态）"
+  backend:
+    framework: "NestJS@11.x"
+  data:
+    db: "PostgreSQL@15.x (docker compose)"
+    orm: "Prisma@7.x"
+  ai_clients:
+    brain: "openai SDK (OpenAI-compatible)"
+    painter: "Gemini Image (HTTP via axios)"
+
+architecture_rules:
+  default_style: "modular_monolith (client/server split)"
+  api_contract:
+    required: "Zod schema validation at API boundaries"
+    optional: "OpenAPI export + diff (can be added later)"
+  auth:
+    local_mvp_default: "no auth (single-user local)"
+    if_remote_or_multi_user: ["RBAC", "audit_log"]
+  observability:
+    required_fields: ["request_id", "latency_ms", "route", "method", "status_code"]
+    recommended_fields: ["task_id", "shot_id", "error_code"]
+  release:
+    required: ["rollback_plan", "db_migration_plan (if applicable)"]
+
+quality_gates:
+  required_ci_checks:
+    - lint
+    - unit_test
+    - build
+  recommended_ci_checks:
+    - e2e_test
+    - dependency_scan
+
+forbidden_by_default:
+  - "microservices / distributed split"
+  - "introduce new database/queue/cache without ADR"
+  - "bypass Zod validation on API boundaries"
+  - "commit secrets (.env / keys) to VCS"
+  - "commit generated artifacts (node_modules/.next/dist/uploads) to VCS"
+
