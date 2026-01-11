@@ -79,6 +79,10 @@ export default function HistoryPage() {
             RENDERING: { color: 'bg-blue-500', label: '生成中', icon: Loader2 },
             PLANNING: { color: 'bg-yellow-500', label: '规划中', icon: Clock },
             AWAITING_APPROVAL: { color: 'bg-orange-500', label: '待审批', icon: Clock },
+            HERO_RENDERING: { color: 'bg-blue-500', label: 'Hero生成中', icon: Loader2 },
+            AWAITING_HERO_APPROVAL: { color: 'bg-orange-500', label: '待确认Hero', icon: Clock },
+            STORYBOARD_PLANNING: { color: 'bg-yellow-500', label: '分镜规划中', icon: Clock },
+            STORYBOARD_READY: { color: 'bg-green-500', label: '分镜已就绪', icon: CheckCircle2 },
             FAILED: { color: 'bg-red-500', label: '失败', icon: XCircle },
         };
         return statusMap[status] || { color: 'bg-gray-500', label: status, icon: Clock };

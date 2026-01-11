@@ -40,6 +40,8 @@ export function RequirementForm() {
     const [styleDirection, setStyleDirection] = React.useState<string>('');
     const [layoutMode, setLayoutMode] = React.useState<'Individual' | 'Grid'>('Individual');
     const [shotCount, setShotCount] = React.useState<number>(4);
+    const [workflow, setWorkflow] = React.useState<'legacy' | 'hero_storyboard'>('legacy');
+    const [autoApproveHero, setAutoApproveHero] = React.useState<boolean>(false);
 
     // const [loading, setLoading] = React.useState(false); // 使用 hook 的状态
     const { uploadFiles, isUploading: isUploadingCos, progress: uploadProgress } = useCosUpload();
@@ -87,18 +89,54 @@ export function RequirementForm() {
 
         setIsSubmitting(true);
         try {
-            // 1. 准备上传所有文件
-            const allFiles = [...files, ...faceRefs, ...styleRefs];
+            // 未登录：仅创建草稿（服务端上传），不触发生图
+            if (!user?.id) {
+                const formData = new FormData();
+                files.forEach((f) => formData.append('files', f));
+                faceRefs.forEach((f) => formData.append('face_refs', f));
+                styleRefs.forEach((f) => formData.append('style_refs', f));
 
-            // 2. 上传到 COS
+                formData.append('requirements', requirements);
+                formData.append('shot_count', String(shotCount));
+                formData.append('layout_mode', layoutMode);
+                formData.append('resolution', resolution);
+                formData.append('autoApprove', String(autoApprove));
+
+                if (facePresetIds.length > 0) formData.append('face_preset_ids', facePresetIds.join(','));
+                if (stylePresetIds.length > 0) formData.append('style_preset_ids', stylePresetIds.join(','));
+                if (garmentFocus) formData.append('garment_focus', garmentFocus);
+                if (aspectRatio) formData.append('aspect_ratio', aspectRatio);
+                if (location) formData.append('location', location);
+                if (styleDirection) formData.append('style_direction', styleDirection);
+
+                const res = await api.post('/tasks', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                });
+
+                const task = res.data as any;
+
+                if (task?.claimToken) {
+                    localStorage.setItem('pending_task_id', task.id);
+                    localStorage.setItem('pending_task_claim_token', task.claimToken);
+                }
+
+                toast({
+                    title: '任务草稿已保存',
+                    description: '请注册/登录后开始生成',
+                });
+
+                router.push(`/login?next=/tasks/${task.id}`);
+                return;
+            }
+
+            // 已登录：上传到 COS（直传），并立即创建生图任务
+            const allFiles = [...files, ...faceRefs, ...styleRefs];
             const allUrls = await uploadFiles(allFiles);
 
-            // 3. 分割 URL
             const fileUrls = allUrls.slice(0, files.length);
             const faceRefUrls = allUrls.slice(files.length, files.length + faceRefs.length);
             const styleRefUrls = allUrls.slice(files.length + faceRefs.length);
 
-            // 4. 构建 JSON 数据
             const payload = {
                 file_urls: fileUrls,
                 face_ref_urls: faceRefUrls,
@@ -109,7 +147,8 @@ export function RequirementForm() {
                 layout_mode: layoutMode,
                 resolution,
                 autoApprove,
-                userId: user?.id,  // 传递用户ID用于积分扣费
+                workflow,
+                autoApproveHero,
 
                 face_preset_ids: facePresetIds.length > 0 ? facePresetIds.join(',') : undefined,
                 style_preset_ids: stylePresetIds.length > 0 ? stylePresetIds.join(',') : undefined,
@@ -119,9 +158,7 @@ export function RequirementForm() {
                 style_direction: styleDirection || undefined,
             };
 
-            // 5. 发送任务请求 (JSON)
             const res = await api.post('/tasks', payload);
-
             const task = res.data;
             router.push(`/tasks/${task.id}`);
 
@@ -493,6 +530,68 @@ export function RequirementForm() {
                                             )
                                         })}
                                     </div>
+                                </div>
+                            </div>
+
+                            {/* Workflow & Auto-Approve Hero */}
+                            <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="space-y-3">
+                                    <label className="text-xs font-bold text-white/90 uppercase tracking-wider flex items-center gap-1.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.5)]">
+                                        <Layers className="w-3.5 h-3.5 text-cyan-300" /> 工作流
+                                    </label>
+                                    <div className="flex bg-black/20 p-1.5 rounded-xl ring-1 ring-white/10 relative z-0 backdrop-blur-md">
+                                        {[
+                                            { id: 'legacy', label: '传统流程', desc: 'Legacy' },
+                                            { id: 'hero_storyboard', label: '母版分镜', desc: 'Hero' },
+                                        ].map((mode) => {
+                                            const isSelected = workflow === mode.id;
+                                            return (
+                                                <button
+                                                    key={mode.id}
+                                                    type="button"
+                                                    onClick={() => setWorkflow(mode.id as any)}
+                                                    className={`relative flex-1 py-2.5 text-xs font-bold rounded-lg transition-all z-10 ${isSelected ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                                                >
+                                                    {isSelected && (
+                                                        <motion.div
+                                                            layoutId="workflowBg"
+                                                            className="absolute inset-0 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-lg shadow-lg shadow-cyan-500/20 -z-10"
+                                                            transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                                                        />
+                                                    )}
+                                                    <span className="flex items-center justify-center gap-2">
+                                                        <span className="text-xs">{mode.label}</span>
+                                                        <span className="text-[10px] opacity-70">{mode.desc}</span>
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <label className="text-xs font-bold text-white/90 uppercase tracking-wider flex items-center gap-1.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.5)]">
+                                        <BrainCircuit className="w-3.5 h-3.5 text-amber-300" /> Hero 自动进分镜
+                                    </label>
+                                    <div className="flex bg-black/20 p-1.5 rounded-xl ring-1 ring-white/10 relative z-0 backdrop-blur-md">
+                                        <button
+                                            type="button"
+                                            onClick={() => setAutoApproveHero((v) => !v)}
+                                            className={`relative flex-1 py-2.5 text-xs font-bold rounded-lg transition-all z-10 ${autoApproveHero ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                                        >
+                                            {autoApproveHero && (
+                                                <motion.div
+                                                    layoutId="autoApproveHeroBg"
+                                                    className="absolute inset-0 bg-gradient-to-r from-amber-500 to-orange-500 rounded-lg shadow-lg shadow-amber-500/20 -z-10"
+                                                    transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                                                />
+                                            )}
+                                            {autoApproveHero ? '开启' : '关闭'}
+                                        </button>
+                                    </div>
+                                    <p className="text-[11px] text-slate-400 leading-snug">
+                                        开启后：Hero 出图完成会自动生成分镜动作卡（仍可在任务详情页手动确认）。
+                                    </p>
                                 </div>
                             </div>
 

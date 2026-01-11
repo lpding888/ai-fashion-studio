@@ -62,12 +62,16 @@ export default function AdminTasksPage() {
         return matchesSearch && matchesStatus;
     });
 
-    const getStatusBadge = (status: string) => {
+        const getStatusBadge = (status: string) => {
         const variants: Record<string, { variant: any; label: string }> = {
             COMPLETED: { variant: 'default', label: '已完成' },
             RENDERING: { variant: 'secondary', label: '生成中' },
             PLANNING: { variant: 'secondary', label: '规划中' },
             AWAITING_APPROVAL: { variant: 'outline', label: '待审批' },
+            HERO_RENDERING: { variant: 'secondary', label: 'Hero生成中' },
+            AWAITING_HERO_APPROVAL: { variant: 'outline', label: '待确认Hero' },
+            STORYBOARD_PLANNING: { variant: 'secondary', label: '分镜规划中' },
+            STORYBOARD_READY: { variant: 'default', label: '分镜已就绪' },
             FAILED: { variant: 'destructive', label: '失败' },
         };
         const info = variants[status] || { variant: 'outline', label: status };

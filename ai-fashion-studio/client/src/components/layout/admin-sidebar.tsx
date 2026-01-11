@@ -12,7 +12,9 @@ import {
     LineChart,
     Palette,
     Brain,
+    Layers,
     KeyRound,
+    Ticket,
     LogOut,
     Coins
 } from 'lucide-react';
@@ -24,9 +26,11 @@ export function AdminSidebar() {
     const sidebarItems = [
         { href: '/admin', label: '仪表盘', icon: LayoutDashboard },
         { href: '/admin/users', label: '用户管理', icon: Users },
+        { href: '/admin/invite-codes', label: '邀请码', icon: Ticket },
         { href: '/admin/credits', label: '积分管理', icon: Coins }, // 新增
         { href: '/admin/tasks', label: '任务审核', icon: ListChecks },
         { href: '/admin/brain-prompts', label: '大脑提示词', icon: Brain },
+        { href: '/admin/workflow-prompts', label: '工作流提示词', icon: Layers },
         { href: '/admin/styles', label: '风格库', icon: Palette },
         { href: '/admin/analytics', label: '数据分析', icon: LineChart },
         { href: '/admin/model-profiles', label: '模型配置', icon: Settings2 },

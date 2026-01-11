@@ -12,6 +12,7 @@ export default function RegisterPage() {
     const [password, setPassword] = useState('');
     const [nickname, setNickname] = useState('');
     const [email, setEmail] = useState('');
+    const [inviteCode, setInviteCode] = useState('');
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [loading, setLoading] = useState(false);
@@ -40,6 +41,7 @@ export default function RegisterPage() {
                     password,
                     nickname: nickname || undefined,
                     email: email || undefined,
+                    inviteCode: inviteCode || undefined,
                 }),
             });
 
@@ -67,7 +69,7 @@ export default function RegisterPage() {
                     <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-transparent mb-2">
                         AI Fashion Studio
                     </h1>
-                    <p className="text-zinc-400 text-sm">用户注册（需管理员审核）</p>
+                    <p className="text-zinc-400 text-sm">用户注册（邀请码）</p>
                 </div>
 
                 <div className="space-y-4">
@@ -119,6 +121,18 @@ export default function RegisterPage() {
                         />
                     </div>
 
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">邀请码</label>
+                        <Input
+                            type="text"
+                            placeholder="请输入管理员提供的邀请码"
+                            value={inviteCode}
+                            onChange={(e) => setInviteCode(e.target.value)}
+                            className="bg-zinc-800/50 border-zinc-700 text-white placeholder:text-zinc-500"
+                            autoComplete="off"
+                        />
+                    </div>
+
                     {error && (
                         <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
                             {error}
@@ -149,8 +163,8 @@ export default function RegisterPage() {
                     <div className="mt-6 p-4 rounded-lg bg-zinc-800/30 border border-zinc-700/50">
                         <p className="text-xs text-zinc-400 mb-2">说明：</p>
                         <div className="text-xs text-zinc-500 space-y-1">
-                            <div>• 注册后账号状态为“待审核”，管理员通过后才能登录</div>
-                            <div>• 如果登录提示“账户待管理员审核”，请联系管理员处理</div>
+                            <div>• 当前为内测阶段：注册需要邀请码（一次性）</div>
+                            <div>• 注册成功后可直接登录</div>
                         </div>
                     </div>
                 </div>
@@ -158,4 +172,3 @@ export default function RegisterPage() {
         </div>
     );
 }
-

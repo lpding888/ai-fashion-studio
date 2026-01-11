@@ -45,9 +45,33 @@ export default function LoginPage() {
             console.log('🔑 Token已保存:', data.token.substring(0, 20) + '...');
             console.log('👤 用户角色:', data.user.role);
 
-            // 🎯 管理员也需要试用产品：统一进入用户端，再从个人中心进入管理后台
-            console.log('🚀 跳转到用户主页: /');
-            window.location.href = '/';
+            // 如果有匿名草稿任务：登录后自动认领
+            const pendingTaskId = localStorage.getItem('pending_task_id');
+            const pendingClaimToken = localStorage.getItem('pending_task_claim_token');
+
+            if (pendingTaskId && pendingClaimToken) {
+                try {
+                    const claimRes = await fetch(`${BACKEND_ORIGIN}/api/tasks/${pendingTaskId}/claim`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${data.token}`,
+                        },
+                        body: JSON.stringify({ claimToken: pendingClaimToken }),
+                    });
+
+                    if (!claimRes.ok) {
+                        const claimData = await claimRes.json().catch(() => ({}));
+                        console.warn('草稿认领失败:', claimData?.message || claimRes.statusText);
+                    }
+                } finally {
+                    localStorage.removeItem('pending_task_id');
+                    localStorage.removeItem('pending_task_claim_token');
+                }
+            }
+
+            const next = new URLSearchParams(window.location.search).get('next') || '/';
+            window.location.href = next;
         } catch (err) {
             console.error('登录错误:', err);
             setError('网络错误，请检查服务器是否启动');
@@ -120,9 +144,8 @@ export default function LoginPage() {
                     <div className="mt-6 p-4 rounded-lg bg-zinc-800/30 border border-zinc-700/50">
                         <p className="text-xs text-zinc-400 mb-2">💡 内测说明：</p>
                         <div className="text-xs text-zinc-500 space-y-1">
-                            <div>• 可通过注册页提交账号，需管理员审核通过后登录</div>
-                            <div>• 管理员默认账号：admin / admin123</div>
-                            <div>• 首次登录建议修改密码</div>
+                            <div>• 内测阶段：注册需要邀请码（一次性）</div>
+                            <div>• 登录后可进入创作中心开始生图</div>
                         </div>
                     </div>
                 </div>

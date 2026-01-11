@@ -1,5 +1,5 @@
 
-import axios from 'axios';
+import axios, { AxiosHeaders } from 'axios';
 
 // 支持环境变量切换后端地址
 // NEXT_PUBLIC_API_URL=http://localhost:5000  (NestJS 默认)
@@ -13,6 +13,25 @@ const api = axios.create({
     headers: {
         'Content-Type': 'application/json',
     },
+});
+
+api.interceptors.request.use((config) => {
+    if (typeof window === 'undefined') return config;
+
+    const tokenFromStorage = localStorage.getItem('token');
+    const tokenFromCookie = document.cookie
+        .split('; ')
+        .find((row) => row.startsWith('token='))
+        ?.split('=')[1];
+    const token = tokenFromStorage || (tokenFromCookie ? decodeURIComponent(tokenFromCookie) : null);
+
+    if (token) {
+        const headers = AxiosHeaders.from(config.headers);
+        headers.set('Authorization', `Bearer ${token}`);
+        config.headers = headers;
+    }
+
+    return config;
 });
 
 

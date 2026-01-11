@@ -5,9 +5,20 @@ export function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
 
     // 公开路径不需要认证
-    const publicPaths = ['/login', '/api', '/admin/login'];
+    const publicPaths = ['/login', '/register', '/api', '/admin/login'];
     if (publicPaths.some(path => pathname.startsWith(path))) {
         return NextResponse.next();
+    }
+
+    // 保护用户侧路径（生成/查询需要登录）
+    const protectedUserPaths = ['/history', '/profile', '/settings', '/tasks', '/batch'];
+    if (protectedUserPaths.some(path => pathname.startsWith(path))) {
+        const token = request.cookies.get('token')?.value;
+        if (!token) {
+            const url = new URL('/login', request.url);
+            url.searchParams.set('next', pathname);
+            return NextResponse.redirect(url);
+        }
     }
 
     // 保护 /admin 路径

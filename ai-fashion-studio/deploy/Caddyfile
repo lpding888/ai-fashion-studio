@@ -1,0 +1,17 @@
+{
+	# 可选：填写用于 Let's Encrypt 的邮箱
+	# email you@example.com
+}
+
+aizhao.icu, www.aizhao.icu {
+	reverse_proxy client:3000
+}
+
+admin.aizhao.icu {
+	reverse_proxy client:3000
+}
+
+api.aizhao.icu {
+	reverse_proxy server:5000
+}
+

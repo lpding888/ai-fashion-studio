@@ -6,6 +6,7 @@ import api, { BACKEND_ORIGIN } from '@/lib/api';
 import { Loader2, ArrowLeft, Check, Sparkles, Brain, Camera, AlertCircle, ChevronDown, ChevronUp, Clock, Palette, Layers, Image as ImageIcon, RefreshCcw, Download, Save, Edit, ZoomIn, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -51,12 +52,97 @@ interface BrainPlan {
 
 interface TaskData {
     id: string;
-    status: 'PENDING' | 'PLANNING' | 'AWAITING_APPROVAL' | 'RENDERING' | 'COMPLETED' | 'FAILED';
+    status:
+        | 'DRAFT'
+        | 'PENDING'
+        | 'PLANNING'
+        | 'AWAITING_APPROVAL'
+        | 'RENDERING'
+        | 'COMPLETED'
+        | 'FAILED'
+        | 'HERO_RENDERING'
+        | 'AWAITING_HERO_APPROVAL'
+        | 'STORYBOARD_PLANNING'
+        | 'STORYBOARD_READY'
+        | 'SHOTS_RENDERING';
+    workflow?: 'legacy' | 'hero_storyboard';
     requirements: string;
+    layout_mode?: 'Individual' | 'Grid';
     brainPlan?: BrainPlan;
     shots?: Shot[];
+    heroImageUrl?: string;
+    heroShootLog?: string;
+    heroApprovedAt?: number;
+    storyboardCards?: Array<{
+        index: number;
+        action: string;
+        blocking: string;
+        camera: string;
+        framing: string;
+        lighting: string;
+        occlusionNoGo: string;
+        continuity: string;
+    }>;
+    storyboardPlan?: {
+        shots?: any[];
+        [key: string]: any;
+    };
+    storyboardPlannedAt?: number;
+    heroShots?: Array<{
+        index: number;
+        status: 'PENDING' | 'RENDERED' | 'FAILED';
+        imageUrl?: string;
+        shootLog?: string;
+        error?: string;
+        createdAt: number;
+        selectedAttemptCreatedAt?: number;
+        attempts?: Array<{
+            createdAt: number;
+            outputImageUrl?: string;
+            outputShootLog?: string;
+            error?: string;
+        }>;
+    }>;
+    gridImageUrl?: string;
+    gridShootLog?: string;
+    gridStatus?: 'PENDING' | 'RENDERED' | 'FAILED';
     error?: string;
     createdAt: number;
+}
+
+type StoryboardShotEditDraft = {
+    sceneSubarea: string;
+    actionPose: string;
+    shotType: string;
+    goal: string;
+    physicalLogic: string;
+    compositionNotes: string;
+    execInstructionText: string;
+    occlusionGuardText: string; // one item per line
+    refRequirementsText: string; // one item per line
+    universalRequirementsText: string; // one item per line
+    lightingSceneLight: string;
+    lightingKey: string;
+    lightingRim: string;
+    lightingFill: string;
+    cameraSystem: string;
+    cameraModel: string;
+    cameraFStop: string;
+};
+
+function toLineText(value: unknown): string {
+    if (!Array.isArray(value)) return '';
+    return value
+        .map((v) => (typeof v === 'string' ? v.trim() : ''))
+        .filter(Boolean)
+        .join('\n');
+}
+
+function toLineArray(text: string): string[] {
+    return (text || '')
+        .split('\n')
+        .map((v) => v.trim())
+        .filter(Boolean);
 }
 
 /**
@@ -263,13 +349,20 @@ function StatusHeader({
     isRetrying?: boolean,
     isDeleting?: boolean
 }) {
+    const isBusy = ['PLANNING', 'RENDERING', 'HERO_RENDERING', 'STORYBOARD_PLANNING', 'SHOTS_RENDERING'].includes(status);
     const config = {
+        DRAFT: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "草稿待开始" },
         PENDING: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "等待处理..." },
         PLANNING: { color: "bg-blue-100 text-blue-700", icon: Brain, text: "AI 正在深度思考与策划..." },
         AWAITING_APPROVAL: { color: "bg-amber-100 text-amber-700", icon: AlertCircle, text: "方案已生成，请审核" },
         RENDERING: { color: "bg-purple-100 text-purple-700", icon: Sparkles, text: "正在渲染高定大片..." },
         COMPLETED: { color: "bg-green-100 text-green-700", icon: Check, text: "创作完成" },
         FAILED: { color: "bg-red-100 text-red-700", icon: AlertCircle, text: "任务执行失败" },
+        HERO_RENDERING: { color: "bg-purple-100 text-purple-700", icon: Camera, text: "Hero 母版生成中..." },
+        AWAITING_HERO_APPROVAL: { color: "bg-amber-100 text-amber-700", icon: AlertCircle, text: "Hero 已生成，请确认" },
+        STORYBOARD_PLANNING: { color: "bg-blue-100 text-blue-700", icon: Brain, text: "分镜规划中..." },
+        STORYBOARD_READY: { color: "bg-green-100 text-green-700", icon: Check, text: "分镜动作卡已就绪" },
+        SHOTS_RENDERING: { color: "bg-purple-100 text-purple-700", icon: Sparkles, text: "镜头生成中..." },
     }[status] || { color: "bg-slate-100", icon: Clock, text: status };
 
     const Icon = config.icon;
@@ -284,7 +377,7 @@ function StatusHeader({
 
             <div className="flex items-center gap-3">
                 <div className={`px-4 py-2 rounded-full flex items-center gap-2 font-medium ${config.color} shadow-sm`}>
-                    <Icon className={`w-4 h-4 ${status === 'PLANNING' || status === 'RENDERING' ? 'animate-pulse' : ''}`} />
+                    <Icon className={`w-4 h-4 ${isBusy ? 'animate-pulse' : ''}`} />
                     {config.text}
                 </div>
 
@@ -598,17 +691,6 @@ function ApprovalInterface({
             </div>
         </motion.div>
     );
-}
-
-interface TaskData {
-    id: string;
-    status: 'PENDING' | 'PLANNING' | 'AWAITING_APPROVAL' | 'RENDERING' | 'COMPLETED' | 'FAILED';
-    requirements: string;
-    layout_mode?: 'Individual' | 'Grid'; // Added
-    brainPlan?: BrainPlan;
-    shots?: Shot[];
-    error?: string;
-    createdAt: number;
 }
 
 // 5. Results Grid with Retry functionality
@@ -989,6 +1071,17 @@ export default function TaskResultPage() {
     const [error, setError] = React.useState('');
     const [isRetrying, setIsRetrying] = React.useState(false);
     const [isDeleting, setIsDeleting] = React.useState(false);
+    const [isStarting, setIsStarting] = React.useState(false);
+    const [isReplanningStoryboard, setIsReplanningStoryboard] = React.useState(false);
+    const [isRegeneratingHero, setIsRegeneratingHero] = React.useState(false);
+    const [isConfirmingHero, setIsConfirmingHero] = React.useState(false);
+    const [isRenderingGrid, setIsRenderingGrid] = React.useState(false);
+    const [renderingShotIndices, setRenderingShotIndices] = React.useState<Set<number>>(new Set());
+    const [selectingShotAttemptKey, setSelectingShotAttemptKey] = React.useState<string | null>(null);
+    const [editingStoryboardIndex, setEditingStoryboardIndex] = React.useState<number | null>(null);
+    const [storyboardDraft, setStoryboardDraft] = React.useState<StoryboardShotEditDraft | null>(null);
+    const [savingStoryboardIndex, setSavingStoryboardIndex] = React.useState<number | null>(null);
+    const [cyclingCameraIndex, setCyclingCameraIndex] = React.useState<number | null>(null);
     const { toast } = useToast();
 
     // Define fetchTask outside useEffect to share with retry handle
@@ -1002,10 +1095,36 @@ export default function TaskResultPage() {
             setLoading(false);
         } catch (err) {
             console.error(err);
+            const status = (err as any)?.response?.status;
+            if (status === 401 || status === 403) {
+                router.push(`/login?next=/tasks/${params.id}`);
+                return;
+            }
             setError('无法加载任务详情');
             setLoading(false);
         }
-    }, [params.id]);
+    }, [params.id, router]);
+
+    const handleStartTask = async () => {
+        setIsStarting(true);
+        try {
+            await api.post(`/tasks/${params.id}/start`);
+            toast({
+                title: '任务已开始生成',
+                description: 'AI 正在规划与生图，请稍候…',
+            });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: "destructive",
+                title: "开始失败",
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+        } finally {
+            setIsStarting(false);
+        }
+    };
 
     const handleRetryTask = async () => {
         if (!confirm('确定要重新执行此任务吗？')) return;
@@ -1050,6 +1169,341 @@ export default function TaskResultPage() {
         }
     };
 
+    const handleConfirmHero = async () => {
+        setIsConfirmingHero(true);
+        // 乐观更新：马上显示“分镜生成中”
+        setTask(prev => prev ? { ...prev, status: 'STORYBOARD_PLANNING' } : prev);
+        try {
+            await api.post(`/tasks/${params.id}/hero/confirm`, {});
+            toast({
+                title: '已确认 Hero',
+                description: '正在生成分镜动作卡...',
+            });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '确认Hero失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+            await fetchTask();
+        } finally {
+            setIsConfirmingHero(false);
+        }
+    };
+
+    const handleRegenerateHero = async () => {
+        const ok = confirm('确定要重新生成 Hero 母版吗？这会清空已生成的分镜/镜头/拼图结果。');
+        if (!ok) return;
+
+        setIsRegeneratingHero(true);
+        // 乐观更新：马上进入 HERO_RENDERING
+        setTask(prev => prev ? {
+            ...prev,
+            status: 'HERO_RENDERING',
+            heroImageUrl: undefined,
+            heroShootLog: undefined,
+            heroApprovedAt: undefined,
+            storyboardCards: undefined,
+            storyboardPlannedAt: undefined,
+            heroShots: [],
+            gridImageUrl: undefined,
+            gridShootLog: undefined,
+            error: undefined,
+        } : prev);
+
+        try {
+            await api.post(`/tasks/${params.id}/hero/regenerate`, {});
+            toast({ title: '已提交重新生成 Hero', description: '正在生成母版...' });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '重新生成Hero失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+            await fetchTask();
+        } finally {
+            setIsRegeneratingHero(false);
+        }
+    };
+
+    const handleRenderShot = async (index: number) => {
+        // 乐观：马上显示“生成中…”，并禁用当前镜头按钮
+        setRenderingShotIndices(prev => {
+            const next = new Set(prev);
+            next.add(index);
+            return next;
+        });
+        setTask(prev => {
+            if (!prev) return prev;
+            const existing = prev.heroShots?.find((s) => s.index === index);
+            const nextShots = [
+                ...((prev.heroShots || []).filter((s) => s.index !== index)),
+                {
+                    index,
+                    status: 'PENDING' as const,
+                    createdAt: Date.now(),
+                    ...(existing?.imageUrl ? { imageUrl: existing.imageUrl } : {}),
+                },
+            ].sort((a, b) => a.index - b.index);
+            return { ...prev, status: 'SHOTS_RENDERING', heroShots: nextShots };
+        });
+        try {
+            await api.post(`/tasks/${params.id}/storyboard/shots/${index}/render`, {});
+            toast({
+                title: `已提交生成 #${index}`,
+                description: '正在生成镜头...',
+            });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '生成镜头失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+            await fetchTask();
+        } finally {
+            setRenderingShotIndices(prev => {
+                const next = new Set(prev);
+                next.delete(index);
+                return next;
+            });
+        }
+    };
+
+    const handleSelectShotVariant = async (index: number, attemptCreatedAt: number) => {
+        const key = `${index}:${attemptCreatedAt}`;
+        setSelectingShotAttemptKey(key);
+        try {
+            await api.post(`/tasks/${params.id}/storyboard/shots/${index}/select`, { attemptCreatedAt });
+            toast({
+                title: `已选择镜头 #${index} 版本`,
+                description: '下一镜头将以该版本作为上一帧进行裂变。',
+            });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '选择版本失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+        } finally {
+            setSelectingShotAttemptKey(null);
+        }
+    };
+
+    const handleRenderGrid = async () => {
+        setIsRenderingGrid(true);
+        setTask(prev => prev ? { ...prev, status: 'SHOTS_RENDERING' } : prev);
+        try {
+            await api.post(`/tasks/${params.id}/storyboard/render-grid`, {});
+            toast({
+                title: '已提交四镜头拼图生成',
+                description: '正在生成拼图...',
+            });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '生成拼图失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+            await fetchTask();
+        } finally {
+            setIsRenderingGrid(false);
+        }
+    };
+
+    const handleReplanStoryboard = async () => {
+        const ok = confirm('确定要重新生成分镜动作卡吗？这会清空已生成的镜头/拼图结果，需要重新生成。');
+        if (!ok) return;
+
+        setIsReplanningStoryboard(true);
+        setTask(prev => prev ? {
+            ...prev,
+            status: 'STORYBOARD_PLANNING',
+            heroShots: [],
+            gridImageUrl: undefined,
+            gridShootLog: undefined,
+            error: undefined,
+        } : prev);
+        try {
+            await api.post(`/tasks/${params.id}/storyboard/replan`, {});
+            toast({
+                title: '已重新生成分镜',
+                description: '正在重新抽卡...',
+            });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '重新生成分镜失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+        } finally {
+            setIsReplanningStoryboard(false);
+            await fetchTask();
+        }
+    };
+
+    const downloadFromUrl = React.useCallback(async (url: string, filename: string) => {
+        const safeUrl = (url || '').trim();
+        if (!safeUrl) return;
+
+        // 优先走 fetch->blob（如果 COS 已开 CORS，会直接下载）
+        try {
+            const res = await fetch(safeUrl);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            const objectUrl = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(objectUrl);
+            return;
+        } catch {
+            // 兜底：新标签页打开（用户可“另存为”）
+            window.open(safeUrl, '_blank', 'noopener,noreferrer');
+        }
+    }, []);
+
+    const openStoryboardEditor = (index: number) => {
+        const shot = (task?.storyboardPlan?.shots || [])?.[index - 1] || {};
+        const camera = shot?.camera_choice || shot?.cameraChoice || {};
+        const lighting = shot?.lighting_plan || shot?.lightingPlan || {};
+        const product = lighting?.product_light || lighting?.productLight || {};
+
+        setEditingStoryboardIndex(index);
+        setStoryboardDraft({
+            sceneSubarea: String(shot?.scene_subarea ?? shot?.sceneSubarea ?? ''),
+            actionPose: String(shot?.action_pose ?? shot?.actionPose ?? ''),
+            shotType: String(shot?.shot_type ?? shot?.shotType ?? ''),
+            goal: String(shot?.goal ?? ''),
+            physicalLogic: String(shot?.physical_logic ?? shot?.physicalLogic ?? ''),
+            compositionNotes: String(shot?.composition_notes ?? shot?.compositionNotes ?? ''),
+            execInstructionText: String(shot?.exec_instruction_text ?? shot?.execInstructionText ?? ''),
+            occlusionGuardText: toLineText(shot?.occlusion_guard ?? shot?.occlusionGuard),
+            refRequirementsText: toLineText(shot?.ref_requirements ?? shot?.refRequirements),
+            universalRequirementsText: toLineText(shot?.universal_requirements ?? shot?.universalRequirements),
+            lightingSceneLight: String(lighting?.scene_light ?? lighting?.sceneLight ?? ''),
+            lightingKey: String(product?.key ?? ''),
+            lightingRim: String(product?.rim ?? ''),
+            lightingFill: String(product?.fill ?? ''),
+            cameraSystem: String(camera?.system ?? ''),
+            cameraModel: String(camera?.model ?? ''),
+            cameraFStop: String(camera?.f_stop ?? camera?.fStop ?? ''),
+        });
+    };
+
+    const closeStoryboardEditor = () => {
+        setEditingStoryboardIndex(null);
+        setStoryboardDraft(null);
+    };
+
+    const saveStoryboardEditor = async () => {
+        if (!editingStoryboardIndex || !storyboardDraft) return;
+        setSavingStoryboardIndex(editingStoryboardIndex);
+        try {
+            await api.patch(`/tasks/${params.id}/storyboard/shots/${editingStoryboardIndex}`, {
+                patch: {
+                    scene_subarea: storyboardDraft.sceneSubarea,
+                    action_pose: storyboardDraft.actionPose,
+                    shot_type: storyboardDraft.shotType,
+                    goal: storyboardDraft.goal,
+                    physical_logic: storyboardDraft.physicalLogic,
+                    composition_notes: storyboardDraft.compositionNotes,
+                    exec_instruction_text: storyboardDraft.execInstructionText,
+                    occlusion_guard: toLineArray(storyboardDraft.occlusionGuardText),
+                    ref_requirements: toLineArray(storyboardDraft.refRequirementsText),
+                    universal_requirements: toLineArray(storyboardDraft.universalRequirementsText),
+                    lighting_plan: {
+                        scene_light: storyboardDraft.lightingSceneLight,
+                        product_light: {
+                            key: storyboardDraft.lightingKey,
+                            rim: storyboardDraft.lightingRim,
+                            fill: storyboardDraft.lightingFill,
+                        },
+                    },
+                    camera_choice: {
+                        system: storyboardDraft.cameraSystem,
+                        model: storyboardDraft.cameraModel,
+                        f_stop: storyboardDraft.cameraFStop,
+                    },
+                },
+            });
+
+            toast({
+                title: `镜头 #${editingStoryboardIndex} 已保存`,
+                description: '下次点“重新生成该镜头”会按新文字执行。',
+            });
+            await fetchTask();
+            closeStoryboardEditor();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '保存镜头文字失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+        } finally {
+            setSavingStoryboardIndex(null);
+        }
+    };
+
+    const cycleCameraText = async (index: number) => {
+        const shot = (task?.storyboardPlan?.shots || [])?.[index - 1] || {};
+        const camera = shot?.camera_choice || shot?.cameraChoice || {};
+        const currentSystem = String(camera?.system ?? '').trim();
+        const currentModel = String(camera?.model ?? '').trim();
+        const currentFStop = String(camera?.f_stop ?? camera?.fStop ?? '').trim();
+
+        const zeissModels = ['Otus 28mm', 'ZX1 35mm', 'Otus 55mm', 'Otus 85mm', 'Otus 100mm'];
+        const iphoneModels = ['13mm', '24mm', '48mm', '100mm', '200mm'];
+
+        const isIphone = /iphone/i.test(currentSystem);
+        const options = isIphone ? iphoneModels : zeissModels;
+
+        const findIndex = options.findIndex((m) => (currentModel || '').includes(m));
+        const nextModel = options[(findIndex >= 0 ? findIndex + 1 : 0) % options.length];
+
+        setCyclingCameraIndex(index);
+        try {
+            await api.patch(`/tasks/${params.id}/storyboard/shots/${index}`, {
+                patch: {
+                    camera_choice: {
+                        system: currentSystem || (isIphone ? 'iPhone' : 'ZEISS'),
+                        model: nextModel,
+                        f_stop: currentFStop || (!isIphone ? 'f/2.8' : ''),
+                    },
+                },
+            });
+            toast({
+                title: `镜头 #${index} 已换镜头`,
+                description: '如果满意，再点“重新生成该镜头”出图。',
+            });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '换镜头失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+        } finally {
+            setCyclingCameraIndex(null);
+        }
+    };
+
     // Poll for updates
     React.useEffect(() => {
         fetchTask();
@@ -1084,12 +1538,42 @@ export default function TaskResultPage() {
         );
     }
 
+    if (task.status === 'DRAFT') {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+                <Card className="max-w-md w-full p-6 text-center">
+                    <h2 className="text-xl font-bold text-slate-800 mb-2">任务草稿已保存</h2>
+                    <p className="text-slate-600 mb-6">
+                        该任务尚未开始生成。点击“开始生成”将触发 AI 规划与生图，并消耗积分。
+                    </p>
+                    <div className="flex flex-col gap-3">
+                        <Button onClick={handleStartTask} disabled={isStarting}>
+                            {isStarting ? (
+                                <span className="flex items-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    启动中...
+                                </span>
+                            ) : (
+                                '开始生成'
+                            )}
+                        </Button>
+                        <Link href="/">
+                            <Button variant="outline" className="w-full">返回首页</Button>
+                        </Link>
+                    </div>
+                </Card>
+            </div>
+        );
+    }
+
     // Determine what to show based on status
-    const showThinking = task.brainPlan?.thinkingProcess;
-    const showVisualAnalysis = task.brainPlan;
+    const isHeroStoryboard = task.workflow === 'hero_storyboard';
+
+    const showThinking = !isHeroStoryboard && task.brainPlan?.thinkingProcess;
+    const showVisualAnalysis = !isHeroStoryboard && task.brainPlan;
     // 兼容 v2.0 (shots) 和 v3.0 (frames)
-    const showApproval = task.status === 'AWAITING_APPROVAL' && (task.brainPlan?.shots || task.brainPlan?.frames);
-    const showResults = ['RENDERING', 'COMPLETED', 'FAILED'].includes(task.status);
+    const showApproval = !isHeroStoryboard && task.status === 'AWAITING_APPROVAL' && (task.brainPlan?.shots || task.brainPlan?.frames);
+    const showResults = !isHeroStoryboard && ['RENDERING', 'COMPLETED', 'FAILED'].includes(task.status);
 
     // For results, we use task.shots (from DB) or shots from brainPlan if rendering hasn't populated DB yet
     const displayShots = task.shots && task.shots.length > 0 ? task.shots : (task.brainPlan?.shots || []);
@@ -1106,6 +1590,516 @@ export default function TaskResultPage() {
                     isRetrying={isRetrying}
                     isDeleting={isDeleting}
                 />
+
+                {/* Hero Storyboard Workflow */}
+                {isHeroStoryboard && (
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+                        <Card className="border-0 shadow-lg bg-white overflow-hidden">
+                            <div className="h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-500" />
+                            <CardContent className="p-6 space-y-6">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-2 bg-cyan-50 rounded-lg">
+                                        <Camera className="w-5 h-5 text-cyan-700" />
+                                    </div>
+                                    <h3 className="text-lg font-semibold text-slate-800">Hero 母版</h3>
+                                    <Badge variant="outline" className="ml-auto text-xs">hero_storyboard</Badge>
+                                </div>
+
+                                {!task.heroImageUrl && (
+                                    <div className="py-10 text-center text-slate-500">
+                                        <Loader2 className="w-6 h-6 animate-spin mx-auto mb-3" />
+                                        正在生成 Hero 母版...
+                                    </div>
+                                )}
+
+                                {task.heroImageUrl && (
+                                    <div className="space-y-3">
+                                        <img
+                                            src={task.heroImageUrl}
+                                            alt="Hero"
+                                            className="w-full max-w-md rounded-xl border border-slate-200 shadow-sm"
+                                        />
+                                        {task.heroShootLog && (
+                                            <div className="space-y-2">
+                                                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                                    Shoot Log（手账）
+                                                </div>
+                                                <Textarea value={task.heroShootLog} readOnly className="min-h-[140px]" />
+                                            </div>
+                                        )}
+
+                                        {task.status === 'AWAITING_HERO_APPROVAL' && (
+                                            <Button
+                                                onClick={handleConfirmHero}
+                                                disabled={isConfirmingHero}
+                                                className="bg-green-600 hover:bg-green-700 text-white"
+                                            >
+                                                {isConfirmingHero ? (
+                                                    <span className="flex items-center gap-2">
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                        确认中...
+                                                    </span>
+                                                ) : (
+                                                    '确认Hero并生成分镜'
+                                                )}
+                                            </Button>
+                                        )}
+                                        {task.heroImageUrl && (
+                                            <Button
+                                                onClick={handleRegenerateHero}
+                                                disabled={isRegeneratingHero || task.status === 'HERO_RENDERING'}
+                                                variant="outline"
+                                            >
+                                                {isRegeneratingHero || task.status === 'HERO_RENDERING' ? '重新生成Hero中...' : '重新生成 Hero 母版'}
+                                            </Button>
+                                        )}
+                                        {task.heroImageUrl && (
+                                            <Button
+                                                onClick={() => downloadFromUrl(task.heroImageUrl!, `hero_${task.id}_${Date.now()}.jpg`)}
+                                                variant="outline"
+                                            >
+                                                <Download className="w-4 h-4 mr-2" />
+                                                下载 Hero
+                                            </Button>
+                                        )}
+                                        {task.status === 'STORYBOARD_PLANNING' && (
+                                            <div className="flex items-center gap-2 text-slate-500">
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                                分镜动作卡生成中...
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {task.storyboardCards && task.storyboardCards.length > 0 && (
+                                    <div className="space-y-3">
+                                        <div className="flex items-center gap-2 text-sm font-medium text-slate-500 uppercase tracking-wider">
+                                            <Layers className="w-4 h-4" />
+                                            分镜动作卡（{task.storyboardCards.length}）
+                                        </div>
+
+                                        <div className="flex flex-wrap gap-2">
+                                            <Button
+                                                onClick={handleRenderGrid}
+                                                disabled={isRenderingGrid || task.storyboardCards.length !== 4}
+                                                variant="outline"
+                                            >
+                                                {isRenderingGrid ? (
+                                                    <span className="flex items-center gap-2">
+                                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                        拼图生成中...
+                                                    </span>
+                                                ) : (
+                                                    task.gridImageUrl ? '重新生成四镜头拼图' : '四镜头拼图生成'
+                                                )}
+                                            </Button>
+                                            <Button
+                                                onClick={handleReplanStoryboard}
+                                                disabled={isReplanningStoryboard}
+                                                variant="outline"
+                                            >
+                                                {isReplanningStoryboard ? '重新抽卡中...' : '重新生成分镜（抽卡）'}
+                                            </Button>
+                                            {isRenderingGrid && (
+                                                <span className="text-xs text-slate-500 flex items-center gap-2 self-center">
+                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                    拼图生成中...
+                                                </span>
+                                            )}
+                                            {task.storyboardCards.length !== 4 && (
+                                                <span className="text-xs text-slate-400 self-center">
+                                                    仅当镜头数=4 时支持拼图
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {task.gridImageUrl && (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">四镜头拼图</div>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => downloadFromUrl(task.gridImageUrl!, `grid_${task.id}_${Date.now()}.jpg`)}
+                                                    >
+                                                        <Download className="w-4 h-4 mr-2" />
+                                                        下载
+                                                    </Button>
+                                                </div>
+                                                <img
+                                                    src={task.gridImageUrl}
+                                                    alt="Grid"
+                                                    className="w-full max-w-2xl rounded-xl border border-slate-200 shadow-sm"
+                                                />
+                                                {task.gridShootLog && (
+                                                    <Textarea value={task.gridShootLog} readOnly className="min-h-[120px]" />
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div className="grid gap-3">
+                                            {task.storyboardCards.map((c) => (
+                                                <div key={c.index} className="p-4 rounded-xl border border-slate-200 bg-slate-50">
+                                                    <div className="text-sm font-semibold text-slate-800 mb-2">#{c.index} {c.action}</div>
+                                                    <div className="grid gap-2 text-sm text-slate-700">
+                                                        <div><span className="font-medium">站位：</span>{c.blocking}</div>
+                                                        <div><span className="font-medium">机位：</span>{c.camera}</div>
+                                                        <div><span className="font-medium">景别：</span>{c.framing}</div>
+                                                        <div><span className="font-medium">灯光：</span>{c.lighting}</div>
+                                                        <div><span className="font-medium">遮挡禁区：</span>{c.occlusionNoGo}</div>
+                                                        <div><span className="font-medium">承接：</span>{c.continuity}</div>
+                                                    </div>
+
+                                                    <div className="mt-3 flex flex-wrap gap-2 items-center">
+                                                        <Button
+                                                            size="sm"
+                                                            onClick={() => handleRenderShot(c.index)}
+                                                            disabled={
+                                                                renderingShotIndices.has(c.index)
+                                                                || task.heroShots?.find((s) => s.index === c.index)?.status === 'PENDING'
+                                                            }
+                                                            variant="outline"
+                                                        >
+                                                            {(renderingShotIndices.has(c.index) || task.heroShots?.find((s) => s.index === c.index)?.status === 'PENDING') ? (
+                                                                <span className="flex items-center gap-2">
+                                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                    生成中...
+                                                                </span>
+                                                            ) : (
+                                                                task.heroShots?.find((s) => s.index === c.index)?.imageUrl ? '重新生成该镜头' : '生成该镜头'
+                                                            )}
+                                                        </Button>
+
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => {
+                                                                if (editingStoryboardIndex === c.index) return closeStoryboardEditor();
+                                                                openStoryboardEditor(c.index);
+                                                            }}
+                                                            disabled={savingStoryboardIndex === c.index}
+                                                        >
+                                                            <Edit className="w-3.5 h-3.5 mr-2" />
+                                                            {editingStoryboardIndex === c.index ? '收起文字编辑' : '编辑镜头文字'}
+                                                        </Button>
+
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => cycleCameraText(c.index)}
+                                                            disabled={cyclingCameraIndex === c.index || savingStoryboardIndex === c.index}
+                                                        >
+                                                            {cyclingCameraIndex === c.index ? (
+                                                                <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />
+                                                            ) : (
+                                                                <RefreshCcw className="w-3.5 h-3.5 mr-2" />
+                                                            )}
+                                                            换镜头
+                                                        </Button>
+
+                                                        {(() => {
+                                                            const shot = task.heroShots?.find((s) => s.index === c.index);
+                                                            if (!shot?.imageUrl) return null;
+                                                            return (
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="outline"
+                                                                    onClick={() => downloadFromUrl(shot.imageUrl!, `shot_${task.id}_${c.index}_${Date.now()}.jpg`)}
+                                                                >
+                                                                    <Download className="w-3.5 h-3.5 mr-2" />
+                                                                    下载当前镜头
+                                                                </Button>
+                                                            );
+                                                        })()}
+                                                    </div>
+
+                                                    {editingStoryboardIndex === c.index && storyboardDraft && (
+                                                        <div className="mt-3 p-4 rounded-xl border border-slate-200 bg-white space-y-4">
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <div className="text-sm font-semibold text-slate-800">镜头 #{c.index} 文字编辑</div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="outline"
+                                                                        onClick={closeStoryboardEditor}
+                                                                        disabled={savingStoryboardIndex === c.index}
+                                                                    >
+                                                                        取消
+                                                                    </Button>
+                                                                    <Button
+                                                                        size="sm"
+                                                                        onClick={saveStoryboardEditor}
+                                                                        disabled={savingStoryboardIndex === c.index}
+                                                                        className="bg-slate-900 hover:bg-slate-800 text-white"
+                                                                    >
+                                                                        {savingStoryboardIndex === c.index ? (
+                                                                            <span className="flex items-center gap-2">
+                                                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                                保存中...
+                                                                            </span>
+                                                                        ) : (
+                                                                            <span className="flex items-center gap-2">
+                                                                                <Save className="w-3.5 h-3.5" />
+                                                                                保存
+                                                                            </span>
+                                                                        )}
+                                                                    </Button>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="grid gap-3 md:grid-cols-2">
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">大场景子区域（scene_subarea）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.sceneSubarea}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, sceneSubarea: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">景别/角度（shot_type）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.shotType}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, shotType: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1 md:col-span-2">
+                                                                    <div className="text-xs text-slate-500">动作（action_pose）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.actionPose}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, actionPose: e.target.value } : prev)}
+                                                                        className="min-h-[90px]"
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1 md:col-span-2">
+                                                                    <div className="text-xs text-slate-500">本帧目标（goal）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.goal}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, goal: e.target.value } : prev)}
+                                                                        className="min-h-[70px]"
+                                                                    />
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="grid gap-3 md:grid-cols-3">
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">相机系统（camera_choice.system）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.cameraSystem}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, cameraSystem: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">镜头/焦段（camera_choice.model）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.cameraModel}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, cameraModel: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">光圈（camera_choice.f_stop）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.cameraFStop}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, cameraFStop: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="grid gap-3 md:grid-cols-2">
+                                                                <div className="space-y-1 md:col-span-2">
+                                                                    <div className="text-xs text-slate-500">场景光（lighting_plan.scene_light）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.lightingSceneLight}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, lightingSceneLight: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">主光（product_light.key）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.lightingKey}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, lightingKey: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">轮廓光（product_light.rim）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.lightingRim}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, lightingRim: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">补光（product_light.fill）</div>
+                                                                    <Input
+                                                                        value={storyboardDraft.lightingFill}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, lightingFill: e.target.value } : prev)}
+                                                                    />
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="grid gap-3 md:grid-cols-2">
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">遮挡禁区（occlusion_guard，一行一条）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.occlusionGuardText}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, occlusionGuardText: e.target.value } : prev)}
+                                                                        className="min-h-[120px]"
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">构图说明（composition_notes）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.compositionNotes}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, compositionNotes: e.target.value } : prev)}
+                                                                        className="min-h-[120px]"
+                                                                    />
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="grid gap-3 md:grid-cols-2">
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">参考图强制要求（ref_requirements，一行一条）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.refRequirementsText}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, refRequirementsText: e.target.value } : prev)}
+                                                                        className="min-h-[120px]"
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <div className="text-xs text-slate-500">通用统一要求（universal_requirements，一行一条）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.universalRequirementsText}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, universalRequirementsText: e.target.value } : prev)}
+                                                                        className="min-h-[120px]"
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1 md:col-span-2">
+                                                                    <div className="text-xs text-slate-500">物理逻辑（physical_logic）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.physicalLogic}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, physicalLogic: e.target.value } : prev)}
+                                                                        className="min-h-[90px]"
+                                                                    />
+                                                                </div>
+                                                                <div className="space-y-1 md:col-span-2">
+                                                                    <div className="text-xs text-slate-500">最高权重执行指令（exec_instruction_text）</div>
+                                                                    <Textarea
+                                                                        value={storyboardDraft.execInstructionText}
+                                                                        onChange={(e) => setStoryboardDraft(prev => prev ? { ...prev, execInstructionText: e.target.value } : prev)}
+                                                                        className="min-h-[120px]"
+                                                                    />
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="text-xs text-slate-500">
+                                                                提示：这里只改“文字/规划”，不会自动出图；保存后需要点击“重新生成该镜头”才会按新内容生效。
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {(() => {
+                                                        const shot = task.heroShots?.find((s) => s.index === c.index);
+                                                        if (!shot?.imageUrl) return null;
+                                                        const primaryVariant = {
+                                                            createdAt: shot.selectedAttemptCreatedAt || shot.createdAt || Date.now(),
+                                                            outputImageUrl: shot.imageUrl,
+                                                            outputShootLog: shot.shootLog,
+                                                            __synthetic: true,
+                                                        };
+                                                        const variantsRaw = [
+                                                            primaryVariant,
+                                                            ...(shot.attempts || []).filter((a) => !!a.outputImageUrl),
+                                                        ];
+                                                        const seen = new Set<string>();
+                                                        const variants = variantsRaw
+                                                            .filter((v) => {
+                                                                const url = (v as any).outputImageUrl;
+                                                                if (!url || typeof url !== 'string') return false;
+                                                                if (seen.has(url)) return false;
+                                                                seen.add(url);
+                                                                return true;
+                                                            })
+                                                            .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
+                                                        return (
+                                                            <div className="mt-3 space-y-2">
+                                                                <img
+                                                                    src={shot.imageUrl}
+                                                                    alt={`Shot ${c.index}`}
+                                                                    className="w-full max-w-md rounded-xl border border-slate-200 shadow-sm"
+                                                                />
+                                                                {shot.shootLog && (
+                                                                    <Textarea value={shot.shootLog} readOnly className="min-h-[120px]" />
+                                                                )}
+
+                                                                {variants.length > 1 && (
+                                                                    <div className="space-y-2">
+                                                                        <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                                                            版本对照（不会覆盖，选中后用于“姿势裂变”）
+                                                                        </div>
+                                                                        <div className="flex gap-2 overflow-x-auto pb-1">
+                                                                            {variants.map((v) => {
+                                                                                const isSelected = shot.selectedAttemptCreatedAt === (v as any).createdAt;
+                                                                                const isSynthetic = !!(v as any).__synthetic;
+                                                                                const attemptKey = `${c.index}:${v.createdAt}`;
+                                                                                return (
+                                                                                    <div key={v.createdAt} className={`shrink-0 rounded-lg border ${isSelected ? 'border-green-400 bg-green-50' : 'border-slate-200 bg-white'} p-2 w-[140px]`}>
+                                                                                        <a href={v.outputImageUrl!} target="_blank" rel="noreferrer">
+                                                                                            <img
+                                                                                                src={v.outputImageUrl!}
+                                                                                                alt={`Shot ${c.index} variant`}
+                                                                                                className="w-full h-[140px] object-cover rounded-md border border-slate-100"
+                                                                                            />
+                                                                                        </a>
+                                                                                        <div className="mt-2 flex items-center justify-between gap-2">
+                                                                                            <span className="text-[10px] text-slate-500">
+                                                                                                {new Date(v.createdAt).toLocaleTimeString('zh-CN')}
+                                                                                            </span>
+                                                                                            <div className="flex items-center gap-2">
+                                                                                                <Button
+                                                                                                    size="icon"
+                                                                                                    variant="outline"
+                                                                                                    className="h-6 w-6"
+                                                                                                    onClick={() => downloadFromUrl(v.outputImageUrl!, `shot_${task.id}_${c.index}_${v.createdAt}.jpg`)}
+                                                                                                >
+                                                                                                    <Download className="w-3 h-3" />
+                                                                                                </Button>
+                                                                                                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                                                                                                    {isSelected ? '已选' : '备选'}
+                                                                                                </Badge>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                        <Button
+                                                                                            size="sm"
+                                                                                            variant={isSelected ? 'secondary' : 'outline'}
+                                                                                            className="mt-2 w-full h-8 text-xs"
+                                                                                            disabled={isSynthetic || selectingShotAttemptKey === attemptKey}
+                                                                                            onClick={() => handleSelectShotVariant(c.index, (v as any).createdAt)}
+                                                                                        >
+                                                                                            {selectingShotAttemptKey === attemptKey ? (
+                                                                                                <span className="flex items-center gap-2">
+                                                                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                                                    选择中...
+                                                                                                </span>
+                                                                                            ) : (
+                                                                                                isSelected ? '当前裂变版本' : (isSynthetic ? '当前显示版本' : '选择为裂变版本')
+                                                                                            )}
+                                                                                        </Button>
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })()}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </motion.div>
+                )}
 
                 {/* 2. Visual Analysis (Brain Output) */}
                 {showVisualAnalysis && (

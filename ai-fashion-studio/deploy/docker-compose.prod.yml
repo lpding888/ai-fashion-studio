@@ -1,0 +1,42 @@
+services:
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "./deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "caddy_data:/data"
+      - "caddy_config:/config"
+    depends_on:
+      - client
+      - server
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - "./deploy/.env.production"
+    volumes:
+      - "./server/data:/app/data"
+      - "./server/uploads:/app/uploads"
+    expose:
+      - "5000"
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: "https://api.aizhao.icu"
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+volumes:
+  caddy_data:
+  caddy_config:
+
