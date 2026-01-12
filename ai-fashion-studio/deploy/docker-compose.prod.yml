@@ -14,9 +14,7 @@ services:
       - server
 
   server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
+    image: ai-fashion-server:latest
     restart: unless-stopped
     env_file:
       - "./deploy/.env.production"
@@ -27,11 +25,7 @@ services:
       - "5000"
 
   client:
-    build:
-      context: ./client
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: "https://api.aizhao.icu"
+    image: ai-fashion-client:latest
     restart: unless-stopped
     expose:
       - "3000"
