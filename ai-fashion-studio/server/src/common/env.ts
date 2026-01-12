@@ -7,6 +7,7 @@ const boolFromString = z
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().optional(),
+  DATABASE_URL: z.string().optional(),
   JWT_SECRET: z.string().optional(),
   INVITE_CODE_REQUIRED: boolFromString.optional(),
   CORS_ORIGINS: z.string().optional(),
@@ -26,6 +27,16 @@ export function validateEnv(config: Record<string, unknown>): AppEnv {
   }
 
   const env = parsed.data;
+
+  if (env.NODE_ENV !== 'test') {
+    if (!env.DATABASE_URL) {
+      throw new Error('必须配置 DATABASE_URL（Postgres 连接串）');
+    }
+
+    if (!/^postgres(ql)?:\/\//.test(env.DATABASE_URL)) {
+      throw new Error('DATABASE_URL 必须以 postgres:// 或 postgresql:// 开头');
+    }
+  }
 
   if (env.NODE_ENV === 'production') {
     if (!env.JWT_SECRET || env.JWT_SECRET.length < 32) {

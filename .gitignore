@@ -30,3 +30,11 @@ Thumbs.db
 
 # Misc
 temp_painter_options.txt
+
+# Local deploy artifacts (do not commit)
+ai-fashion-studio/deploy-minimal/
+ai-fashion-studio/deploy-temp/
+ai-fashion-studio/docs/
+
+# NPM lock (this repo uses pnpm)
+package-lock.json

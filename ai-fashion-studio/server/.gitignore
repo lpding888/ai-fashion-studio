@@ -59,6 +59,9 @@ pids
 /data/secrets/
 /data/users.json
 
+# Prisma client (generated at build time)
+/generated/
+
 # User uploads / generated assets (dev)
 /uploads/
 

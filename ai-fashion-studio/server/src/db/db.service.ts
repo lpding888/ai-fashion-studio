@@ -1,90 +1,47 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import { DbSchema, TaskModel, FacePreset, StylePreset, User, CreditTransaction } from './models';
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import type { CreditTransaction, FacePreset, StylePreset, TaskModel, User } from './models';
 
 @Injectable()
-export class DbService implements OnModuleInit {
-  private logger = new Logger(DbService.name);
-  private dbPath = path.resolve('./data/db.json');
-  private data: DbSchema = {
-    tasks: [],
-    facePresets: [],
-    stylePresets: [],
-    users: [],
-    creditTransactions: [],
-  };
-
-  async onModuleInit() {
-    await this.init();
-  }
-
-  private async init() {
-    try {
-      await fs.ensureDir(path.dirname(this.dbPath));
-      if (await fs.pathExists(this.dbPath)) {
-        this.data = await fs.readJson(this.dbPath);
-        // 兼容旧数据：自动添加缺失字段
-        if (!this.data.facePresets) this.data.facePresets = [];
-        if (!this.data.stylePresets) this.data.stylePresets = [];
-        if (!this.data.users) this.data.users = [];
-        if (!this.data.creditTransactions) this.data.creditTransactions = [];
-        if (!this.data.tasks) this.data.tasks = [];
-
-        // 兼容旧任务：补齐 workflow 相关字段（默认 legacy）
-        this.data.tasks = (this.data.tasks || []).map((t: any) => {
-          const workflow = (t.workflow as any) || 'legacy';
-          const gridStatus =
-            (t.gridStatus as any)
-            || (t.gridImageUrl ? 'RENDERED' : undefined);
-          return {
-            ...t,
-            workflow,
-            autoApproveHero: t.autoApproveHero ?? false,
-            heroShots: t.heroShots ?? [],
-            gridStatus,
-            heroHistory: t.heroHistory ?? [],
-            gridHistory: t.gridHistory ?? [],
-            storyboardHistory: t.storyboardHistory ?? [],
-          };
-        });
-
-        await this.save();
-        this.logger.log(
-          `Database loaded. Tasks: ${this.data.tasks.length}, FacePresets: ${this.data.facePresets.length}, StylePresets: ${this.data.stylePresets.length}, Users: ${this.data.users.length}`,
-        );
-      } else {
-        await this.save();
-        this.logger.log(`Created new database at ${this.dbPath}`);
-      }
-    } catch (e) {
-      this.logger.error('Failed to init DB', e);
-    }
-  }
-
-  private async save() {
-    await fs.writeJson(this.dbPath, this.data, { spaces: 2 });
-  }
+export class DbService {
+  constructor(private readonly prisma: PrismaService) { }
 
   // ===== Task Operations =====
 
   async saveTask(task: TaskModel) {
-    const index = this.data.tasks.findIndex((t) => t.id === task.id);
-    if (index >= 0) {
-      this.data.tasks[index] = task;
-    } else {
-      this.data.tasks.push(task);
-    }
-    await this.save();
+    await this.prisma.task.upsert({
+      where: { id: task.id },
+      create: {
+        id: task.id,
+        userId: task.userId ?? null,
+        status: task.status,
+        creditsSpent: task.creditsSpent ?? null,
+        createdAt: new Date(task.createdAt),
+        data: task as any,
+      },
+      update: {
+        userId: task.userId ?? null,
+        status: task.status,
+        creditsSpent: task.creditsSpent ?? null,
+        createdAt: new Date(task.createdAt),
+        data: task as any,
+      },
+    });
+
     return task;
   }
 
   async getTask(id: string): Promise<TaskModel | null> {
-    return this.data.tasks.find((t) => t.id === id) || null;
+    const row = await this.prisma.task.findUnique({ where: { id } });
+    if (!row) return null;
+    return row.data as any as TaskModel;
   }
 
   async getAllTasks(): Promise<TaskModel[]> {
-    return this.data.tasks || [];
+    const rows = await this.prisma.task.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => row.data as any as TaskModel);
   }
 
   async updateTask(id: string, partial: Partial<TaskModel>) {
@@ -96,34 +53,47 @@ export class DbService implements OnModuleInit {
   }
 
   async deleteTask(id: string): Promise<boolean> {
-    const index = this.data.tasks.findIndex((t) => t.id === id);
-    if (index >= 0) {
-      this.data.tasks.splice(index, 1);
-      await this.save();
+    try {
+      await this.prisma.task.delete({ where: { id } });
       return true;
+    } catch (err: any) {
+      if (err?.code === 'P2025') return false;
+      throw err;
     }
-    return false;
   }
 
   // ===== Face Preset Operations =====
 
   async saveFacePreset(preset: FacePreset) {
-    const index = this.data.facePresets.findIndex((p) => p.id === preset.id);
-    if (index >= 0) {
-      this.data.facePresets[index] = preset;
-    } else {
-      this.data.facePresets.push(preset);
-    }
-    await this.save();
+    await this.prisma.facePreset.upsert({
+      where: { id: preset.id },
+      create: {
+        id: preset.id,
+        name: preset.name,
+        createdAt: new Date(preset.createdAt),
+        data: preset as any,
+      },
+      update: {
+        name: preset.name,
+        createdAt: new Date(preset.createdAt),
+        data: preset as any,
+      },
+    });
+
     return preset;
   }
 
   async getAllFacePresets(): Promise<FacePreset[]> {
-    return this.data.facePresets || [];
+    const rows = await this.prisma.facePreset.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => row.data as any as FacePreset);
   }
 
   async getFacePreset(id: string): Promise<FacePreset | null> {
-    return this.data.facePresets.find((p) => p.id === id) || null;
+    const row = await this.prisma.facePreset.findUnique({ where: { id } });
+    if (!row) return null;
+    return row.data as any as FacePreset;
   }
 
   async updateFacePreset(id: string, partial: Partial<FacePreset>) {
@@ -135,34 +105,47 @@ export class DbService implements OnModuleInit {
   }
 
   async deleteFacePreset(id: string) {
-    const index = this.data.facePresets.findIndex((p) => p.id === id);
-    if (index >= 0) {
-      this.data.facePresets.splice(index, 1);
-      await this.save();
+    try {
+      await this.prisma.facePreset.delete({ where: { id } });
       return true;
+    } catch (err: any) {
+      if (err?.code === 'P2025') return false;
+      throw err;
     }
-    return false;
   }
 
   // ===== Style Preset Operations =====
 
   async saveStylePreset(preset: StylePreset) {
-    const index = this.data.stylePresets.findIndex((p) => p.id === preset.id);
-    if (index >= 0) {
-      this.data.stylePresets[index] = preset;
-    } else {
-      this.data.stylePresets.push(preset);
-    }
-    await this.save();
+    await this.prisma.stylePreset.upsert({
+      where: { id: preset.id },
+      create: {
+        id: preset.id,
+        name: preset.name,
+        createdAt: new Date(preset.createdAt),
+        data: preset as any,
+      },
+      update: {
+        name: preset.name,
+        createdAt: new Date(preset.createdAt),
+        data: preset as any,
+      },
+    });
+
     return preset;
   }
 
   async getAllStylePresets(): Promise<StylePreset[]> {
-    return this.data.stylePresets || [];
+    const rows = await this.prisma.stylePreset.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => row.data as any as StylePreset);
   }
 
   async getStylePreset(id: string): Promise<StylePreset | null> {
-    return this.data.stylePresets.find((p) => p.id === id) || null;
+    const row = await this.prisma.stylePreset.findUnique({ where: { id } });
+    if (!row) return null;
+    return row.data as any as StylePreset;
   }
 
   async updateStylePreset(id: string, partial: Partial<StylePreset>) {
@@ -174,38 +157,99 @@ export class DbService implements OnModuleInit {
   }
 
   async deleteStylePreset(id: string) {
-    const index = this.data.stylePresets.findIndex((p) => p.id === id);
-    if (index >= 0) {
-      this.data.stylePresets.splice(index, 1);
-      await this.save();
+    try {
+      await this.prisma.stylePreset.delete({ where: { id } });
       return true;
+    } catch (err: any) {
+      if (err?.code === 'P2025') return false;
+      throw err;
     }
-    return false;
   }
 
-  // ===== User Operations =====
+  // ===== Panel User Operations (legacy) =====
+
+  private mapPanelUser(row: {
+    id: string;
+    username: string;
+    email: string;
+    role: string;
+    avatar: string | null;
+    credits: number;
+    totalTasks: number;
+    createdAt: Date;
+    lastLoginAt: Date | null;
+    status: string;
+    createdBy: string | null;
+    notes: string | null;
+  }): User {
+    return {
+      id: row.id,
+      username: row.username,
+      email: row.email,
+      role: row.role as any,
+      avatar: row.avatar ?? undefined,
+      credits: row.credits,
+      totalTasks: row.totalTasks,
+      createdAt: row.createdAt.getTime(),
+      lastLoginAt: row.lastLoginAt?.getTime(),
+      status: row.status as any,
+      createdBy: row.createdBy ?? undefined,
+      notes: row.notes ?? undefined,
+    };
+  }
 
   async saveUser(user: User): Promise<User> {
-    const index = this.data.users.findIndex((u) => u.id === user.id);
-    if (index >= 0) {
-      this.data.users[index] = user;
-    } else {
-      this.data.users.push(user);
-    }
-    await this.save();
-    return user;
+    const row = await this.prisma.panelUser.upsert({
+      where: { id: user.id },
+      create: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar ?? null,
+        credits: user.credits,
+        totalTasks: user.totalTasks,
+        status: user.status,
+        createdAt: new Date(user.createdAt),
+        lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt) : null,
+        createdBy: user.createdBy ?? null,
+        notes: user.notes ?? null,
+      },
+      update: {
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar ?? null,
+        credits: user.credits,
+        totalTasks: user.totalTasks,
+        status: user.status,
+        createdAt: new Date(user.createdAt),
+        lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt) : null,
+        createdBy: user.createdBy ?? null,
+        notes: user.notes ?? null,
+      },
+    });
+
+    return this.mapPanelUser(row);
   }
 
   async getAllUsers(): Promise<User[]> {
-    return this.data.users || [];
+    const rows = await this.prisma.panelUser.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.mapPanelUser(row));
   }
 
   async getUser(id: string): Promise<User | null> {
-    return this.data.users.find((u) => u.id === id) || null;
+    const row = await this.prisma.panelUser.findUnique({ where: { id } });
+    if (!row) return null;
+    return this.mapPanelUser(row);
   }
 
   async getUserByEmail(email: string): Promise<User | null> {
-    return this.data.users.find((u) => u.email === email) || null;
+    const row = await this.prisma.panelUser.findUnique({ where: { email } });
+    if (!row) return null;
+    return this.mapPanelUser(row);
   }
 
   async updateUser(id: string, partial: Partial<User>) {
@@ -217,28 +261,71 @@ export class DbService implements OnModuleInit {
   }
 
   async deleteUser(id: string) {
-    const index = this.data.users.findIndex((u) => u.id === id);
-    if (index >= 0) {
-      this.data.users.splice(index, 1);
-      await this.save();
+    try {
+      await this.prisma.panelUser.delete({ where: { id } });
       return true;
+    } catch (err: any) {
+      if (err?.code === 'P2025') return false;
+      throw err;
     }
-    return false;
   }
 
   // ===== Credit Transaction Operations =====
 
+  private mapCreditTransaction(row: {
+    id: string;
+    userId: string;
+    type: 'EARN' | 'SPEND';
+    amount: number;
+    balance: number;
+    reason: string;
+    relatedTaskId: string | null;
+    adminId: string | null;
+    createdAt: Date;
+  }): CreditTransaction {
+    return {
+      id: row.id,
+      userId: row.userId,
+      type: row.type,
+      amount: row.amount,
+      balance: row.balance,
+      reason: row.reason,
+      relatedTaskId: row.relatedTaskId ?? undefined,
+      adminId: row.adminId ?? undefined,
+      createdAt: row.createdAt.getTime(),
+    };
+  }
+
   async getCreditTransactions(userId: string): Promise<CreditTransaction[]> {
-    return this.data.creditTransactions.filter((t) => t.userId === userId);
+    const rows = await this.prisma.creditTransaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.mapCreditTransaction(row as any));
   }
 
   async saveCreditTransaction(transaction: CreditTransaction): Promise<CreditTransaction> {
-    this.data.creditTransactions.push(transaction);
-    await this.save();
-    return transaction;
+    const row = await this.prisma.creditTransaction.create({
+      data: {
+        id: transaction.id,
+        userId: transaction.userId,
+        type: transaction.type as any,
+        amount: transaction.amount,
+        balance: transaction.balance,
+        reason: transaction.reason,
+        relatedTaskId: transaction.relatedTaskId ?? null,
+        adminId: transaction.adminId ?? null,
+        createdAt: new Date(transaction.createdAt),
+      },
+    });
+    return this.mapCreditTransaction(row as any);
   }
 
   async getAllCreditTransactions(): Promise<CreditTransaction[]> {
-    return this.data.creditTransactions || [];
+    const rows = await this.prisma.creditTransaction.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.mapCreditTransaction(row as any));
   }
 }
+

@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import * as archiver from 'archiver';
+import archiver from 'archiver';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';

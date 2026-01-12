@@ -1,4 +1,24 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: fashion_studio
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+
+  migrate:
+    image: ai-fashion-server-migrator:latest
+    restart: on-failure
+    env_file:
+      - "./deploy/.env.production"
+    depends_on:
+      - postgres
+
   caddy:
     image: caddy:2.8
     restart: unless-stopped
@@ -21,6 +41,8 @@ services:
     volumes:
       - "./server/data:/app/data"
       - "./server/uploads:/app/uploads"
+    depends_on:
+      - postgres
     expose:
       - "5000"
 
@@ -33,4 +55,5 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  postgres_data:
 

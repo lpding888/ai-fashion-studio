@@ -4,6 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { validateEnv } from './common/env';
 import { HealthController } from './common/health.controller';
+import { PrismaModule } from './prisma/prisma.module';
 import { BrainModule } from './brain/brain.module';
 import { TaskModule } from './task/task.module';
 import { DbModule } from './db/db.module';
@@ -26,6 +27,7 @@ import { WorkflowPromptModule } from './workflow-prompt/workflow-prompt.module';
       envFilePath: ['.env.local', '.env'],
       validate: validateEnv,
     }),
+    PrismaModule,
     BrainModule,
     TaskModule,
     DbModule,

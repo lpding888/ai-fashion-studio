@@ -1,345 +1,350 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { InviteCodeModel, UserModel } from './models';
-import * as fs from 'fs-extra';
-import * as path from 'path';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-
-const USERS_DB_PATH = path.join(process.cwd(), 'data', 'users.json');
-
-interface UsersDatabase {
-    users: UserModel[];
-    inviteCodes: InviteCodeModel[];
-}
+import type { InviteCodeModel, UserModel } from './models';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class UserDbService implements OnModuleInit {
-    private logger = new Logger(UserDbService.name);
-    private db: UsersDatabase;
+  private readonly logger = new Logger(UserDbService.name);
 
-    async onModuleInit() {
-        await this.initDb();
+  constructor(private readonly prisma: PrismaService) { }
+
+  async onModuleInit() {
+    await this.createDefaultAdmin();
+  }
+
+  private mapUser(row: {
+    id: string;
+    username: string;
+    passwordHash: string;
+    nickname: string | null;
+    email: string | null;
+    status: 'ACTIVE' | 'DISABLED' | 'PENDING';
+    role: 'USER' | 'ADMIN';
+    credits: number;
+    totalTasks: number;
+    createdAt: Date;
+    lastLoginAt: Date | null;
+    createdBy: string | null;
+    notes: string | null;
+  }): UserModel {
+    return {
+      id: row.id,
+      username: row.username,
+      password: row.passwordHash,
+      nickname: row.nickname ?? undefined,
+      email: row.email ?? undefined,
+      status: row.status,
+      role: row.role,
+      credits: row.credits,
+      totalTasks: row.totalTasks,
+      createdAt: row.createdAt.getTime(),
+      lastLoginAt: row.lastLoginAt?.getTime(),
+      createdBy: row.createdBy ?? undefined,
+      notes: row.notes ?? undefined,
+    };
+  }
+
+  private mapInvite(row: {
+    id: string;
+    codeHash: string;
+    createdAt: Date;
+    createdByUserId: string | null;
+    usedAt: Date | null;
+    usedByUserId: string | null;
+    revokedAt: Date | null;
+    note: string | null;
+  }): InviteCodeModel {
+    return {
+      id: row.id,
+      codeHash: row.codeHash,
+      createdAt: row.createdAt.getTime(),
+      createdByUserId: row.createdByUserId ?? undefined,
+      usedAt: row.usedAt?.getTime(),
+      usedByUserId: row.usedByUserId ?? undefined,
+      revokedAt: row.revokedAt?.getTime(),
+      note: row.note ?? undefined,
+    };
+  }
+
+  // 创建默认管理员
+  private async createDefaultAdmin() {
+    const adminCount = await this.prisma.user.count({
+      where: { role: 'ADMIN' },
+    });
+    if (adminCount > 0) return;
+
+    const isProd = process.env.NODE_ENV === 'production';
+    const bootstrapUsername = (process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim();
+    const bootstrapPassword = (process.env.BOOTSTRAP_ADMIN_PASSWORD || '').trim();
+
+    const username = isProd ? bootstrapUsername : 'admin';
+    const password = isProd ? bootstrapPassword : 'admin123';
+
+    if (isProd) {
+      if (!username || !password) {
+        throw new Error(
+          '生产环境未检测到管理员账户，且未配置 BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD'
+        );
+      }
+      if (password.length < 12) {
+        throw new Error('BOOTSTRAP_ADMIN_PASSWORD 长度不足（至少 12 位）');
+      }
     }
 
-    private async initDb() {
-        await fs.ensureDir(path.dirname(USERS_DB_PATH));
+    const now = new Date();
+    const row = await this.prisma.user.create({
+      data: {
+        id: crypto.randomUUID(),
+        username,
+        passwordHash: await bcrypt.hash(password, 10),
+        nickname: '管理员',
+        status: 'ACTIVE',
+        role: 'ADMIN',
+        credits: 999999,
+        totalTasks: 0,
+        createdAt: now,
+      },
+    });
 
-        if (await fs.pathExists(USERS_DB_PATH)) {
-            this.db = await fs.readJSON(USERS_DB_PATH);
-            // 兼容旧数据：补齐缺失字段
-            if (!this.db.inviteCodes) this.db.inviteCodes = [];
-            this.logger.log(`Loaded ${this.db.users.length} users from database`);
-
-            // 即使文件存在，也检查是否需要创建默认管理员
-            await this.createDefaultAdmin();
-        } else {
-            this.db = { users: [], inviteCodes: [] };
-            await this.saveDb();
-            this.logger.log('Initialized new users database');
-
-            // 创建默认管理员账户
-            await this.createDefaultAdmin();
-        }
+    this.logger.log(`Created bootstrap admin account (username: ${row.username})`);
+    if (!isProd) {
+      this.logger.warn('Please change the default admin password!');
     }
+  }
 
-    private async saveDb() {
-        await fs.writeJSON(USERS_DB_PATH, this.db, { spaces: 2 });
-    }
+  // 创建用户（管理员用）
+  async createUser(data: {
+    id?: string;
+    username: string;
+    password: string;
+    nickname?: string;
+    email?: string;
+    role?: 'USER' | 'ADMIN';
+    status?: 'ACTIVE' | 'DISABLED' | 'PENDING';
+    credits?: number;
+    createdBy?: string;
+    notes?: string;
+  }): Promise<UserModel> {
+    const username = data.username.trim();
+    if (!username) throw new Error('用户名不能为空');
 
-    // 创建默认管理员
-    private async createDefaultAdmin() {
-        const adminExists = this.db.users.some(u => u.role === 'ADMIN');
-        if (adminExists) return;
+    const exists = await this.prisma.user.findUnique({ where: { username } });
+    if (exists) throw new Error('用户名已存在');
 
-        const isProd = process.env.NODE_ENV === 'production';
-        const bootstrapUsername = (process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim();
-        const bootstrapPassword = (process.env.BOOTSTRAP_ADMIN_PASSWORD || '').trim();
+    const row = await this.prisma.user.create({
+      data: {
+        id: data.id || crypto.randomUUID(),
+        username,
+        passwordHash: await bcrypt.hash(data.password, 10),
+        nickname: data.nickname || username,
+        email: data.email ?? null,
+        status: data.status || 'ACTIVE',
+        role: data.role || 'USER',
+        credits: data.credits ?? 100,
+        totalTasks: 0,
+        createdAt: new Date(),
+        createdBy: data.createdBy ?? null,
+        notes: data.notes ?? null,
+      },
+    });
 
-        if (isProd) {
-            if (!bootstrapUsername || !bootstrapPassword) {
-                throw new Error(
-                    '生产环境未检测到管理员账户，且未配置 BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD'
-                );
-            }
+    this.logger.log(`Created user: ${row.username} (${row.role})`);
+    return this.mapUser(row as any);
+  }
 
-            if (bootstrapPassword.length < 12) {
-                throw new Error('BOOTSTRAP_ADMIN_PASSWORD 长度不足（至少 12 位）');
-            }
+  async registerWithInvite(params: {
+    username: string;
+    password: string;
+    nickname?: string;
+    email?: string;
+    inviteCode?: string;
+    inviteRequired: boolean;
+    initialCredits?: number;
+  }): Promise<UserModel> {
+    const username = params.username.trim();
+    const inviteCode = (params.inviteCode || '').trim();
+    const userId = crypto.randomUUID();
 
-            const admin: UserModel = {
-                id: crypto.randomUUID(),
-                username: bootstrapUsername,
-                password: await bcrypt.hash(bootstrapPassword, 10),
-                nickname: '管理员',
-                status: 'ACTIVE',
-                role: 'ADMIN',
-                credits: 999999,
-                totalTasks: 0,
-                createdAt: Date.now()
-            };
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.user.findUnique({ where: { username } });
+      if (existing) throw new Error('用户名已存在');
 
-            this.db.users.push(admin);
-            await this.saveDb();
-            this.logger.log(`Created bootstrap admin account (username: ${admin.username})`);
-            return;
-        }
+      if (params.inviteRequired) {
+        if (!inviteCode) throw new Error('邀请码不能为空');
 
-        const admin: UserModel = {
-            id: crypto.randomUUID(),
-            username: 'admin',
-            password: await bcrypt.hash('admin123', 10),
-            nickname: '管理员',
-            status: 'ACTIVE',
-            role: 'ADMIN',
-            credits: 999999,
-            totalTasks: 0,
-            createdAt: Date.now()
-        };
-
-        this.db.users.push(admin);
-        await this.saveDb();
-
-        this.logger.log('Created default admin account (username: admin, password: admin123)');
-        this.logger.warn('Please change the default admin password!');
-    }
-
-    // 创建用户（管理员用）
-    async createUser(data: {
-        id?: string;
-        username: string;
-        password: string;
-        nickname?: string;
-        email?: string;
-        role?: 'USER' | 'ADMIN';
-        status?: 'ACTIVE' | 'DISABLED' | 'PENDING';
-        credits?: number;
-        createdBy?: string;
-        notes?: string;
-    }): Promise<UserModel> {
-        // 检查用户名是否已存在
-        if (this.db.users.some(u => u.username === data.username)) {
-            throw new Error('用户名已存在');
-        }
-
-        const user: UserModel = {
-            id: data.id || crypto.randomUUID(),
-            username: data.username,
-            password: await bcrypt.hash(data.password, 10),
-            nickname: data.nickname || data.username,
-            email: data.email,
-            status: data.status || 'ACTIVE',
-            role: data.role || 'USER',
-            credits: data.credits || 100,
-            totalTasks: 0,
-            createdAt: Date.now(),
-            createdBy: data.createdBy,
-            notes: data.notes
-        };
-
-        this.db.users.push(user);
-        await this.saveDb();
-
-        this.logger.log(`Created user: ${user.username} (${user.role})`);
-
-        return user;
-    }
-
-    async registerWithInvite(params: {
-        username: string;
-        password: string;
-        nickname?: string;
-        email?: string;
-        inviteCode?: string;
-        inviteRequired: boolean;
-        initialCredits?: number;
-    }): Promise<UserModel> {
-        const username = params.username.trim();
-        const inviteCode = (params.inviteCode || '').trim();
-        const userId = crypto.randomUUID();
-
-        if (this.db.users.some(u => u.username === username)) {
-            throw new Error('用户名已存在');
-        }
-
-        let lockedInvite: InviteCodeModel | undefined;
-        if (params.inviteRequired) {
-            if (!inviteCode) {
-                throw new Error('邀请码不能为空');
-            }
-
-            const codeHash = crypto.createHash('sha256').update(inviteCode).digest('hex');
-            const invite = this.db.inviteCodes.find(i => i.codeHash === codeHash);
-            if (!invite || invite.revokedAt) {
-                throw new Error('邀请码无效');
-            }
-            if (invite.usedAt || invite.usedByUserId) {
-                throw new Error('邀请码已被使用');
-            }
-
-            // 先在内存里锁定（避免并发重复使用），后续失败会回滚
-            invite.usedAt = Date.now();
-            invite.usedByUserId = userId;
-            lockedInvite = invite;
-        }
-
-        try {
-            const user: UserModel = {
-                id: userId,
-                username,
-                password: await bcrypt.hash(params.password, 10),
-                nickname: params.nickname || username,
-                email: params.email,
-                status: 'ACTIVE',
-                role: 'USER',
-                credits: params.initialCredits ?? 100,
-                totalTasks: 0,
-                createdAt: Date.now(),
-            };
-
-            this.db.users.push(user);
-            await this.saveDb();
-            return user;
-        } catch (err) {
-            // 回滚锁定的邀请码
-            if (lockedInvite) {
-                lockedInvite.usedAt = undefined;
-                lockedInvite.usedByUserId = undefined;
-            }
-            throw err;
-        }
-    }
-
-    // 根据用户名查找
-    async getUserByUsername(username: string): Promise<UserModel | null> {
-        return this.db.users.find(u => u.username === username) || null;
-    }
-
-    // 根据ID查找
-    async getUserById(id: string): Promise<UserModel | null> {
-        return this.db.users.find(u => u.id === id) || null;
-    }
-
-    // 验证密码
-    async verifyPassword(username: string, password: string): Promise<UserModel | null> {
-        const user = await this.getUserByUsername(username);
-        if (!user) return null;
-
-        const valid = await bcrypt.compare(password, user.password);
-        if (!valid) return null;
-
-        return user;
-    }
-
-    // 更新用户
-    async updateUser(id: string, updates: Partial<UserModel>): Promise<UserModel> {
-        const user = this.db.users.find(u => u.id === id);
-        if (!user) {
-            throw new Error('用户不存在');
-        }
-
-        if (updates.username && updates.username !== user.username) {
-            if (this.db.users.some(u => u.username === updates.username)) {
-                throw new Error('用户名已存在');
-            }
-        }
-
-        // 如果更新密码，需要加密
-        if (updates.password) {
-            updates.password = await bcrypt.hash(updates.password, 10);
-        }
-
-        Object.assign(user, updates);
-        await this.saveDb();
-
-        return user;
-    }
-
-    // 删除用户
-    async deleteUser(id: string): Promise<void> {
-        const index = this.db.users.findIndex(u => u.id === id);
-        if (index === -1) {
-            throw new Error('用户不存在');
-        }
-
-        this.db.users.splice(index, 1);
-        await this.saveDb();
-    }
-
-    // 获取所有用户（管理员用）
-    async getAllUsers(): Promise<UserModel[]> {
-        return this.db.users;
-    }
-
-    async createInviteCode(params: { createdByUserId?: string; note?: string } = {}) {
-        const code = crypto.randomBytes(9).toString('base64url'); // 12 chars
-        const codeHash = crypto.createHash('sha256').update(code).digest('hex');
-
-        const invite: InviteCodeModel = {
-            id: crypto.randomUUID(),
+        const codeHash = crypto.createHash('sha256').update(inviteCode).digest('hex');
+        const locked = await tx.inviteCode.updateMany({
+          where: {
             codeHash,
-            createdAt: Date.now(),
-            createdByUserId: params.createdByUserId,
-            note: params.note,
-        };
+            revokedAt: null,
+            usedAt: null,
+            usedByUserId: null,
+          },
+          data: {
+            usedAt: new Date(),
+            usedByUserId: userId,
+          },
+        });
 
-        this.db.inviteCodes.push(invite);
-        await this.saveDb();
+        if (locked.count !== 1) {
+          throw new Error('邀请码无效或已被使用');
+        }
+      }
 
-        return { code, invite };
+      const row = await tx.user.create({
+        data: {
+          id: userId,
+          username,
+          passwordHash: await bcrypt.hash(params.password, 10),
+          nickname: params.nickname || username,
+          email: params.email ?? null,
+          status: 'ACTIVE',
+          role: 'USER',
+          credits: params.initialCredits ?? 100,
+          totalTasks: 0,
+          createdAt: new Date(),
+        },
+      });
+
+      return this.mapUser(row as any);
+    });
+  }
+
+  // 根据用户名查找
+  async getUserByUsername(username: string): Promise<UserModel | null> {
+    const row = await this.prisma.user.findUnique({ where: { username } });
+    if (!row) return null;
+    return this.mapUser(row as any);
+  }
+
+  // 根据ID查找
+  async getUserById(id: string): Promise<UserModel | null> {
+    const row = await this.prisma.user.findUnique({ where: { id } });
+    if (!row) return null;
+    return this.mapUser(row as any);
+  }
+
+  // 验证密码
+  async verifyPassword(username: string, password: string): Promise<UserModel | null> {
+    const row = await this.prisma.user.findUnique({ where: { username } });
+    if (!row) return null;
+
+    const valid = await bcrypt.compare(password, (row as any).passwordHash);
+    if (!valid) return null;
+
+    return this.mapUser(row as any);
+  }
+
+  // 更新用户
+  async updateUser(id: string, updates: Partial<UserModel>): Promise<UserModel> {
+    const current = await this.prisma.user.findUnique({ where: { id } });
+    if (!current) throw new Error('用户不存在');
+
+    if (updates.username && updates.username !== (current as any).username) {
+      const exists = await this.prisma.user.findUnique({ where: { username: updates.username } });
+      if (exists) throw new Error('用户名已存在');
     }
 
-    async listInviteCodes(): Promise<InviteCodeModel[]> {
-        return [...this.db.inviteCodes].sort((a, b) => b.createdAt - a.createdAt);
+    const data: any = {};
+
+    if (updates.username !== undefined) data.username = updates.username;
+    if (updates.nickname !== undefined) data.nickname = updates.nickname ?? null;
+    if (updates.email !== undefined) data.email = updates.email ?? null;
+    if (updates.status !== undefined) data.status = updates.status;
+    if (updates.role !== undefined) data.role = updates.role;
+    if (updates.credits !== undefined) data.credits = updates.credits;
+    if (updates.totalTasks !== undefined) data.totalTasks = updates.totalTasks;
+    if (updates.lastLoginAt !== undefined) data.lastLoginAt = updates.lastLoginAt ? new Date(updates.lastLoginAt) : null;
+    if (updates.createdBy !== undefined) data.createdBy = updates.createdBy ?? null;
+    if (updates.notes !== undefined) data.notes = updates.notes ?? null;
+
+    if (updates.password !== undefined) {
+      data.passwordHash = await bcrypt.hash(updates.password, 10);
     }
 
-    async revokeInviteCode(inviteId: string): Promise<InviteCodeModel> {
-        const invite = this.db.inviteCodes.find(i => i.id === inviteId);
-        if (!invite) {
-            throw new Error('邀请码不存在');
-        }
-        if (invite.usedAt || invite.usedByUserId) {
-            throw new Error('邀请码已被使用，不能撤销');
-        }
-        if (!invite.revokedAt) {
-            invite.revokedAt = Date.now();
-            await this.saveDb();
-        }
-        return invite;
+    const row = await this.prisma.user.update({ where: { id }, data });
+    return this.mapUser(row as any);
+  }
+
+  // 删除用户
+  async deleteUser(id: string): Promise<void> {
+    await this.prisma.user.delete({ where: { id } });
+  }
+
+  // 获取所有用户（管理员用）
+  async getAllUsers(): Promise<UserModel[]> {
+    const rows = await this.prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.mapUser(row as any));
+  }
+
+  async createInviteCode(params: { createdByUserId?: string; note?: string } = {}) {
+    const code = crypto.randomBytes(9).toString('base64url'); // 12 chars
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+
+    const row = await this.prisma.inviteCode.create({
+      data: {
+        id: crypto.randomUUID(),
+        codeHash,
+        createdAt: new Date(),
+        createdByUserId: params.createdByUserId ?? null,
+        note: params.note ?? null,
+      },
+    });
+
+    return { code, invite: this.mapInvite(row as any) };
+  }
+
+  async listInviteCodes(): Promise<InviteCodeModel[]> {
+    const rows = await this.prisma.inviteCode.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.mapInvite(row as any));
+  }
+
+  async revokeInviteCode(inviteId: string): Promise<InviteCodeModel> {
+    const invite = await this.prisma.inviteCode.findUnique({ where: { id: inviteId } });
+    if (!invite) throw new Error('邀请码不存在');
+    if ((invite as any).usedAt || (invite as any).usedByUserId) {
+      throw new Error('邀请码已被使用，不能撤销');
     }
 
-    // 增加积分
-    async addCredits(userId: string, amount: number): Promise<void> {
-        const user = await this.getUserById(userId);
-        if (!user) {
-            throw new Error('用户不存在');
-        }
+    const row = await this.prisma.inviteCode.update({
+      where: { id: inviteId },
+      data: {
+        revokedAt: (invite as any).revokedAt ? (invite as any).revokedAt : new Date(),
+      },
+    });
 
-        user.credits += amount;
-        await this.saveDb();
-    }
+    return this.mapInvite(row as any);
+  }
 
-    // 扣除积分
-    async deductCredits(userId: string, amount: number): Promise<boolean> {
-        const user = await this.getUserById(userId);
-        if (!user) {
-            throw new Error('用户不存在');
-        }
+  // 增加积分
+  async addCredits(userId: string, amount: number): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { credits: { increment: amount } },
+    });
+  }
 
-        if (user.credits < amount) {
-            return false;  // 积分不足
-        }
+  // 扣除积分
+  async deductCredits(userId: string, amount: number): Promise<boolean> {
+    const updated = await this.prisma.user.updateMany({
+      where: { id: userId, credits: { gte: amount } },
+      data: { credits: { decrement: amount } },
+    });
+    return updated.count === 1;
+  }
 
-        user.credits -= amount;
-        await this.saveDb();
-        return true;
-    }
-
-    // 增加任务计数
-    async incrementTaskCount(userId: string): Promise<void> {
-        const user = await this.getUserById(userId);
-        if (!user) return;
-
-        user.totalTasks++;
-        await this.saveDb();
-    }
+  // 增加任务计数
+  async incrementTaskCount(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { totalTasks: { increment: 1 } },
+    });
+  }
 }
+

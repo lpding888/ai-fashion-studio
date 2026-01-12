@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+  moduleFormat = "cjs"
+  generatedFileExtension = "ts"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma v7：不再在 schema.prisma 中配置 url，改由 prisma.config.ts 统一管理
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+  PENDING
+}
+
+enum CreditTransactionType {
+  EARN
+  SPEND
+}
+
+model User {
+  id           String     @id @db.Uuid
+  username     String     @unique
+  passwordHash String     @map("password_hash")
+  nickname     String?
+  email        String?
+  status       UserStatus
+  role         UserRole
+  credits      Int
+  totalTasks   Int        @map("total_tasks")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdBy    String?    @map("created_by") @db.Uuid
+  notes        String?
+
+  tasks                Task[]
+  creditTransactions   CreditTransaction[]
+  inviteCodesCreated   InviteCode[] @relation("InviteCreatedBy")
+  inviteCodesUsed      InviteCode[] @relation("InviteUsedBy")
+
+  @@map("users")
+}
+
+model InviteCode {
+  id              String    @id @db.Uuid
+  codeHash         String    @unique @map("code_hash")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  createdByUserId  String?   @map("created_by_user_id") @db.Uuid
+  usedAt           DateTime? @map("used_at")
+  usedByUserId     String?   @map("used_by_user_id") @db.Uuid
+  revokedAt        DateTime? @map("revoked_at")
+  note             String?
+
+  createdByUser User? @relation("InviteCreatedBy", fields: [createdByUserId], references: [id])
+  usedByUser    User? @relation("InviteUsedBy", fields: [usedByUserId], references: [id])
+
+  @@map("invite_codes")
+}
+
+model Task {
+  id           String    @id @db.Uuid
+  userId       String?   @map("user_id") @db.Uuid
+  status       String
+  creditsSpent Int?      @map("credits_spent")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  data         Json
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@index([userId])
+  @@index([status])
+  @@map("tasks")
+}
+
+model FacePreset {
+  id        String   @id @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  data      Json
+
+  @@index([createdAt(sort: Desc)])
+  @@map("face_presets")
+}
+
+model StylePreset {
+  id        String   @id @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  data      Json
+
+  @@index([createdAt(sort: Desc)])
+  @@map("style_presets")
+}
+
+model CreditTransaction {
+  id            String               @id @db.Uuid
+  userId        String               @map("user_id") @db.Uuid
+  type          CreditTransactionType
+  amount        Int
+  balance       Int
+  reason        String
+  relatedTaskId String?              @map("related_task_id") @db.Uuid
+  adminId       String?              @map("admin_id") @db.Uuid
+  createdAt     DateTime             @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@index([userId])
+  @@map("credit_transactions")
+}
+
+// 兼容遗留：/admin/users 这套“面板用户”与 Auth 用户模型不同，不参与登录鉴权
+model PanelUser {
+  id          String    @id @db.Uuid
+  username    String
+  email       String
+  role        String
+  avatar      String?
+  credits     Int
+  totalTasks  Int       @map("total_tasks")
+  status      String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  lastLoginAt DateTime? @map("last_login_at")
+  createdBy   String?   @map("created_by") @db.Uuid
+  notes       String?
+
+  @@unique([email])
+  @@index([createdAt(sort: Desc)])
+  @@map("panel_users")
+}

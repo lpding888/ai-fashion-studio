@@ -1,4 +1,6 @@
-FROM node:24-bookworm-slim AS builder
+ARG NODE_IMAGE=node:24-bookworm-slim
+
+FROM ${NODE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -16,7 +18,7 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 RUN pnpm run build
 
-FROM node:24-bookworm-slim AS runner
+FROM ${NODE_IMAGE} AS runner
 
 WORKDIR /app
 
