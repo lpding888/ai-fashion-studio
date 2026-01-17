@@ -109,21 +109,21 @@ export default function Home() {
                 </SlideUp>
             </div>
 
-            {/* 5. Inspiration Stream */}
-            <div className="w-full relative z-10 mb-24">
-                <div className="text-center mb-8">
-                    <h3 className="text-white/40 text-sm font-medium tracking-widest uppercase">Latest Creations</h3>
-                </div>
-                <InspirationGallery />
-            </div>
-
-            {/* 6. History Section */}
+            {/* 5. History Section */}
             <div className="w-full max-w-7xl px-6 relative z-10 mb-20">
                 <div className="flex items-center gap-4 mb-8">
                     <h2 className="text-2xl font-bold text-white">Recent Projects</h2>
                     <div className="h-px bg-white/10 flex-1" />
                 </div>
                 <TaskHistory />
+            </div>
+
+            {/* 6. Inspiration Stream */}
+            <div className="w-full relative z-10 mb-24">
+                <div className="text-center mb-8">
+                    <h3 className="text-white/40 text-sm font-medium tracking-widest uppercase">Latest Creations</h3>
+                </div>
+                <InspirationGallery />
             </div>
 
             {/* Footer */}

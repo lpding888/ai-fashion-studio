@@ -12,9 +12,19 @@ import api, { BACKEND_ORIGIN } from '@/lib/api';
 
 interface TaskHistoryItem {
     id: string;
-    status: 'PENDING' | 'PLANNING' | 'AWAITING_APPROVAL' | 'RENDERING' | 'COMPLETED' | 'FAILED';
+    status: string;
     createdAt: number;
     requirements?: string;
+    heroImageUrl?: string;
+    gridImageUrl?: string;
+    heroShots?: Array<{
+        index: number;
+        status?: string;
+        imageUrl?: string;
+        selectedAttemptCreatedAt?: number;
+        attempts?: Array<{ createdAt: number; outputImageUrl?: string }>;
+    }>;
+    resultImages?: string[];
     brainPlan?: {
         shots?: Array<{
             imagePath?: string;
@@ -86,8 +96,33 @@ export function TaskHistory() {
             case 'RENDERING': return { color: 'bg-purple-100 text-purple-700', icon: Sparkles, label: '渲染中' };
             case 'PLANNING': return { color: 'bg-blue-100 text-blue-700', icon: Brain, label: '策划中' };
             case 'AWAITING_APPROVAL': return { color: 'bg-amber-100 text-amber-700', icon: Clock, label: '待确认' };
+            case 'HERO_RENDERING': return { color: 'bg-purple-100 text-purple-700', icon: Sparkles, label: '母版生成中' };
+            case 'AWAITING_HERO_APPROVAL': return { color: 'bg-amber-100 text-amber-700', icon: Clock, label: '待确认Hero' };
+            case 'STORYBOARD_PLANNING': return { color: 'bg-blue-100 text-blue-700', icon: Brain, label: '分镜规划中' };
+            case 'STORYBOARD_READY': return { color: 'bg-green-100 text-green-700', icon: CheckCircle2, label: '分镜已就绪' };
+            case 'SHOTS_RENDERING': return { color: 'bg-purple-100 text-purple-700', icon: Sparkles, label: '镜头生成中' };
             default: return { color: 'bg-slate-100 text-slate-700', icon: Clock, label: status };
         }
+    };
+
+    const pickHeroShotPreview = (shots: TaskHistoryItem['heroShots']) => {
+        const first = (shots || []).sort((a, b) => (a?.index || 0) - (b?.index || 0))[0];
+        if (!first) return undefined;
+
+        if (first.selectedAttemptCreatedAt) {
+            const selected = (first.attempts || []).find((a) => a.createdAt === first.selectedAttemptCreatedAt && !!a.outputImageUrl);
+            if (selected?.outputImageUrl) return selected.outputImageUrl;
+        }
+
+        if (first.imageUrl) return first.imageUrl;
+        const latest = (first.attempts || []).filter((a) => !!a.outputImageUrl).sort((a, b) => b.createdAt - a.createdAt)[0];
+        return latest?.outputImageUrl;
+    };
+
+    const toImgSrc = (pathOrUrl: string) => {
+        if (!pathOrUrl) return '';
+        if (pathOrUrl.startsWith('http')) return pathOrUrl;
+        return `${BACKEND_ORIGIN}/${String(pathOrUrl).replace(/^\/+/, '')}`;
     };
 
     if (loading) {
@@ -118,13 +153,14 @@ export function TaskHistory() {
                     const StatusIcon = statusConfig.icon;
 
                     // Find a thumbnail if available
-                    // Priority: First successfully rendered shot image
-                    let thumbnail = null;
-                    if (task.shots && task.shots.length > 0) {
-                        const firstImg = task.shots.find(s => s.imagePath);
-                        if (firstImg) thumbnail = firstImg.imagePath;
-                    }
-                    // Fallback to brain plan shots if any (rarely contain images unless processed)
+                    // Priority: Hero > Grid > HeroShot > resultImages > legacy shots
+                    const thumbnail =
+                        task.heroImageUrl ||
+                        task.gridImageUrl ||
+                        pickHeroShotPreview(task.heroShots) ||
+                        task.resultImages?.[0] ||
+                        task.shots?.find((s) => s.imagePath)?.imagePath ||
+                        null;
 
                     return (
                         <motion.div
@@ -138,9 +174,11 @@ export function TaskHistory() {
                                     <div className="aspect-[3/2] bg-slate-100 relative overflow-hidden">
                                         {thumbnail ? (
                                             <img
-                                                src={`${BACKEND_ORIGIN}/${thumbnail}`}
+                                                src={toImgSrc(thumbnail)}
                                                 alt="Task Thumbnail"
                                                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                                loading="lazy"
+                                                decoding="async"
                                             />
                                         ) : (
                                             <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 bg-slate-50">

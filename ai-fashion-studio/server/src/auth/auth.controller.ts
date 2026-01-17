@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Put, Delete, Param, Body, Headers, UnauthorizedException, BadRequestException, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Put, Delete, Param, Body, Headers, UnauthorizedException, BadRequestException, Logger, Query } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UserDbService } from '../db/user-db.service';
 import { InviteCodeModel, UserModel } from '../db/models';
@@ -6,6 +6,8 @@ import * as bcrypt from 'bcrypt';
 import { z } from 'zod';
 import { Public } from './decorators/public.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { CreditService } from '../credit/credit.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 const RegisterBodySchema = z.object({
     username: z.string().trim().min(1, '用户名不能为空'),
@@ -24,13 +26,23 @@ const CreateInviteBodySchema = z.object({
     note: z.string().trim().optional(),
 });
 
+const AdminUsersSummaryQuerySchema = z.object({
+    page: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+    q: z.string().trim().max(100).optional(),
+    role: z.enum(['USER', 'ADMIN']).optional(),
+    status: z.enum(['ACTIVE', 'DISABLED', 'PENDING']).optional(),
+}).strict();
+
 @Controller('auth')
 export class AuthController {
     private logger = new Logger(AuthController.name);
 
     constructor(
         private authService: AuthService,
-        private userDb: UserDbService
+        private userDb: UserDbService,
+        private readonly creditService: CreditService,
+        private readonly prisma: PrismaService,
     ) { }
 
     // 注册（邀请码，一次性）
@@ -299,6 +311,88 @@ export class AuthController {
         };
     }
 
+    /**
+     * 管理员：用户列表（带聚合指标）
+     * - totalTasks：以 tasks 表聚合为准（成功/失败/生成中都算）
+     * - totalEarned/totalSpent：以 credit_transactions 聚合为准
+     * - balance：以 user.credits 为准
+     */
+    @Get('admin/users/summary')
+    async getAdminUsersSummary(
+        @Headers('authorization') authorization: string,
+        @Query(new ZodValidationPipe(AdminUsersSummaryQuerySchema)) query: z.infer<typeof AdminUsersSummaryQuerySchema>,
+    ) {
+        await this.verifyAdmin(authorization);
+
+        const page = query?.page ?? 1;
+        const limit = query?.limit ?? 20;
+        const q = (query?.q ?? '').trim().toLowerCase();
+
+        let users = await this.userDb.getAllUsers();
+        if (query?.role) users = users.filter((u) => u.role === query.role);
+        if (query?.status) users = users.filter((u) => u.status === query.status);
+        if (q) {
+            users = users.filter((u) => {
+                const fields = [u.username, u.nickname || '', u.email || '', u.id]
+                    .map((s) => String(s || '').toLowerCase());
+                return fields.some((s) => s.includes(q));
+            });
+        }
+
+        users.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+        const total = users.length;
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+        const start = (page - 1) * limit;
+        const slice = users.slice(start, start + limit);
+        const userIds = slice.map((u) => u.id);
+
+        // 聚合：任务数（按 tasks 表）
+        const taskCounts = userIds.length === 0
+            ? []
+            : await this.prisma.task.groupBy({
+                by: ['userId'],
+                where: { userId: { in: userIds } },
+                _count: { _all: true },
+            });
+        const taskCountByUserId = new Map<string, number>(
+            (taskCounts as any[]).map((r) => [String(r.userId), Number(r._count?._all || 0)]),
+        );
+
+        // 聚合：积分流水（按 credit_transactions 表）
+        const creditAgg = userIds.length === 0
+            ? []
+            : await this.prisma.creditTransaction.groupBy({
+                by: ['userId', 'type'],
+                where: { userId: { in: userIds } },
+                _sum: { amount: true },
+            });
+        const earnedByUserId = new Map<string, number>();
+        const spentByUserId = new Map<string, number>();
+        for (const row of creditAgg as any[]) {
+            const uid = String(row.userId);
+            const amt = Number(row._sum?.amount || 0);
+            if (row.type === 'EARN') earnedByUserId.set(uid, amt);
+            if (row.type === 'SPEND') spentByUserId.set(uid, amt);
+        }
+
+        const summarized = slice.map((u) => ({
+            ...this.authService.sanitizeUser(u),
+            totalTasks: taskCountByUserId.get(u.id) ?? 0,
+            totalEarned: earnedByUserId.get(u.id) ?? 0,
+            totalSpent: spentByUserId.get(u.id) ?? 0,
+        }));
+
+        return {
+            success: true,
+            users: summarized,
+            total,
+            page,
+            limit,
+            totalPages,
+        };
+    }
+
     // 更新用户（管理员用）
     @Put('admin/update-user/:userId')
     async updateUser(
@@ -329,8 +423,8 @@ export class AuthController {
             throw new BadRequestException('密码至少6位');
         }
 
-        if (body.credits !== undefined && (typeof body.credits !== 'number' || body.credits < 0)) {
-            throw new BadRequestException('credits 必须为非负数字');
+        if (body.credits !== undefined && (!Number.isInteger(body.credits) || body.credits < 0)) {
+            throw new BadRequestException('credits 必须为非负整数');
         }
 
         if (body.role && body.role !== 'USER' && body.role !== 'ADMIN') {
@@ -350,10 +444,26 @@ export class AuthController {
             if (body.email !== undefined) updates.email = body.email;
             if (body.role !== undefined) updates.role = body.role;
             if (body.status !== undefined) updates.status = body.status;
-            if (body.credits !== undefined) updates.credits = body.credits;
             if (body.notes !== undefined) updates.notes = body.notes;
 
-            const updated = await this.userDb.updateUser(userId, updates);
+            const hasNonCreditUpdates = Object.keys(updates).length > 0;
+            if (hasNonCreditUpdates) {
+                await this.userDb.updateUser(userId, updates);
+            }
+
+            if (body.credits !== undefined) {
+                await this.creditService.setCreditsByAdmin(
+                    userId,
+                    body.credits,
+                    `管理员更新用户资料：设置积分为 ${body.credits}`,
+                    admin.id,
+                );
+            }
+
+            const updated = await this.userDb.getUserById(userId);
+            if (!updated) {
+                throw new BadRequestException('用户不存在');
+            }
 
             this.logger.log(`✅ Admin ${admin.username} updated user: ${updated.username}`);
 

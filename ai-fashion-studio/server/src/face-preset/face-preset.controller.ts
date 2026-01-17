@@ -1,5 +1,5 @@
 
-import { Controller, Post, Get, Patch, Delete, Param, Body, UploadedFile, UseInterceptors, BadRequestException, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Param, Body, UploadedFile, UseInterceptors, BadRequestException, Logger, ForbiddenException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DbService } from '../db/db.service';
 import { CosService } from '../cos/cos.service';
@@ -9,6 +9,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { memoryStorage } from 'multer';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { UserModel } from '../db/models';
 
 const FACE_PRESETS_DIR = './uploads/face-presets';
 
@@ -25,6 +27,27 @@ export class FacePresetController {
         fs.ensureDirSync(FACE_PRESETS_DIR);
     }
 
+    private requireAdmin(user: UserModel) {
+        if (!user || user.role !== 'ADMIN') {
+            throw new ForbiddenException('需要管理员权限');
+        }
+    }
+
+    private requireOwnerOrAdmin(preset: FacePreset, user: UserModel) {
+        if (!preset) throw new BadRequestException('Preset not found');
+
+        // 兼容旧数据：未标记 userId 的预设只允许管理员访问，避免“历史数据全员可见”
+        if (!preset.userId) {
+            this.requireAdmin(user);
+            return;
+        }
+
+        if (user.role === 'ADMIN') return;
+        if (preset.userId !== user.id) {
+            throw new ForbiddenException('无权访问该模特预设');
+        }
+    }
+
     /**
      * Create new face preset
      */
@@ -34,6 +57,7 @@ export class FacePresetController {
         limits: { fileSize: 10 * 1024 * 1024 }  // 10MB limit
     }))
     async create(
+        @CurrentUser() user: UserModel,
         @UploadedFile() file: Express.Multer.File,
         @Body() body: {
             name: string;
@@ -102,6 +126,7 @@ export class FacePresetController {
 
         const preset: FacePreset = {
             id: imageId,
+            userId: user.id,
             name: name.trim(),
             imagePath,
             gender,
@@ -122,19 +147,22 @@ export class FacePresetController {
      * Get all face presets
      */
     @Get()
-    async list() {
-        return this.db.getAllFacePresets();
+    async list(@CurrentUser() user: UserModel) {
+        const presets = await this.db.getAllFacePresets();
+        if (user.role === 'ADMIN') return presets;
+        return presets.filter((p) => p.userId === user.id);
     }
 
     /**
      * Get single face preset
      */
     @Get(':id')
-    async getOne(@Param('id') id: string) {
+    async getOne(@CurrentUser() user: UserModel, @Param('id') id: string) {
         const preset = await this.db.getFacePreset(id);
         if (!preset) {
             throw new BadRequestException('Preset not found');
         }
+        this.requireOwnerOrAdmin(preset, user);
         return preset;
     }
 
@@ -143,6 +171,7 @@ export class FacePresetController {
      */
     @Patch(':id')
     async update(
+        @CurrentUser() user: UserModel,
         @Param('id') id: string,
         @Body() body: Partial<{
             name: string;
@@ -153,6 +182,10 @@ export class FacePresetController {
             description: string;
         }>
     ) {
+        const existing = await this.db.getFacePreset(id);
+        if (!existing) throw new BadRequestException('Preset not found');
+        this.requireOwnerOrAdmin(existing, user);
+
         const updates: Partial<FacePreset> = {};
 
         // 辅助函数：安全转换数字
@@ -180,9 +213,7 @@ export class FacePresetController {
         this.logger.log(`Updating face preset ${id}: ${JSON.stringify(updates)}`);
 
         const preset = await this.db.updateFacePreset(id, updates);
-        if (!preset) {
-            throw new BadRequestException('Preset not found');
-        }
+        if (!preset) throw new BadRequestException('Preset not found');
 
         this.logger.log(`Face preset updated: ${id}`);
         return preset;
@@ -192,11 +223,12 @@ export class FacePresetController {
      * Delete face preset
      */
     @Delete(':id')
-    async delete(@Param('id') id: string) {
+    async delete(@CurrentUser() user: UserModel, @Param('id') id: string) {
         const preset = await this.db.getFacePreset(id);
         if (!preset) {
             throw new BadRequestException('Preset not found');
         }
+        this.requireOwnerOrAdmin(preset, user);
 
         // Delete file from disk
         if (await fs.pathExists(preset.imagePath)) {
@@ -216,7 +248,8 @@ export class FacePresetController {
      * GET /face-presets/migration/status
      */
     @Get('migration/status')
-    async getMigrationStatus() {
+    async getMigrationStatus(@CurrentUser() user: UserModel) {
+        this.requireAdmin(user);
         return this.migrationService.getMigrationStatus();
     }
 
@@ -225,7 +258,8 @@ export class FacePresetController {
      * POST /face-presets/migration/execute
      */
     @Post('migration/execute')
-    async executeMigration() {
+    async executeMigration(@CurrentUser() user: UserModel) {
+        this.requireAdmin(user);
         return this.migrationService.migrateToCoS();
     }
 }

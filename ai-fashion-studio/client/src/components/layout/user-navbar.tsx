@@ -4,17 +4,26 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Sparkles, History, User, Settings, LogIn, Coins } from 'lucide-react';
+import { Sparkles, History, User, Settings, LogIn, Coins, GraduationCap, LogOut, ChevronDown } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { useCredits } from '@/hooks/use-credits';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 export function UserNavbar() {
     const pathname = usePathname();
-    const { isAuthenticated } = useAuth();
+    const { isAuthenticated, user, logout } = useAuth();
     const { balance, loading: creditsLoading } = useCredits();
 
     const navItems = [
         { href: '/', label: '创作中心', icon: Sparkles },
+        { href: '/learn', label: '学习与生成', icon: GraduationCap },
         { href: '/history', label: '历史记录', icon: History },
     ];
 
@@ -71,12 +80,37 @@ export function UserNavbar() {
                     </Link>
 
                     {isAuthenticated ? (
-                        <Link href="/profile">
-                            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full">
-                                <User className="h-5 w-5" />
-                                <span className="sr-only">个人中心</span>
-                            </Button>
-                        </Link>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" className="h-9 px-2 gap-2 rounded-full">
+                                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">
+                                        {(user?.nickname || user?.username || 'U').slice(0, 1).toUpperCase()}
+                                    </span>
+                                    <span className="text-sm font-medium max-w-[120px] truncate">
+                                        {user?.nickname || user?.username || '用户'}
+                                    </span>
+                                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                                <DropdownMenuLabel>账户</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem asChild>
+                                    <Link href="/profile" className="flex items-center gap-2">
+                                        <User className="h-4 w-4" />
+                                        个人中心
+                                    </Link>
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                    className="flex items-center gap-2 text-destructive focus:text-destructive"
+                                    onClick={() => logout()}
+                                >
+                                    <LogOut className="h-4 w-4" />
+                                    退出登录
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                     ) : (
                         <Link href="/login">
                             <Button variant="outline" size="sm" className="gap-2">

@@ -11,13 +11,15 @@ import { ModelProfileModule } from '../model-profile/model-profile.module';
 import { CosModule } from '../cos/cos.module';
 import { CreditModule } from '../credit/credit.module';
 import { WorkflowPromptModule } from '../workflow-prompt/workflow-prompt.module';
+import { DirectPromptModule } from '../direct-prompt/direct-prompt.module';
 import { HeroStoryboardController } from './hero-storyboard.controller';
 import { HeroStoryboardService } from './hero-storyboard.service';
 import { TaskAccessService } from './task-access.service';
+import { TaskBillingService } from './task-billing.service';
 
 @Module({
-  imports: [DbModule, BrainModule, PainterModule, ModelProfileModule, CosModule, CreditModule, WorkflowPromptModule],
+  imports: [DbModule, BrainModule, PainterModule, ModelProfileModule, CosModule, CreditModule, WorkflowPromptModule, DirectPromptModule],
   controllers: [TaskController, FixController, ExportController, HeroStoryboardController],
-  providers: [TaskService, FixService, HeroStoryboardService, TaskAccessService],
+  providers: [TaskService, FixService, HeroStoryboardService, TaskAccessService, TaskBillingService],
 })
 export class TaskModule { }

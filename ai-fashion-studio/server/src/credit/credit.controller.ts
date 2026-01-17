@@ -1,7 +1,20 @@
-import { Controller, Get, Post, Body, Query, Param, BadRequestException, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, BadRequestException, Logger, ForbiddenException } from '@nestjs/common';
 import { CreditService } from './credit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
+import { z } from 'zod';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
+
+const AdminOverviewQuerySchema = z.object({
+    topN: z.coerce.number().int().min(1).max(100).optional(),
+    recentN: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const AdminRechargeBodySchema = z.object({
+    userId: z.string().uuid(),
+    amount: z.coerce.number().int().positive(),
+    reason: z.string().trim().min(1).max(200).optional(),
+});
 
 @Controller('credits')
 export class CreditController {
@@ -59,18 +72,10 @@ export class CreditController {
     @Post('admin/recharge')
     async adminRecharge(
         @CurrentUser() admin: UserModel,
-        @Body() body: {
-            userId: string;
-            amount: number;
-            reason?: string;
-        }
+        @Body(new ZodValidationPipe(AdminRechargeBodySchema)) body: z.infer<typeof AdminRechargeBodySchema>
     ) {
-        if (!body.userId || !body.amount) {
-            throw new BadRequestException('缺少必要参数: userId, amount');
-        }
-
-        if (body.amount <= 0) {
-            throw new BadRequestException('充值金额必须大于0');
+        if (admin.role !== 'ADMIN') {
+            throw new ForbiddenException('需要管理员权限');
         }
 
         const reason = body.reason || '管理员手动充值';
@@ -97,10 +102,19 @@ export class CreditController {
      * GET /api/credits/admin/overview
      */
     @Get('admin/overview')
-    async getAdminOverview() {
-        // TODO: 实现用户积分概览
-        return {
-            message: '功能开发中',
-        };
+    async getAdminOverview(
+        @CurrentUser() admin: UserModel,
+        @Query(new ZodValidationPipe(AdminOverviewQuerySchema)) query: z.infer<typeof AdminOverviewQuerySchema>,
+    ) {
+        if (admin.role !== 'ADMIN') {
+            throw new ForbiddenException('需要管理员权限');
+        }
+
+        const overview = await this.creditService.getAdminOverview({
+            topN: query.topN,
+            recentN: query.recentN,
+        });
+
+        return { success: true, ...overview };
     }
 }

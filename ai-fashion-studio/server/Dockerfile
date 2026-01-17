@@ -51,6 +51,9 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/dist ./dist
 
+# Seed prompts from docs on first boot (written into /app/data by services)
+COPY docs ./docs
+
 EXPOSE 5000
 
 CMD ["node", "dist/src/main"]

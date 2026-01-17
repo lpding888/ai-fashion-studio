@@ -5,7 +5,23 @@ import api from '@/lib/api';
 import { useAuth } from './use-auth';
 
 // 每张图片消费的积分
-export const CREDITS_PER_IMAGE = 10;
+export const CREDITS_PER_IMAGE = 1;
+
+export type CreditCostParams = {
+    shotCount: number;
+    layoutMode?: 'Individual' | 'Grid' | string;
+    resolution?: '1K' | '2K' | '4K' | string;
+};
+
+const resolutionMultiplier = (resolution: CreditCostParams['resolution']) => (resolution === '4K' ? 4 : 1);
+
+// 口径对齐后端：1 张图=1；拼图=2；4K=4x
+export const calculateRequiredCredits = (params: CreditCostParams) => {
+    const shotCount = Number.isFinite(params.shotCount) ? Math.max(0, Math.floor(params.shotCount)) : 0;
+    const layoutMode = (params.layoutMode || 'Individual') as string;
+    const baseUnits = layoutMode === 'Grid' ? 2 : shotCount;
+    return baseUnits * resolutionMultiplier(params.resolution);
+};
 
 export interface UserCredits {
     userId: string;
@@ -19,6 +35,13 @@ export interface CreditCheckResult {
     required: number;
     balance: number;
 }
+
+const CREDITS_REFRESH_EVENT = 'ai-fashion:credits-refresh';
+
+export const requestCreditsRefresh = () => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new Event(CREDITS_REFRESH_EVENT));
+};
 
 export function useCredits() {
     const { user, isAuthenticated } = useAuth();
@@ -54,27 +77,18 @@ export function useCredits() {
         }
     }, [user?.id, isAuthenticated]);
 
-    // 检查积分是否足够
-    const checkCredits = useCallback(async (shotCount: number): Promise<CreditCheckResult> => {
-        if (!user?.id) {
-            return { enough: false, required: shotCount * CREDITS_PER_IMAGE, balance: 0 };
-        }
+    // 检查积分是否足够（前端预估；最终以服务端为准）
+    const checkCredits = useCallback(async (params: CreditCostParams): Promise<CreditCheckResult> => {
+        const required = calculateRequiredCredits(params);
+        return {
+            enough: (credits?.balance ?? 0) >= required,
+            required,
+            balance: credits?.balance ?? 0,
+        };
+    }, [credits?.balance]);
 
-        try {
-            const res = await api.get(`/credits/check?userId=${user.id}&shotCount=${shotCount}`);
-            return res.data;
-        } catch (err: any) {
-            console.error('检查积分失败:', err);
-            return {
-                enough: false,
-                required: shotCount * CREDITS_PER_IMAGE,
-                balance: credits?.balance || 0
-            };
-        }
-    }, [user?.id, credits?.balance]);
-
-    // 计算所需积分
-    const calculateRequired = (shotCount: number) => shotCount * CREDITS_PER_IMAGE;
+    // 计算所需积分（前端预估；最终以服务端为准）
+    const calculateRequired = (params: CreditCostParams) => calculateRequiredCredits(params);
 
     // 刷新积分
     const refresh = () => fetchCredits();
@@ -101,6 +115,16 @@ export function useCredits() {
     useEffect(() => {
         fetchCredits();
     }, [fetchCredits]);
+
+    // 监听全局刷新事件：让 Navbar/页面上的多个实例能同时更新
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!isAuthenticated) return;
+
+        const handler = () => { fetchCredits(); };
+        window.addEventListener(CREDITS_REFRESH_EVENT, handler);
+        return () => window.removeEventListener(CREDITS_REFRESH_EVENT, handler);
+    }, [fetchCredits, isAuthenticated]);
 
     return {
         credits,

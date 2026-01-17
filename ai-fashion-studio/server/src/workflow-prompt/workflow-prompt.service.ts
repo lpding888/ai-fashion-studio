@@ -56,7 +56,9 @@ export class WorkflowPromptService implements OnModuleInit {
   private async readSeedPackFromDocs(): Promise<WorkflowPromptPack | null> {
     const candidates = [
       path.join(process.cwd(), 'docs', 'workflow-prompts'),
+      path.join(process.cwd(), '..', 'docs', 'workflow-prompts'),
       path.join(__dirname, '../../docs/workflow-prompts'),
+      path.resolve(__dirname, '../../../docs/workflow-prompts'),
     ];
 
     for (const dir of candidates) {

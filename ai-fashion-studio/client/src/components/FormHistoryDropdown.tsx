@@ -17,7 +17,7 @@ import { zhCN } from 'date-fns/locale';
 
 interface FormHistoryDropdownProps {
     historyItems: FormHistoryItem[];
-    onLoad: (item: FormHistoryItem) => void;
+    onLoad: (item: FormHistoryItem) => void | Promise<void>;
     onDelete: (id: string) => void;
     onClear: () => void;
 }
@@ -54,7 +54,7 @@ export function FormHistoryDropdown({
                     >
                         <div
                             className="flex-1 space-y-1"
-                            onClick={() => onLoad(item)}
+                            onClick={() => void onLoad(item)}
                         >
                             <div className="font-medium">
                                 {item.name || item.requirements.substring(0, 30) + '...'}

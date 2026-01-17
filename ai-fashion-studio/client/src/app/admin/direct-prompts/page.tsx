@@ -1,0 +1,278 @@
+'use client';
+
+import * as React from 'react';
+import api from '@/lib/api';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Loader2, RefreshCw, Save, CheckCircle2 } from 'lucide-react';
+
+type DirectPromptPack = {
+  directSystemPrompt: string;
+};
+
+type PromptVersionMeta = {
+  versionId: string;
+  sha256: string;
+  createdAt: number;
+  createdBy: { id: string; username: string };
+  note?: string;
+};
+
+type PromptVersion = PromptVersionMeta & { pack: DirectPromptPack };
+
+type ActiveRef = {
+  versionId: string;
+  updatedAt: number;
+  updatedBy: { id: string; username: string };
+};
+
+function formatTime(ms?: number) {
+  if (!ms) return '-';
+  return new Date(ms).toLocaleString('zh-CN');
+}
+
+export default function DirectPromptsPage() {
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
+
+  const [activeRef, setActiveRef] = React.useState<ActiveRef | null>(null);
+  const [activeVersion, setActiveVersion] = React.useState<PromptVersion | null>(null);
+  const [versions, setVersions] = React.useState<PromptVersionMeta[]>([]);
+
+  const [note, setNote] = React.useState('');
+  const [directSystemPrompt, setDirectSystemPrompt] = React.useState('');
+
+  const authHeaders = React.useMemo(() => {
+    if (typeof window === 'undefined') return {};
+    const token = localStorage.getItem('token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, []);
+
+  const loadAll = async () => {
+    setLoading(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const [activeRes, versionsRes] = await Promise.all([
+        api.get('/admin/direct-prompts/active', { headers: authHeaders }),
+        api.get('/admin/direct-prompts/versions', { headers: authHeaders }),
+      ]);
+
+      const activeData = activeRes.data;
+      const versionsData = versionsRes.data;
+
+      setActiveRef(activeData.ref ?? null);
+      setActiveVersion(activeData.version ?? null);
+      setVersions(versionsData.versions ?? []);
+
+      const pack: DirectPromptPack | undefined = activeData?.version?.pack;
+      if (pack) {
+        setDirectSystemPrompt(pack.directSystemPrompt || '');
+        setNote(activeData?.version?.note || '');
+      }
+    } catch (e: any) {
+      setError(e?.response?.data?.message || e.message || '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const loadVersionToEditor = async (id: string) => {
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await api.get(`/admin/direct-prompts/versions/${id}`, { headers: authHeaders });
+      const v: PromptVersion = res.data.version;
+      setDirectSystemPrompt(v.pack.directSystemPrompt || '');
+      setNote(v.note || '');
+      setSuccessMsg(`已加载版本：${id.slice(0, 8)}`);
+    } catch (e: any) {
+      setError(e?.response?.data?.message || e.message || '加载版本失败');
+    }
+  };
+
+  const createVersion = async (publish: boolean) => {
+    setError(null);
+    setSuccessMsg(null);
+    setLoading(true);
+    try {
+      const res = await api.post(
+        '/admin/direct-prompts/versions',
+        { pack: { directSystemPrompt } as DirectPromptPack, note, publish },
+        { headers: { ...authHeaders, 'Content-Type': 'application/json' } },
+      );
+      const created: PromptVersionMeta = res.data.version;
+      setSuccessMsg(publish ? `已发布新版本：${created.versionId.slice(0, 8)}` : `已保存版本：${created.versionId.slice(0, 8)}`);
+      await loadAll();
+    } catch (e: any) {
+      setError(e?.response?.data?.message || e.message || '保存失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const publishVersion = async (versionId: string) => {
+    setError(null);
+    setSuccessMsg(null);
+    setLoading(true);
+    try {
+      await api.post(
+        '/admin/direct-prompts/publish',
+        { versionId },
+        { headers: { ...authHeaders, 'Content-Type': 'application/json' } },
+      );
+      setSuccessMsg(`已发布版本：${versionId.slice(0, 8)}`);
+      await loadAll();
+    } catch (e: any) {
+      setError(e?.response?.data?.message || e.message || '发布失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">直出图系统提示词</h2>
+          <p className="text-muted-foreground">管理 /learn 直出图（Painter）system prompt 的版本与发布</p>
+        </div>
+        <Button variant="outline" onClick={loadAll} disabled={loading} className="gap-2">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          刷新
+        </Button>
+      </div>
+
+      {error && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="p-4 text-red-700">{error}</CardContent>
+        </Card>
+      )}
+      {successMsg && (
+        <Card className="border-green-200 bg-green-50">
+          <CardContent className="p-4 text-green-700 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" />
+            {successMsg}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>当前生效版本</CardTitle>
+          <CardDescription>用于 /learn 直出图生成</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <Badge variant="outline">active: {activeRef?.versionId ? activeRef.versionId.slice(0, 8) : '-'}</Badge>
+            <span className="text-muted-foreground">更新时间：{formatTime(activeRef?.updatedAt)}</span>
+            <span className="text-muted-foreground">更新人：{activeRef?.updatedBy?.username || '-'}</span>
+          </div>
+          {activeVersion && (
+            <div className="text-xs text-muted-foreground">
+              sha256: <span className="font-mono">{activeVersion.sha256}</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>编辑器</CardTitle>
+          <CardDescription>修改后可保存为新版本，并可选择发布</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label>版本备注（可选）</Label>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：强化衣服保真 + 更严格的 JSON 解释" />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Direct System Prompt（Painter）</Label>
+            <Textarea
+              value={directSystemPrompt}
+              onChange={(e) => setDirectSystemPrompt(e.target.value)}
+              className="min-h-[320px] font-mono text-xs"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={() => createVersion(false)} disabled={loading} variant="outline" className="gap-2">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              保存版本
+            </Button>
+            <Button onClick={() => createVersion(true)} disabled={loading} className="gap-2">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              保存并发布
+            </Button>
+            {activeRef?.versionId && (
+              <Button onClick={() => publishVersion(activeRef.versionId)} disabled={loading} variant="secondary">
+                重新发布当前 active
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>版本列表</CardTitle>
+          <CardDescription>点击加载到编辑器，或发布某个版本</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>版本</TableHead>
+                <TableHead>创建时间</TableHead>
+                <TableHead>创建人</TableHead>
+                <TableHead>备注</TableHead>
+                <TableHead className="text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {versions.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-muted-foreground text-center">
+                    暂无版本（首次启动会从 docs/direct-prompts 自动 seed）
+                  </TableCell>
+                </TableRow>
+              )}
+              {versions.map((v) => (
+                <TableRow key={v.versionId}>
+                  <TableCell className="font-mono text-xs">
+                    {v.versionId.slice(0, 8)}
+                    {activeRef?.versionId === v.versionId ? <Badge className="ml-2">active</Badge> : null}
+                  </TableCell>
+                  <TableCell>{formatTime(v.createdAt)}</TableCell>
+                  <TableCell>{v.createdBy?.username || '-'}</TableCell>
+                  <TableCell className="max-w-[380px] truncate">{v.note || '-'}</TableCell>
+                  <TableCell className="text-right space-x-2">
+                    <Button variant="outline" size="sm" onClick={() => loadVersionToEditor(v.versionId)}>
+                      加载
+                    </Button>
+                    <Button size="sm" onClick={() => publishVersion(v.versionId)} disabled={loading}>
+                      发布
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+

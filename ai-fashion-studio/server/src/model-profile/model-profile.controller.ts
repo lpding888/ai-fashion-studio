@@ -110,14 +110,25 @@ export class ModelProfileController {
   @Post('set-active')
   async setActive(
     @Headers('authorization') authorization: string,
-    @Body() body: { brainProfileId?: string; painterProfileId?: string },
+    @Body()
+    body: {
+      brainProfileId?: string;
+      painterProfileId?: string;
+      brainProfileIds?: string[];
+      painterProfileIds?: string[];
+    },
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
-      if (body.brainProfileId) {
+      if (Array.isArray(body.brainProfileIds) && body.brainProfileIds.length > 0) {
+        await this.profiles.setActivePool('BRAIN', body.brainProfileIds, admin);
+      } else if (body.brainProfileId) {
         await this.profiles.setActive('BRAIN', body.brainProfileId, admin);
       }
-      if (body.painterProfileId) {
+
+      if (Array.isArray(body.painterProfileIds) && body.painterProfileIds.length > 0) {
+        await this.profiles.setActivePool('PAINTER', body.painterProfileIds, admin);
+      } else if (body.painterProfileId) {
         await this.profiles.setActive('PAINTER', body.painterProfileId, admin);
       }
       return { success: true };

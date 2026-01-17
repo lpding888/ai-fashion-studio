@@ -16,6 +16,14 @@ const envSchema = z.object({
 
   BOOTSTRAP_ADMIN_USERNAME: z.string().optional(),
   BOOTSTRAP_ADMIN_PASSWORD: z.string().optional(),
+
+  // 腾讯云 COS（可选：本地或生产按需配置）
+  TENCENT_SECRET_ID: z.string().optional(),
+  TENCENT_SECRET_KEY: z.string().optional(),
+  COS_BUCKET: z.string().optional(),
+  COS_REGION: z.string().optional(),
+  COS_CDN_DOMAIN: z.string().optional(),
+  COS_UPLOAD_ACL: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

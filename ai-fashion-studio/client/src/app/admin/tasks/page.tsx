@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,33 +22,62 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
-import { Search, Eye, Trash2, Download } from 'lucide-react';
+import { Search, Eye, Trash2 } from 'lucide-react';
 import api from '@/lib/api';
 
 interface Task {
     id: string;
+    userId?: string;
     requirements: string;
     status: string;
     shotCount: number;
+    creditsSpent?: number;
     createdAt: number;
     resultImages?: string[];
 }
 
 export default function AdminTasksPage() {
+    const searchParams = useSearchParams();
     const [tasks, setTasks] = useState<Task[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
+    const [userIdFilter, setUserIdFilter] = useState('');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [loading, setLoading] = useState(true);
+    const [page, setPage] = useState(1);
+    const limit = 50;
+    const [total, setTotal] = useState(0);
+    const [totalPages, setTotalPages] = useState(1);
 
     useEffect(() => {
-        fetchTasks();
-    }, []);
+        // 初始化：支持从用户页带 userId
+        const uid = (searchParams?.get('userId') || '').trim();
+        if (uid) setUserIdFilter(uid);
+    }, [searchParams]);
+
+    useEffect(() => {
+        const t = setTimeout(() => {
+            void fetchTasks();
+        }, 200);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page, searchQuery, userIdFilter, statusFilter]);
 
     const fetchTasks = async () => {
         try {
             setLoading(true);
-            const res = await api.get('/tasks');
+            const params: any = {
+                scope: 'all',
+                page,
+                limit,
+            };
+            if (searchQuery.trim()) params.q = searchQuery.trim();
+            if (userIdFilter.trim()) params.userId = userIdFilter.trim();
+            if (statusFilter !== 'all') params.status = statusFilter;
+
+            const res = await api.get('/tasks', { params });
             setTasks(res.data?.tasks || []);
+            setTotal(Number(res.data?.total || 0));
+            setTotalPages(Math.max(1, Number(res.data?.totalPages || 1)));
         } catch (err) {
             console.error('Failed to fetch tasks:', err);
         } finally {
@@ -55,12 +85,8 @@ export default function AdminTasksPage() {
         }
     };
 
-    const filteredTasks = tasks.filter(t => {
-        const matchesSearch = t.requirements.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            t.id.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
-        return matchesSearch && matchesStatus;
-    });
+    // 说明：过滤已下沉到后端（避免分页只拿到一小段导致“看起来不全”）
+    const filteredTasks = useMemo(() => tasks, [tasks]);
 
         const getStatusBadge = (status: string) => {
         const variants: Record<string, { variant: any; label: string }> = {
@@ -90,7 +116,7 @@ export default function AdminTasksPage() {
             <Card>
                 <CardHeader>
                     <CardTitle>任务列表</CardTitle>
-                    <CardDescription>当前共 {tasks.length} 个任务</CardDescription>
+                    <CardDescription>当前共 {total} 个任务</CardDescription>
                 </CardHeader>
                 <CardContent>
                     <div className="mb-4 flex gap-4">
@@ -103,6 +129,12 @@ export default function AdminTasksPage() {
                                 className="pl-9"
                             />
                         </div>
+                        <Input
+                            placeholder="按 userId 精确筛选（可选）"
+                            value={userIdFilter}
+                            onChange={(e) => setUserIdFilter(e.target.value)}
+                            className="max-w-sm"
+                        />
                         <Select value={statusFilter} onValueChange={setStatusFilter}>
                             <SelectTrigger className="w-[180px]">
                                 <SelectValue placeholder="状态筛选" />
@@ -125,9 +157,11 @@ export default function AdminTasksPage() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
+                                    <TableHead>用户ID</TableHead>
                                     <TableHead>任务ID</TableHead>
                                     <TableHead>需求描述</TableHead>
                                     <TableHead>状态</TableHead>
+                                    <TableHead>扣费</TableHead>
                                     <TableHead>镜头数</TableHead>
                                     <TableHead>创建时间</TableHead>
                                     <TableHead className="text-right">操作</TableHead>
@@ -136,6 +170,9 @@ export default function AdminTasksPage() {
                             <TableBody>
                                 {filteredTasks.map((task) => (
                                     <TableRow key={task.id}>
+                                        <TableCell className="font-mono text-xs text-muted-foreground">
+                                            {task.userId ? task.userId.substring(0, 8) : '-'}
+                                        </TableCell>
                                         <TableCell className="font-mono text-xs">
                                             {task.id.substring(0, 8)}...
                                         </TableCell>
@@ -143,6 +180,9 @@ export default function AdminTasksPage() {
                                             {task.requirements}
                                         </TableCell>
                                         <TableCell>{getStatusBadge(task.status)}</TableCell>
+                                        <TableCell className="text-muted-foreground">
+                                            {typeof task.creditsSpent === 'number' ? task.creditsSpent : '-'}
+                                        </TableCell>
                                         <TableCell>{task.shotCount}</TableCell>
                                         <TableCell className="text-muted-foreground">
                                             {new Date(task.createdAt).toLocaleString('zh-CN')}
@@ -164,6 +204,20 @@ export default function AdminTasksPage() {
                             </TableBody>
                         </Table>
                     )}
+
+                    <div className="mt-4 flex items-center justify-between">
+                        <div className="text-sm text-muted-foreground">
+                            第 {page}/{totalPages} 页
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+                                上一页
+                            </Button>
+                            <Button variant="outline" size="sm" disabled={page >= totalPages || loading} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+                                下一页
+                            </Button>
+                        </div>
+                    </div>
                 </CardContent>
             </Card>
         </div>

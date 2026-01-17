@@ -2,9 +2,21 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
+import { json, urlencoded } from 'express';
+import { AdminLogService } from './admin-log/admin-log.service';
+import { StreamLogger } from './admin-log/stream-logger';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // 允许 JSON 里携带 base64 图片（用于局部编辑 mask / 参考图）。
+  // 默认 25mb，可用 env 覆盖：JSON_BODY_LIMIT=50mb
+  const jsonBodyLimit = (process.env.JSON_BODY_LIMIT || '25mb').trim();
+  app.use(json({ limit: jsonBodyLimit }));
+  app.use(urlencoded({ extended: true, limit: jsonBodyLimit }));
+
+  // 用于管理员后台实时查看后端日志（内存环形缓冲）
+  app.useLogger(new StreamLogger(app.get(AdminLogService)));
 
   // 反代部署（Caddy/Nginx）下获取真实客户端 IP
   app.set('trust proxy', 1);

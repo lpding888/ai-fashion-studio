@@ -4,12 +4,14 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { UserDbService } from '../db/user-db.service';
 import { JwtGuard } from './guards/jwt.guard';
+import { CreditService } from '../credit/credit.service';
 
 @Module({
     controllers: [AuthController],
     providers: [
         AuthService,
         UserDbService,
+        CreditService,
         {
             provide: APP_GUARD,
             useClass: JwtGuard,

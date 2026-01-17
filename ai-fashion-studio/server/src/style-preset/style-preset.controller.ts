@@ -10,6 +10,7 @@ import {
   UploadedFiles,
   BadRequestException,
   Logger,
+  ForbiddenException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { DbService } from '../db/db.service';
@@ -23,9 +24,24 @@ import { BrainService } from '../brain/brain.service';
 import { ModelConfigResolverService } from '../model-profile/model-config-resolver.service';
 import { StylePresetMigrationService } from './style-preset-migration.service';
 import { CosService } from '../cos/cos.service';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { UserModel } from '../db/models';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { z } from 'zod';
 
 const STYLE_PRESETS_DIR = './uploads/style-presets';
 const MAX_FILES = 3; // 单个预设最多 3 张图
+
+const UpdateStylePresetBodySchema = z
+  .object({
+    name: z.string().trim().min(1).optional(),
+    description: z.string().trim().optional(),
+    tags: z.string().trim().optional(), // JSON 字符串
+    styleHint: z.string().trim().optional(),
+  })
+  .strict();
+
+const RelearnBodySchema = z.object({}).strict();
 
 @Controller('style-presets')
 export class StylePresetController {
@@ -40,6 +56,23 @@ export class StylePresetController {
   ) {
     // 确保上传目录存在
     fs.ensureDirSync(STYLE_PRESETS_DIR);
+  }
+
+  private requireOwnerOrAdmin(preset: StylePreset, user: UserModel) {
+    if (!preset) throw new BadRequestException('Preset not found');
+
+    // 兼容旧数据：未标记 userId 的预设只允许管理员访问，避免“历史数据全员可见”
+    if (!(preset as any).userId) {
+      if (!user || user.role !== 'ADMIN') {
+        throw new ForbiddenException('需要管理员权限');
+      }
+      return;
+    }
+
+    if (user.role === 'ADMIN') return;
+    if ((preset as any).userId !== user.id) {
+      throw new ForbiddenException('无权访问该风格预设');
+    }
   }
 
   /**
@@ -69,6 +102,7 @@ export class StylePresetController {
     }),
   )
   async create(
+    @CurrentUser() user: UserModel,
     @UploadedFiles() files: Express.Multer.File[],
     @Body('name') name: string,
     @Body('description') description?: string,
@@ -164,12 +198,15 @@ export class StylePresetController {
 
     const preset: StylePreset = {
       id: presetId,
+      userId: user?.id,
+      kind: 'STYLE',
       name: name.trim(),
       description: description?.trim(),
       imagePaths,
       thumbnailPath: imagePaths[0], // 封面使用第一张
       tags,
       styleHint: styleHint?.trim(),
+      promptBlock: styleHint?.trim() || undefined,
       analysis, // Add analysis to the DB object
       createdAt: Date.now(),
     };
@@ -186,19 +223,28 @@ export class StylePresetController {
    * 获取所有风格预设
    */
   @Get()
-  async list() {
-    return this.db.getAllStylePresets();
+  async list(@CurrentUser() user: UserModel) {
+    const presets = await this.db.getAllStylePresets();
+    const styles = presets.filter((p: any) => (p as any)?.kind !== 'POSE');
+    if (user.role === 'ADMIN') return styles;
+    // 兼容旧数据：不带 userId 的默认不返回给普通用户
+    return styles.filter((p: any) => (p as any)?.userId === user.id);
   }
 
   /**
    * 获取单个风格预设
    */
   @Get(':id')
-  async getOne(@Param('id') id: string) {
+  async getOne(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getStylePreset(id);
     if (!preset) {
       throw new BadRequestException('Preset not found');
     }
+    // 只允许访问 STYLE（历史数据未标注 kind 的默认按 STYLE 处理）
+    if ((preset as any).kind === 'POSE') {
+      throw new BadRequestException('Preset not found');
+    }
+    this.requireOwnerOrAdmin(preset, user);
     return preset;
   }
 
@@ -207,13 +253,23 @@ export class StylePresetController {
    */
   @Patch(':id')
   async update(
+    @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body('name') name?: string,
-    @Body('description') description?: string,
-    @Body('tags') tagsStr?: string,
-    @Body('styleHint') styleHint?: string,
+    @Body(new ZodValidationPipe(UpdateStylePresetBodySchema))
+    body: z.infer<typeof UpdateStylePresetBodySchema>,
   ) {
+    const existing = await this.db.getStylePreset(id);
+    if (!existing || (existing as any).kind === 'POSE') {
+      throw new BadRequestException('Preset not found');
+    }
+    this.requireOwnerOrAdmin(existing, user);
+
     const updates: Partial<StylePreset> = {};
+
+    const name = body?.name;
+    const description = body?.description;
+    const tagsStr = body?.tags;
+    const styleHint = body?.styleHint;
 
     if (name !== undefined) {
       if (name.trim() === '') {
@@ -235,6 +291,7 @@ export class StylePresetController {
     }
     if (styleHint !== undefined) {
       updates.styleHint = styleHint.trim();
+      updates.promptBlock = updates.styleHint || undefined;
     }
 
     const preset = await this.db.updateStylePreset(id, updates);
@@ -250,15 +307,22 @@ export class StylePresetController {
    * 删除风格预设
    */
   @Delete(':id')
-  async delete(@Param('id') id: string) {
+  async delete(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getStylePreset(id);
     if (!preset) {
       throw new BadRequestException('Preset not found');
     }
+    if ((preset as any).kind === 'POSE') {
+      throw new BadRequestException('Preset not found');
+    }
+    this.requireOwnerOrAdmin(preset, user);
 
     // 删除所有关联的图片文件
     for (const imgPath of preset.imagePaths) {
       try {
+        if (String(imgPath || '').startsWith('http://') || String(imgPath || '').startsWith('https://')) {
+          continue;
+        }
         if (await fs.pathExists(imgPath)) {
           await fs.remove(imgPath);
           this.logger.log(`✅ Deleted file: ${imgPath}`);
@@ -309,7 +373,10 @@ export class StylePresetController {
       },
     }),
   )
-  async learnStyle(@UploadedFiles() files: Express.Multer.File[]) {
+  async learnStyle(
+    @CurrentUser() user: UserModel,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
     if (!files || files.length === 0) {
       throw new BadRequestException('At least one image is required');
     }
@@ -357,22 +424,51 @@ export class StylePresetController {
       const analysis = await this.brainService.analyzeStyleImage(
         filePaths,
         config,
+        { traceId: presetId },
       );
 
       // 2. Construct Style Hint
-      const styleHint = `Lighting: ${analysis.lighting}, Scene: ${analysis.scene}, Vibe: ${analysis.vibe}, Grading: ${analysis.grading}, Camera: ${analysis.camera}`;
+      const pickSummary = (v: any) => {
+        if (!v) return '';
+        if (typeof v === 'string') return v.trim();
+        if (typeof v === 'object') {
+          const s = String((v as any).summary || '').trim();
+          if (s) return s;
+          // best-effort: surface a few important fields for quick scanning
+          const key = (v as any).key_light ? JSON.stringify((v as any).key_light) : '';
+          return key ? `key_light=${key}` : '';
+        }
+        return '';
+      };
+      const lightingHint = pickSummary(analysis?.lighting);
+      const sceneHint = pickSummary(analysis?.scene);
+      const gradingHint = pickSummary(analysis?.color_grading ?? analysis?.grading);
+      const cameraHint = pickSummary(analysis?.camera);
+      const styleHint = [
+        lightingHint ? `Lighting: ${lightingHint}` : '',
+        sceneHint ? `Scene: ${sceneHint}` : '',
+        gradingHint ? `Grading: ${gradingHint}` : '',
+        cameraHint ? `Camera: ${cameraHint}` : '',
+      ]
+        .filter(Boolean)
+        .join(', ');
+      // 直出图阶段只发送文本，不发送风格参考图：用 JSON 作为可复用提示词块（英文 value 更稳定）
+      const promptBlock = JSON.stringify(analysis, null, 2);
 
       // 3. Auto-Save to Database
       const preset: StylePreset = {
-        id: crypto.randomUUID(),
+        id: presetId,
+        userId: user?.id,
+        kind: 'STYLE',
         name:
           analysis.name ||
           `Auto-Learned Style ${new Date().toLocaleDateString()}`,
-        description: analysis.description || analysis.vibe,
+        description: analysis.description || undefined,
         imagePaths: filePaths, // Keep the uploaded files
         thumbnailPath: filePaths[0],
         tags: ['AI Learned'],
         styleHint: styleHint,
+        promptBlock,
         analysis: analysis,
         createdAt: Date.now(),
       };
@@ -383,14 +479,90 @@ export class StylePresetController {
       return { success: true, preset };
     } catch (error) {
       // Cleanup on failure
-      for (const path of filePaths) {
-        await fs.remove(path).catch(() => { });
+      for (const p of filePaths) {
+        const v = String(p || '').trim();
+        if (!v) continue;
+        if (v.startsWith('http://') || v.startsWith('https://')) continue;
+        await fs.remove(v).catch(() => { });
       }
       this.logger.error('Style Learning failed', error);
       throw new BadRequestException(
         'Failed to learn style: ' + (error.message || error),
       );
     }
+  }
+
+  /**
+   * 风格学习重试：复用已保存的图片（imagePaths），重新调用 AI 分析并覆盖写回 preset。
+   * 说明：用于“场景学习不够强/想换更强提示词后重跑”等场景。
+   */
+  @Post(':id/relearn')
+  async relearn(
+    @CurrentUser() user: UserModel,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(RelearnBodySchema)) _body: z.infer<typeof RelearnBodySchema>,
+  ) {
+    const existing = await this.db.getStylePreset(id);
+    if (!existing || (existing as any).kind === 'POSE') {
+      throw new BadRequestException('Preset not found');
+    }
+    this.requireOwnerOrAdmin(existing, user);
+
+    const filePaths = Array.isArray((existing as any).imagePaths) ? (existing as any).imagePaths : [];
+    if (filePaths.length === 0) {
+      throw new BadRequestException('Preset has no images to relearn');
+    }
+
+    this.logger.log(`🧠 Relearning Style preset ${id} from ${filePaths.length} images...`);
+
+    const config = await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+    const analysis = await this.brainService.analyzeStyleImage(
+      filePaths,
+      config,
+      { traceId: `${id}:relearn:${Date.now()}` },
+    );
+
+    const pickSummary = (v: any) => {
+      if (!v) return '';
+      if (typeof v === 'string') return v.trim();
+      if (typeof v === 'object') {
+        const s = String((v as any).summary || '').trim();
+        if (s) return s;
+        const key = (v as any).key_light ? JSON.stringify((v as any).key_light) : '';
+        return key ? `key_light=${key}` : '';
+      }
+      return '';
+    };
+    const lightingHint = pickSummary(analysis?.lighting);
+    const sceneHint = pickSummary(analysis?.scene);
+    const gradingHint = pickSummary(analysis?.color_grading ?? analysis?.grading);
+    const cameraHint = pickSummary(analysis?.camera);
+    const styleHint = [
+      lightingHint ? `Lighting: ${lightingHint}` : '',
+      sceneHint ? `Scene: ${sceneHint}` : '',
+      gradingHint ? `Grading: ${gradingHint}` : '',
+      cameraHint ? `Camera: ${cameraHint}` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    const promptBlock = JSON.stringify(analysis, null, 2);
+
+    const updates: Partial<StylePreset> = {
+      name: analysis?.name ? String(analysis.name).trim() : (existing as any).name,
+      description: analysis?.description ? String(analysis.description).trim() : (existing as any).description,
+      styleHint: styleHint || (existing as any).styleHint,
+      promptBlock,
+      analysis,
+      // 保护：thumbnail 仍沿用原第一张图
+      thumbnailPath: (existing as any).thumbnailPath || filePaths[0],
+    };
+
+    const next = await this.db.updateStylePreset(id, updates);
+    if (!next) throw new BadRequestException('Preset not found');
+
+    this.logger.log(`✅ Relearned & Updated style: "${(next as any).name || id}"`);
+    return { success: true, preset: next };
   }
 
   /**

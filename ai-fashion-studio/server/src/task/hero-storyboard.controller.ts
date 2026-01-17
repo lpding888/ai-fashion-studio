@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { TaskAccessService } from './task-access.service';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
 const UpdateStoryboardShotBodySchema = z
   .object({
@@ -44,6 +45,27 @@ const UpdateStoryboardShotBodySchema = z
   .strict()
   .refine((v) => Object.keys(v.patch || {}).length > 0, { message: 'patch 不能为空' });
 
+const UpdateShootLogBodySchema = z
+  .object({
+    shootLogText: z.string().max(20000).default(''),
+  })
+  .strict();
+
+const EditHeroBodySchema = z
+  .object({
+    maskImage: z.string().url('maskImage 必须是可访问的 URL').min(1, 'maskImage 不能为空'),
+    referenceImages: z.array(z.string().url()).max(12).optional(),
+    prompt: z.string().trim().min(1, 'prompt 不能为空'),
+    editMode: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const SelectHeroVariantBodySchema = z
+  .object({
+    attemptCreatedAt: z.coerce.number().int().positive('attemptCreatedAt 参数无效'),
+  })
+  .strict();
+
 @Controller('tasks')
 export class HeroStoryboardController {
   constructor(
@@ -76,6 +98,60 @@ export class HeroStoryboardController {
     } catch (e: any) {
       if (e instanceof HttpException) throw e;
       throw new BadRequestException(e.message || '重新生成Hero失败');
+    }
+  }
+
+  /**
+   * 编辑 Hero 的 Shoot Log（手账）
+   */
+  @Patch(':id/hero/shoot-log')
+  async updateHeroShootLog(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+    @Body(new ZodValidationPipe(UpdateShootLogBodySchema)) body: z.infer<typeof UpdateShootLogBodySchema>,
+  ) {
+    await this.taskAccess.requireWritableTask(taskId, user);
+    try {
+      return await this.heroStoryboard.updateHeroShootLog(taskId, body.shootLogText);
+    } catch (e: any) {
+      if (e instanceof HttpException) throw e;
+      throw new BadRequestException(e.message || '保存手账失败');
+    }
+  }
+
+  /**
+   * 局部编辑 Hero 母版（mask inpaint）
+   */
+  @Post(':id/hero/edit')
+  async editHero(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+    @Body(new ZodValidationPipe(EditHeroBodySchema)) body: z.infer<typeof EditHeroBodySchema>,
+  ) {
+    await this.taskAccess.requireWritableTask(taskId, user);
+    try {
+      return await this.heroStoryboard.editHero(taskId, body);
+    } catch (e: any) {
+      if (e instanceof HttpException) throw e;
+      throw new BadRequestException(e.message || '编辑母版失败');
+    }
+  }
+
+  /**
+   * 选择某个 Hero 历史版本作为当前母版
+   */
+  @Post(':id/hero/select')
+  async selectHeroVariant(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+    @Body(new ZodValidationPipe(SelectHeroVariantBodySchema)) body: z.infer<typeof SelectHeroVariantBodySchema>,
+  ) {
+    await this.taskAccess.requireWritableTask(taskId, user);
+    try {
+      return await this.heroStoryboard.selectHeroVariant(taskId, body.attemptCreatedAt);
+    } catch (e: any) {
+      if (e instanceof HttpException) throw e;
+      throw new BadRequestException(e.message || '选择母版版本失败');
     }
   }
 
@@ -144,6 +220,24 @@ export class HeroStoryboardController {
   }
 
   /**
+   * 编辑四镜头拼图的 Shoot Log（手账）
+   */
+  @Patch(':id/storyboard/grid/shoot-log')
+  async updateGridShootLog(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+    @Body(new ZodValidationPipe(UpdateShootLogBodySchema)) body: z.infer<typeof UpdateShootLogBodySchema>,
+  ) {
+    await this.taskAccess.requireWritableTask(taskId, user);
+    try {
+      return await this.heroStoryboard.updateGridShootLog(taskId, body.shootLogText);
+    } catch (e: any) {
+      if (e instanceof HttpException) throw e;
+      throw new BadRequestException(e.message || '保存拼图手账失败');
+    }
+  }
+
+  /**
    * 重新生成分镜规划（重新抽卡），不需要重做 Hero
    */
   @Post(':id/storyboard/replan')
@@ -186,6 +280,30 @@ export class HeroStoryboardController {
     } catch (e: any) {
       if (e instanceof HttpException) throw e;
       throw new BadRequestException(e.message || '保存镜头文字失败');
+    }
+  }
+
+  /**
+   * 编辑某个镜头的 Shoot Log（手账）（不影响图片，仅用于展示/记录）
+   */
+  @Patch(':id/storyboard/shots/:index/shoot-log')
+  async updateStoryboardShotShootLog(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+    @Param('index') index: string,
+    @Body(new ZodValidationPipe(UpdateShootLogBodySchema)) body: z.infer<typeof UpdateShootLogBodySchema>,
+  ) {
+    const parsedIndex = Number(index);
+    if (!Number.isFinite(parsedIndex) || parsedIndex <= 0) {
+      throw new BadRequestException('index 参数无效');
+    }
+
+    await this.taskAccess.requireWritableTask(taskId, user);
+    try {
+      return await this.heroStoryboard.updateShotShootLog(taskId, parsedIndex, body.shootLogText);
+    } catch (e: any) {
+      if (e instanceof HttpException) throw e;
+      throw new BadRequestException(e.message || '保存镜头手账失败');
     }
   }
 }

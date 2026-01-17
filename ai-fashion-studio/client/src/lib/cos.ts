@@ -4,6 +4,8 @@ import api from '@/lib/api';
 // 单例模式，避免重复初始化
 let cosInstance: COS | null = null;
 
+const inMemoryUrlCache = new Map<string, string>(); // sha256Hex -> url
+
 type CosCredentialsResponse = {
     credentials: {
         tmpSecretId?: string;
@@ -47,6 +49,36 @@ const fetchCosCredentials = async () => {
     return data;
 };
 
+const sha256HexFromFile = async (file: File): Promise<string> => {
+    if (typeof window === 'undefined' || !window.crypto?.subtle) {
+        throw new Error('当前环境不支持 WebCrypto，无法计算文件哈希');
+    }
+
+    const buf = await file.arrayBuffer();
+    const hashBuf = await window.crypto.subtle.digest('SHA-256', buf);
+    const hashArr = Array.from(new Uint8Array(hashBuf));
+    return hashArr.map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+
+const headObjectExists = async (cos: COS, bucket: string, region: string, key: string): Promise<boolean> => {
+    return new Promise((resolve, reject) => {
+        cos.headObject(
+            { Bucket: bucket, Region: region, Key: key },
+            (err) => {
+                if (!err) return resolve(true);
+
+                const status = (err as any)?.statusCode;
+                const code = (err as any)?.code;
+                if (status === 404 || code === 'NoSuchKey' || code === 'NotFound') {
+                    return resolve(false);
+                }
+
+                return reject(err);
+            }
+        );
+    });
+};
+
 export const getCosInstance = () => {
     if (!cosInstance) {
         cosInstance = new COS({
@@ -84,16 +116,34 @@ export const uploadFileToCos = async (file: File, onProgress?: (progress: number
     const creds = await fetchCosCredentials();
     const cos = getCosInstance();
 
-    // 生成唯一文件名
-    const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substring(2, 8);
-    // 简单处理文件扩展名
-    const ext = file.name.split('.').pop() || 'png';
+    const sha256 = await sha256HexFromFile(file);
+    const cachedUrl = inMemoryUrlCache.get(sha256);
+    if (cachedUrl) return cachedUrl;
+
+    const extByMime: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+    };
+    const extFromName = (file.name.split('.').pop() || '').toLowerCase();
+    const ext = extByMime[file.type] || extFromName || 'png';
     const folder = normalizeAllowPrefixToFolder(creds.allowPrefix);
-    const key = `${folder}/${timestamp}-${randomStr}.${ext}`;
+
+    // ✅ 去重缓存：同一用户、同一图片内容（SHA-256）复用同一个 COS Key
+    // 这样“用户重复上传同一张图”会变成一次 HEAD（小流量）+ 直接复用 URL
+    const key = `${folder}/by-hash/${sha256}.${ext}`;
 
     const BUCKET = creds.bucket;
     const REGION = creds.region;
+
+    // 先 HEAD 检查对象是否已存在（存在则不重复上传）
+    const exists = await headObjectExists(cos, BUCKET, REGION, key);
+    if (exists) {
+        const url = `https://${BUCKET}.cos.${REGION}.myqcloud.com/${key}`;
+        inMemoryUrlCache.set(sha256, url);
+        return url;
+    }
 
     return new Promise((resolve, reject) => {
         cos.uploadFile({
@@ -116,6 +166,7 @@ export const uploadFileToCos = async (file: File, onProgress?: (progress: number
                 // 返回完整的 URL
                 // 格式: https://<Bucket>.cos.<Region>.myqcloud.com/<Key>
                 const url = `https://${BUCKET}.cos.${REGION}.myqcloud.com/${key}`;
+                inMemoryUrlCache.set(sha256, url);
                 resolve(url);
             }
         });

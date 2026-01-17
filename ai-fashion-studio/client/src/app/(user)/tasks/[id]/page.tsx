@@ -3,6 +3,8 @@
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import api, { BACKEND_ORIGIN } from '@/lib/api';
+import { withTencentCi } from '@/lib/image-ci';
+import { downloadImageWithOptionalTaskWatermark } from '@/lib/watermark';
 import { Loader2, ArrowLeft, Check, Sparkles, Brain, Camera, AlertCircle, ChevronDown, ChevronUp, Clock, Palette, Layers, Image as ImageIcon, RefreshCcw, Download, Save, Edit, ZoomIn, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -14,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { ImageEditor } from '@/components/image-editor';
 import { ImageLightbox } from '@/components/image-lightbox';
 import { useToast } from '@/components/ui/use-toast';
+import { requestCreditsRefresh } from '@/hooks/use-credits';
 
 
 // --- Types ---
@@ -26,6 +29,7 @@ interface Shot {
     camera_angle?: string;
     lighting?: string;
     imagePath?: string;
+    imageUrl?: string;
     status: 'PENDING' | 'RENDERED' | 'FAILED';
 }
 
@@ -73,6 +77,14 @@ interface TaskData {
     heroImageUrl?: string;
     heroShootLog?: string;
     heroApprovedAt?: number;
+    heroSelectedAttemptCreatedAt?: number;
+    heroHistory?: Array<{
+        createdAt: number;
+        outputImageUrl?: string;
+        outputShootLog?: string;
+        promptText?: string;
+        error?: string;
+    }>;
     storyboardCards?: Array<{
         index: number;
         action: string;
@@ -143,6 +155,14 @@ function toLineArray(text: string): string[] {
         .split('\n')
         .map((v) => v.trim())
         .filter(Boolean);
+}
+
+function isProbablyBase64Blob(value: string): boolean {
+    const s = (value || '').trim();
+    if (s.length < 200) return false;
+    if (/[\s]/.test(s)) return false;
+    if (!/^[A-Za-z0-9+/=]+$/.test(s)) return false;
+    return true;
 }
 
 /**
@@ -353,16 +373,16 @@ function StatusHeader({
     const config = {
         DRAFT: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "草稿待开始" },
         PENDING: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "等待处理..." },
-        PLANNING: { color: "bg-blue-100 text-blue-700", icon: Brain, text: "AI 正在深度思考与策划..." },
-        AWAITING_APPROVAL: { color: "bg-amber-100 text-amber-700", icon: AlertCircle, text: "方案已生成，请审核" },
-        RENDERING: { color: "bg-purple-100 text-purple-700", icon: Sparkles, text: "正在渲染高定大片..." },
+        PLANNING: { color: "bg-blue-100 text-blue-700", icon: Brain, text: "镜头规划中..." },
+        AWAITING_APPROVAL: { color: "bg-amber-100 text-amber-700", icon: AlertCircle, text: "待确认镜头计划" },
+        RENDERING: { color: "bg-purple-100 text-purple-700", icon: Sparkles, text: "出图中..." },
         COMPLETED: { color: "bg-green-100 text-green-700", icon: Check, text: "创作完成" },
         FAILED: { color: "bg-red-100 text-red-700", icon: AlertCircle, text: "任务执行失败" },
-        HERO_RENDERING: { color: "bg-purple-100 text-purple-700", icon: Camera, text: "Hero 母版生成中..." },
-        AWAITING_HERO_APPROVAL: { color: "bg-amber-100 text-amber-700", icon: AlertCircle, text: "Hero 已生成，请确认" },
+        HERO_RENDERING: { color: "bg-purple-100 text-purple-700", icon: Camera, text: "母版生成中..." },
+        AWAITING_HERO_APPROVAL: { color: "bg-amber-100 text-amber-700", icon: AlertCircle, text: "待确认母版" },
         STORYBOARD_PLANNING: { color: "bg-blue-100 text-blue-700", icon: Brain, text: "分镜规划中..." },
-        STORYBOARD_READY: { color: "bg-green-100 text-green-700", icon: Check, text: "分镜动作卡已就绪" },
-        SHOTS_RENDERING: { color: "bg-purple-100 text-purple-700", icon: Sparkles, text: "镜头生成中..." },
+        STORYBOARD_READY: { color: "bg-green-100 text-green-700", icon: Check, text: "分镜已就绪" },
+        SHOTS_RENDERING: { color: "bg-purple-100 text-purple-700", icon: Sparkles, text: "镜头出图中..." },
     }[status] || { color: "bg-slate-100", icon: Clock, text: status };
 
     const Icon = config.icon;
@@ -405,6 +425,173 @@ function StatusHeader({
                         </Button>
                     </div>
                 )}
+            </div>
+        </div>
+    );
+}
+
+// 1.5 Workflow Guide Bar（统一节奏/阶段/下一步）
+type WorkflowStep = {
+    key: string;
+    title: string;
+};
+
+function getWorkflowRhythmCopy(workflow: TaskData['workflow'] | undefined): { label: string; description: string } {
+    if (workflow === 'hero_storyboard') {
+        return {
+            label: '先出母版后分镜',
+            description: '先生成母版 → 确认 → 生成分镜动作卡 → 逐镜头裂变出图',
+        };
+    }
+    return {
+        label: '先规划后出图',
+        description: '先生成镜头计划 → 确认 → 开始出图',
+    };
+}
+
+function getWorkflowSteps(workflow: TaskData['workflow'] | undefined): WorkflowStep[] {
+    if (workflow === 'hero_storyboard') {
+        return [
+            { key: 'hero', title: '母版' },
+            { key: 'approve_hero', title: '确认' },
+            { key: 'storyboard', title: '分镜' },
+            { key: 'shots', title: '镜头' },
+            { key: 'done', title: '完成' },
+        ];
+    }
+    return [
+        { key: 'plan', title: '规划' },
+        { key: 'approve', title: '确认' },
+        { key: 'render', title: '出图' },
+        { key: 'done', title: '完成' },
+    ];
+}
+
+function isHeroAllShotsRendered(task: TaskData): boolean {
+    const storyboardCount = task.storyboardCards?.length || 0;
+    if (storyboardCount <= 0) return false;
+
+    const shots = task.heroShots || [];
+    const byIndex = new Map<number, { status: 'PENDING' | 'RENDERED' | 'FAILED' }>();
+    for (const s of shots) byIndex.set(s.index, { status: s.status });
+
+    for (let i = 1; i <= storyboardCount; i += 1) {
+        if (byIndex.get(i)?.status !== 'RENDERED') return false;
+    }
+
+    return task.gridStatus !== 'PENDING';
+}
+
+function getWorkflowActiveStepIndex(task: TaskData): number {
+    const workflow = task.workflow || 'legacy';
+    if (workflow === 'hero_storyboard') {
+        if (isHeroAllShotsRendered(task)) return 4;
+        if (task.status === 'HERO_RENDERING') return 0;
+        if (task.status === 'AWAITING_HERO_APPROVAL') return 1;
+        if (task.status === 'STORYBOARD_PLANNING') return 2;
+        if (task.status === 'STORYBOARD_READY' || task.status === 'SHOTS_RENDERING') return 3;
+        return 0;
+    }
+
+    if (task.status === 'COMPLETED') return 3;
+    if (task.status === 'RENDERING') return 2;
+    if (task.status === 'AWAITING_APPROVAL') return 1;
+    return 0;
+}
+
+function pickNextHeroShotIndex(task: TaskData): number | null {
+    const storyboardCount = task.storyboardCards?.length || 0;
+    if (storyboardCount <= 0) return null;
+
+    const shots = task.heroShots || [];
+    const byIndex = new Map<number, { status: 'PENDING' | 'RENDERED' | 'FAILED' }>();
+    for (const s of shots) byIndex.set(s.index, { status: s.status });
+
+    for (let i = 1; i <= storyboardCount; i += 1) {
+        if (byIndex.get(i)?.status === 'FAILED') return i;
+    }
+
+    for (let i = 1; i <= storyboardCount; i += 1) {
+        if (byIndex.get(i)?.status !== 'RENDERED') return i;
+    }
+
+    return null;
+}
+
+function WorkflowStepper({ steps, activeIndex }: { steps: WorkflowStep[]; activeIndex: number }) {
+    return (
+        <div className="flex items-center gap-2 overflow-x-auto">
+            {steps.map((step, idx) => {
+                const isDone = idx < activeIndex;
+                const isActive = idx === activeIndex;
+                return (
+                    <div key={step.key} className="flex items-center gap-2 flex-shrink-0">
+                        <div className={`h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-bold ${isActive
+                            ? 'bg-slate-900 text-white'
+                            : isDone
+                                ? 'bg-green-600 text-white'
+                                : 'bg-slate-200 text-slate-600'
+                            }`}>
+                            {isDone ? <Check className="w-3.5 h-3.5" /> : idx + 1}
+                        </div>
+                        <div className={`text-xs font-medium ${isActive ? 'text-slate-900' : isDone ? 'text-slate-700' : 'text-slate-500'}`}>
+                            {step.title}
+                        </div>
+                        {idx < steps.length - 1 && (
+                            <div className="w-6 h-px bg-slate-200" />
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+type PrimaryAction = {
+    label: string;
+    onClick?: () => void;
+    disabled?: boolean;
+    loading?: boolean;
+};
+
+function WorkflowGuideBar(props: {
+    workflowLabel: string;
+    workflowDescription: string;
+    steps: WorkflowStep[];
+    activeStepIndex: number;
+    primaryAction: PrimaryAction;
+}) {
+    return (
+        <div className="sticky top-0 z-30 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-3 bg-slate-50/90 backdrop-blur border-b border-slate-200">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <Badge variant="secondary" className="bg-slate-200 text-slate-700 flex-shrink-0">
+                            {props.workflowLabel}
+                        </Badge>
+                        <div className="text-xs text-slate-500 truncate">
+                            {props.workflowDescription}
+                        </div>
+                    </div>
+                    <div className="mt-2">
+                        <WorkflowStepper steps={props.steps} activeIndex={props.activeStepIndex} />
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                    <Button
+                        onClick={props.primaryAction.onClick}
+                        disabled={props.primaryAction.disabled || !props.primaryAction.onClick}
+                        className="bg-slate-900 hover:bg-slate-800 text-white"
+                    >
+                        {props.primaryAction.loading ? (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                            <Sparkles className="w-4 h-4 mr-2" />
+                        )}
+                        {props.primaryAction.label}
+                    </Button>
+                </div>
             </div>
         </div>
     );
@@ -523,15 +710,19 @@ function ThinkingProcessCard({ content }: { content: string }) {
 }
 
 // 4. Approval Interface
-function ApprovalInterface({
-    taskId,
-    shots,
-    onApproved
-}: {
+type ApprovalInterfaceHandle = {
+    approve: () => Promise<void>;
+};
+
+const ApprovalInterface = React.forwardRef<ApprovalInterfaceHandle, {
     taskId: string,
     shots: Shot[],
     onApproved: () => void
-}) {
+}>(function ApprovalInterface({
+    taskId,
+    shots,
+    onApproved
+}, ref) {
     const [editedPrompts, setEditedPrompts] = React.useState<Record<string, string>>({});
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [savingId, setSavingId] = React.useState<string | null>(null);
@@ -573,6 +764,7 @@ function ApprovalInterface({
                 prompt: editedPrompts[shotId]
             });
             await api.post(`/tasks/${taskId}/retry?shotId=${shotId}`);
+            requestCreditsRefresh();
             alert(`Shot ${shotId} 已开始重新生成`);
             onApproved(); // Refresh the page
         } catch (e) {
@@ -583,7 +775,8 @@ function ApprovalInterface({
         }
     };
 
-    const handleApprove = async () => {
+    const handleApprove = React.useCallback(async () => {
+        if (isSubmitting) return;
         setIsSubmitting(true);
         try {
             await api.post(`/tasks/${taskId}/approve`, { editedPrompts });
@@ -594,7 +787,11 @@ function ApprovalInterface({
         } finally {
             setIsSubmitting(false);
         }
-    };
+    }, [editedPrompts, isSubmitting, onApproved, taskId]);
+
+    React.useImperativeHandle(ref, () => ({
+        approve: handleApprove,
+    }), [handleApprove]);
 
     return (
         <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="mt-8">
@@ -604,9 +801,11 @@ function ApprovalInterface({
                         <div className="p-2 bg-green-100 rounded-full">
                             <Check className="w-5 h-5 text-green-700" />
                         </div>
-                        <h2 className="text-xl font-bold text-green-900">方案确认</h2>
+                        <h2 className="text-xl font-bold text-green-900">确认镜头计划</h2>
                     </div>
-                    <p className="text-green-700/80 pl-12">请仔细检查 AI 生成的拍摄提示词。您可以直接修改，确认无误后点击下方按钮开始生成图片。</p>
+                    <p className="text-green-700/80 pl-12">
+                        请检查 AI 生成的镜头提示词（可编辑/保存/单镜头重生成）。确认后开始出图。
+                    </p>
                 </div>
 
                 <div className="p-6 grid gap-6 md:grid-cols-2 lg:grid-cols-2">
@@ -677,21 +876,15 @@ function ApprovalInterface({
                     })}
                 </div>
 
-                <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-end">
-                    <Button
-                        size="lg"
-                        onClick={handleApprove}
-                        disabled={isSubmitting}
-                        className="bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-600/20 text-lg px-8 py-6 h-auto"
-                    >
-                        {isSubmitting ? <Loader2 className="animate-spin mr-2" /> : <Sparkles className="mr-2" />}
-                        确认方案并生成图片
-                    </Button>
+                <div className="p-6 bg-slate-50 border-t border-slate-100">
+                    <div className="text-sm text-slate-600">
+                        修改完成后，点击页面顶部的「确认镜头计划并开始出图」继续。
+                    </div>
                 </div>
             </div>
         </motion.div>
     );
-}
+});
 
 // 5. Results Grid with Retry functionality
 function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; taskId: string; onRetry: () => void; layoutMode?: string }) {
@@ -708,31 +901,39 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
 
     const failedCount = shots?.filter(s => s.status === 'FAILED').length || 0;
 
+    const toImgSrc = (pathOrUrl: string) => {
+        if (!pathOrUrl) return '';
+        if (pathOrUrl.startsWith('http')) return pathOrUrl;
+        return `${BACKEND_ORIGIN}/${pathOrUrl}`;
+    };
+
+    const pickShotImage = (shot: Shot) => (shot.imageUrl || shot.imagePath || '').trim();
+
     const handleImageClick = (index: number) => {
         let images;
 
         if (layoutMode === 'Grid') {
             // In Grid mode, we want to show ALL shots in the lightbox, even if they share the same 'contact sheet' image
             // This allows users to navigate to "Shot 2" and click "Regenerate" for that specific shot ID.
-            const gridShot = shots.find(s => s.status === 'RENDERED' && s.imagePath);
-            const gridImageUrl = gridShot ? `${BACKEND_ORIGIN}/${gridShot.imagePath}` : '';
+            const gridShot = shots.find(s => s.status === 'RENDERED' && !!pickShotImage(s));
+            const gridImageUrl = gridShot ? toImgSrc(pickShotImage(gridShot)) : '';
 
             images = shots
                 .filter(s => s.status === 'RENDERED') // Only rendered shots are interactive
                 .map(s => ({
                     id: s.id || s.shot_id || '',
                     // Use individual image if exists (e.g. after a single-shot retry), otherwise fallback to the shared grid image
-                    url: (s.imagePath ? `${BACKEND_ORIGIN}/${s.imagePath}` : gridImageUrl),
+                    url: (pickShotImage(s) ? toImgSrc(pickShotImage(s)) : gridImageUrl),
                     prompt: s.prompt_en || s.prompt
                 }))
                 .filter(img => img.url); // Ensure we have a valid URL
         } else {
             // Individual mode: strictly show shots that have their own images
             images = shots
-                .filter(s => s.status === 'RENDERED' && s.imagePath)
+                .filter(s => s.status === 'RENDERED' && !!pickShotImage(s))
                 .map(s => ({
                     id: s.id || s.shot_id || '',
-                    url: `${BACKEND_ORIGIN}/${s.imagePath}`,
+                    url: toImgSrc(pickShotImage(s)),
                     prompt: s.prompt_en || s.prompt
                 }));
         }
@@ -750,7 +951,12 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
     const handleRetryAll = async () => {
         setRetrying(true);
         try {
-            await api.post(`/tasks/${taskId}/retry`);
+            if (layoutMode === 'Grid') {
+                await api.post(`/tasks/${taskId}/retry-render`);
+            } else {
+                await api.post(`/tasks/${taskId}/retry`);
+            }
+            requestCreditsRefresh();
             onRetry();
         } catch (e) {
             console.error('Retry all failed:', e);
@@ -765,6 +971,7 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
         setRetryingShotId(shotId);
         try {
             await api.post(`/tasks/${taskId}/retry?shotId=${shotId}`);
+            requestCreditsRefresh();
             onRetry();
         } catch (e) {
             console.error('Retry shot failed:', e);
@@ -787,23 +994,27 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
         onRetry(); // Refresh to show edited image
     };
 
-    const handleDownload = (imagePath: string, shotNum: number) => {
-        const link = document.createElement('a');
-        link.href = `${BACKEND_ORIGIN}/${imagePath}`;
-        link.download = `shot_${shotNum}_${Date.now()}.jpg`;
-        link.target = '_blank';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    const handleDownload = async (pathOrUrl: string, shotNum: number) => {
+        try {
+            await downloadImageWithOptionalTaskWatermark({
+                taskId,
+                url: toImgSrc(pathOrUrl),
+                filename: `shot_${shotNum}_${Date.now()}.jpg`,
+            });
+        } catch (e) {
+            console.error('Download failed:', e);
+            alert('下载失败：图片跨域限制或网络错误。若需水印下载，请确保 COS 已开启 CORS。');
+        }
     };
 
     // Grid Mode Special Rendering
     if (layoutMode === 'Grid' && shots.length > 0) {
         // In Grid mode, all shots share the same image (the contact sheet)
         // We find the first successful image to display
-        const gridShot = shots.find(s => s.status === 'RENDERED' && s.imagePath);
+        const gridShot = shots.find(s => s.status === 'RENDERED' && !!pickShotImage(s));
 
         if (gridShot) {
+            const gridSrc = toImgSrc(pickShotImage(gridShot));
             return (
                 <div className="mt-8 space-y-6">
                     <div className="flex items-center gap-2 mb-4">
@@ -818,7 +1029,7 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
                             onClick={() => handleImageClick(0)}
                         >
                             <img
-                                src={`${BACKEND_ORIGIN}/${gridShot.imagePath}`}
+                                src={gridSrc}
                                 alt="Contact Sheet"
                                 className="w-full h-full object-contain transition-transform duration-700 group-hover:scale-105"
                             />
@@ -853,7 +1064,7 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
                                         不满意? 重绘拼图
                                     </Button>
                                     <Button
-                                        onClick={() => handleDownload(gridShot.imagePath!, 0)}
+                                        onClick={() => handleDownload(pickShotImage(gridShot), 0)}
                                         size="sm"
                                         className="bg-purple-600 hover:bg-purple-700 text-white"
                                     >
@@ -926,7 +1137,7 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
                             className="group relative bg-white rounded-2xl overflow-hidden shadow-md border border-slate-100 hover:shadow-xl transition-all duration-300"
                         >
                             {/* Image Container */}
-                            <div className="aspect-[3/4] relative bg-slate-100 overflow-hidden cursor-pointer" onClick={() => shot.imagePath && handleImageClick(idx)}>
+                            <div className="aspect-[3/4] relative bg-slate-100 overflow-hidden cursor-pointer" onClick={() => pickShotImage(shot) && handleImageClick(idx)}>
                                 {shot.imagePath ? (
                                     <>
                                         <img
@@ -992,10 +1203,10 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
                                 </div>
                                 <div className="flex justify-between items-center">
                                     <div className="text-xs text-slate-500 truncate flex-1 mr-2">{shot.type}</div>
-                                    {shot.imagePath && shot.status === 'RENDERED' && (
+                                {pickShotImage(shot) && shot.status === 'RENDERED' && (
                                         <div className="flex gap-1">
                                             <Button
-                                                onClick={() => handleDownload(shot.imagePath!, idx + 1)}
+                                                onClick={() => handleDownload(pickShotImage(shot), idx + 1)}
                                                 size="sm"
                                                 variant="ghost"
                                                 className="h-7 w-7 p-0 hover:bg-purple-50 hover:text-purple-600"
@@ -1018,7 +1229,7 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
                                                 )}
                                             </Button>
                                             <Button
-                                                onClick={() => handleEdit(shotId, shot.imagePath!)}
+                                                onClick={() => handleEdit(shotId, pickShotImage(shot))}
                                                 size="sm"
                                                 variant="ghost"
                                                 className="h-7 w-7 p-0 hover:bg-purple-50 hover:text-purple-600"
@@ -1055,6 +1266,7 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
                 onOpenChange={setLightboxOpen}
                 onRegenerate={handleRetryShot}
                 isRegenerating={!!retryingShotId} // Global regenerating state or check specific id inside logic if needed, but passing generic here is simpler for now or we check inside
+                watermarkTaskId={taskId}
             />
         </div>
     );
@@ -1082,13 +1294,48 @@ export default function TaskResultPage() {
     const [storyboardDraft, setStoryboardDraft] = React.useState<StoryboardShotEditDraft | null>(null);
     const [savingStoryboardIndex, setSavingStoryboardIndex] = React.useState<number | null>(null);
     const [cyclingCameraIndex, setCyclingCameraIndex] = React.useState<number | null>(null);
+
+    const [isEditingHeroShootLog, setIsEditingHeroShootLog] = React.useState(false);
+    const [heroShootLogDraft, setHeroShootLogDraft] = React.useState('');
+    const [savingHeroShootLog, setSavingHeroShootLog] = React.useState(false);
+
+    const [isEditingGridShootLog, setIsEditingGridShootLog] = React.useState(false);
+    const [gridShootLogDraft, setGridShootLogDraft] = React.useState('');
+    const [savingGridShootLog, setSavingGridShootLog] = React.useState(false);
+
+    const [heroEditorOpen, setHeroEditorOpen] = React.useState(false);
+    const [selectingHeroAttemptCreatedAt, setSelectingHeroAttemptCreatedAt] = React.useState<number | null>(null);
+
+    const [editingShotLogIndex, setEditingShotLogIndex] = React.useState<number | null>(null);
+    const [shotShootLogDraft, setShotShootLogDraft] = React.useState('');
+    const [savingShotShootLog, setSavingShotShootLog] = React.useState(false);
+    const approvalRef = React.useRef<ApprovalInterfaceHandle | null>(null);
+    const [isApprovingLegacy, setIsApprovingLegacy] = React.useState(false);
     const { toast } = useToast();
+    const creditsFingerprintRef = React.useRef<string>('');
+
+    React.useEffect(() => {
+        if (!task) return;
+        if (!isEditingHeroShootLog) setHeroShootLogDraft(task.heroShootLog || '');
+        if (!isEditingGridShootLog) setGridShootLogDraft(task.gridShootLog || '');
+        if (editingShotLogIndex === null) setShotShootLogDraft('');
+    }, [task, isEditingHeroShootLog, isEditingGridShootLog, editingShotLogIndex]);
 
     // Define fetchTask outside useEffect to share with retry handle
     const fetchTask = React.useCallback(async () => {
         try {
             const res = await api.get(`/tasks/${params.id}`);
             setTask(res.data);
+
+            // 积分可能在后台预扣/结算（B 策略），这里用轻量指纹触发全局刷新
+            const billingEventsLen = Array.isArray((res.data as any)?.billingEvents) ? (res.data as any).billingEvents.length : 0;
+            const billingError = String((res.data as any)?.billingError || '');
+            const fingerprint = `${res.data?.status || ''}|${billingEventsLen}|${billingError}`;
+            if (fingerprint !== creditsFingerprintRef.current) {
+                creditsFingerprintRef.current = fingerprint;
+                requestCreditsRefresh();
+            }
+
             if (['COMPLETED', 'FAILED'].includes(res.data.status)) {
                 // Done
             }
@@ -1127,13 +1374,55 @@ export default function TaskResultPage() {
     };
 
     const handleRetryTask = async () => {
-        if (!confirm('确定要重新执行此任务吗？')) return;
+        if (!task) return;
+
+        const workflow = task.workflow || 'legacy';
+        const isHeroStoryboard = workflow === 'hero_storyboard';
+
+        let endpoint = `/tasks/${params.id}/retry`;
+        let confirmText = '确定要重新执行此任务吗？';
+        let toastTitle = '任务已重新提交';
+        let toastDesc = 'AI 正在重新生成...';
+
+        if (isHeroStoryboard) {
+            const failedShot = (task.heroShots || []).find((s) => s.status === 'FAILED');
+
+            if (!task.heroImageUrl) {
+                endpoint = `/tasks/${params.id}/hero/regenerate`;
+                confirmText = 'Hero 生成失败。要重新生成 Hero 母版吗？';
+                toastTitle = '已提交重新生成 Hero';
+                toastDesc = '正在生成母版...';
+            } else if (task.status === 'AWAITING_HERO_APPROVAL' && !!task.error && (!task.storyboardCards || task.storyboardCards.length === 0)) {
+                endpoint = `/tasks/${params.id}/hero/confirm`;
+                confirmText = '分镜规划失败。要重试生成分镜动作卡吗？（不重做 Hero）';
+                toastTitle = '已提交分镜重试';
+                toastDesc = '正在重新生成分镜动作卡...';
+            } else if (task.gridStatus === 'FAILED') {
+                endpoint = `/tasks/${params.id}/storyboard/render-grid`;
+                confirmText = '拼图生成失败。要重试生成四宫格拼图吗？';
+                toastTitle = '已提交拼图重试';
+                toastDesc = '正在重新生成四宫格拼图...';
+            } else if (failedShot) {
+                endpoint = `/tasks/${params.id}/storyboard/shots/${failedShot.index}/render`;
+                confirmText = `镜头 ${failedShot.index} 生成失败。要重试生成该镜头吗？`;
+                toastTitle = `已提交镜头 ${failedShot.index} 重试`;
+                toastDesc = '正在重新生成该镜头...';
+            } else {
+                endpoint = `/tasks/${params.id}/hero/regenerate`;
+                confirmText = '确定要重新生成 Hero 母版吗？这会清空已生成的分镜/镜头/拼图结果。';
+                toastTitle = '已提交重新生成 Hero';
+                toastDesc = '正在生成母版...';
+            }
+        }
+
+        if (!confirm(confirmText)) return;
         setIsRetrying(true);
         try {
-            await api.post(`/tasks/${params.id}/retry`);
+            await api.post(endpoint, {});
+            requestCreditsRefresh();
             toast({
-                title: "任务已重新提交",
-                description: "AI 正在重新生成拍摄方案",
+                title: toastTitle,
+                description: toastDesc,
             });
             await fetchTask();
         } catch (error) {
@@ -1141,7 +1430,7 @@ export default function TaskResultPage() {
             toast({
                 variant: "destructive",
                 title: "重试失败",
-                description: "操作遇到错误，请稍后再试",
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
             });
         } finally {
             setIsRetrying(false);
@@ -1230,6 +1519,107 @@ export default function TaskResultPage() {
         }
     };
 
+    const handleOpenHeroEditor = () => {
+        if (!task?.heroImageUrl) return;
+        if (task.status !== 'AWAITING_HERO_APPROVAL') {
+            const ok = confirm('编辑母版会创建一个新版本（B），并回到“待确认母版”。旧版本（A）的分镜/镜头/拼图仍会保留，可在版本库随时切回。是否继续？');
+            if (!ok) return;
+        }
+        setHeroEditorOpen(true);
+    };
+
+    const handleHeroEditComplete = async () => {
+        setHeroEditorOpen(false);
+        await fetchTask();
+    };
+
+    const handleSelectHeroVariant = async (attemptCreatedAt: number) => {
+        if (selectingHeroAttemptCreatedAt) return;
+        setSelectingHeroAttemptCreatedAt(attemptCreatedAt);
+        try {
+            await api.post(`/tasks/${params.id}/hero/select`, { attemptCreatedAt });
+            toast({ title: '已切换母版版本', description: '已切换到该版本对应的完整工作区（母版/分镜/镜头/拼图/会话）。' });
+            await fetchTask();
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '切换版本失败',
+                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+            });
+        } finally {
+            setSelectingHeroAttemptCreatedAt(null);
+        }
+    };
+
+    const handleSaveHeroShootLog = async () => {
+        if (!task) return;
+        setSavingHeroShootLog(true);
+        try {
+            const res = await api.patch(`/tasks/${params.id}/hero/shoot-log`, { shootLogText: heroShootLogDraft });
+            setTask(res.data);
+            setIsEditingHeroShootLog(false);
+            toast({ title: '手账已保存', description: 'Hero 手账已更新' });
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '保存失败',
+                description: (error as any)?.response?.data?.message || '无法保存手账，请稍后重试',
+            });
+        } finally {
+            setSavingHeroShootLog(false);
+        }
+    };
+
+    const handleSaveGridShootLog = async () => {
+        if (!task) return;
+        setSavingGridShootLog(true);
+        try {
+            const res = await api.patch(`/tasks/${params.id}/storyboard/grid/shoot-log`, { shootLogText: gridShootLogDraft });
+            setTask(res.data);
+            setIsEditingGridShootLog(false);
+            toast({ title: '手账已保存', description: '拼图手账已更新' });
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '保存失败',
+                description: (error as any)?.response?.data?.message || '无法保存手账，请稍后重试',
+            });
+        } finally {
+            setSavingGridShootLog(false);
+        }
+    };
+
+    const startEditShotShootLog = (index: number, currentValue?: string) => {
+        setEditingShotLogIndex(index);
+        setShotShootLogDraft(currentValue || '');
+    };
+
+    const handleSaveShotShootLog = async () => {
+        if (!task || editingShotLogIndex === null) return;
+        setSavingShotShootLog(true);
+        try {
+            const res = await api.patch(
+                `/tasks/${params.id}/storyboard/shots/${editingShotLogIndex}/shoot-log`,
+                { shootLogText: shotShootLogDraft },
+            );
+            setTask(res.data);
+            setEditingShotLogIndex(null);
+            toast({ title: '手账已保存', description: `镜头 #${editingShotLogIndex} 手账已更新` });
+        } catch (error) {
+            console.error(error);
+            toast({
+                variant: 'destructive',
+                title: '保存失败',
+                description: (error as any)?.response?.data?.message || '无法保存手账，请稍后重试',
+            });
+        } finally {
+            setSavingShotShootLog(false);
+        }
+    };
+
     const handleRenderShot = async (index: number) => {
         // 乐观：马上显示“生成中…”，并禁用当前镜头按钮
         setRenderingShotIndices(prev => {
@@ -1253,6 +1643,7 @@ export default function TaskResultPage() {
         });
         try {
             await api.post(`/tasks/${params.id}/storyboard/shots/${index}/render`, {});
+            requestCreditsRefresh();
             toast({
                 title: `已提交生成 #${index}`,
                 description: '正在生成镜头...',
@@ -1302,6 +1693,7 @@ export default function TaskResultPage() {
         setTask(prev => prev ? { ...prev, status: 'SHOTS_RENDERING' } : prev);
         try {
             await api.post(`/tasks/${params.id}/storyboard/render-grid`, {});
+            requestCreditsRefresh();
             toast({
                 title: '已提交四镜头拼图生成',
                 description: '正在生成拼图...',
@@ -1354,28 +1746,21 @@ export default function TaskResultPage() {
     };
 
     const downloadFromUrl = React.useCallback(async (url: string, filename: string) => {
-        const safeUrl = (url || '').trim();
-        if (!safeUrl) return;
-
-        // 优先走 fetch->blob（如果 COS 已开 CORS，会直接下载）
         try {
-            const res = await fetch(safeUrl);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const blob = await res.blob();
-            const objectUrl = window.URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = objectUrl;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.URL.revokeObjectURL(objectUrl);
-            return;
-        } catch {
-            // 兜底：新标签页打开（用户可“另存为”）
-            window.open(safeUrl, '_blank', 'noopener,noreferrer');
+            await downloadImageWithOptionalTaskWatermark({
+                taskId: String(params.id || ''),
+                url,
+                filename,
+            });
+        } catch (e) {
+            console.error('Download failed:', e);
+            toast({
+                variant: 'destructive',
+                title: '下载失败',
+                description: '图片跨域限制或网络错误。若需水印下载，请确保 COS 已开启 CORS。',
+            });
         }
-    }, []);
+    }, [params.id, toast]);
 
     const openStoryboardEditor = (index: number) => {
         const shot = (task?.storyboardPlan?.shots || [])?.[index - 1] || {};
@@ -1578,6 +1963,88 @@ export default function TaskResultPage() {
     // For results, we use task.shots (from DB) or shots from brainPlan if rendering hasn't populated DB yet
     const displayShots = task.shots && task.shots.length > 0 ? task.shots : (task.brainPlan?.shots || []);
 
+    const workflowRhythm = getWorkflowRhythmCopy(task.workflow);
+    const workflowSteps = getWorkflowSteps(task.workflow);
+    const activeStepIndex = getWorkflowActiveStepIndex(task);
+
+    const handleApproveLegacy = async () => {
+        if (isApprovingLegacy) return;
+        const approval = approvalRef.current;
+        if (!approval) {
+            toast({
+                variant: 'destructive',
+                title: '无法提交镜头计划',
+                description: '确认组件尚未就绪，请稍后重试或刷新页面。',
+            });
+            return;
+        }
+
+        setIsApprovingLegacy(true);
+        try {
+            await approval.approve();
+        } finally {
+            setIsApprovingLegacy(false);
+        }
+    };
+
+    const primaryAction: PrimaryAction = (() => {
+        const status = task.status;
+        const workflow = task.workflow || 'legacy';
+        const isBusy = ['PENDING', 'QUEUED', 'PLANNING', 'RENDERING', 'HERO_RENDERING', 'STORYBOARD_PLANNING', 'SHOTS_RENDERING'].includes(status);
+        if (isBusy) return { label: '处理中…', disabled: true, loading: true };
+
+        if (status === 'FAILED') return { label: '重新执行', onClick: handleRetryTask, disabled: isRetrying || isDeleting, loading: isRetrying };
+        if (status === 'COMPLETED') return { label: '不满意？重新生成', onClick: handleRetryTask, disabled: isRetrying || isDeleting, loading: isRetrying };
+
+        if (workflow === 'hero_storyboard') {
+            if (status === 'AWAITING_HERO_APPROVAL') {
+                return {
+                    label: '确认母版并生成分镜',
+                    onClick: handleConfirmHero,
+                    disabled: isConfirmingHero || isRegeneratingHero,
+                    loading: isConfirmingHero,
+                };
+            }
+
+            if (status === 'STORYBOARD_READY') {
+                const nextIndex = pickNextHeroShotIndex(task);
+                if (nextIndex) {
+                    const isRenderingThis = renderingShotIndices.has(nextIndex);
+                    return {
+                        label: `生成镜头 #${nextIndex}`,
+                        onClick: () => void handleRenderShot(nextIndex),
+                        disabled: isRenderingThis || isRenderingGrid || isReplanningStoryboard,
+                        loading: isRenderingThis,
+                    };
+                }
+
+                if ((task.storyboardCards?.length === 4) && !task.gridImageUrl) {
+                    return {
+                        label: '生成四镜头拼图',
+                        onClick: handleRenderGrid,
+                        disabled: isRenderingGrid || isReplanningStoryboard,
+                        loading: isRenderingGrid,
+                    };
+                }
+
+                if (isHeroAllShotsRendered(task)) {
+                    return { label: '已完成（可按需重生成）', disabled: true };
+                }
+            }
+        } else {
+            if (status === 'AWAITING_APPROVAL') {
+                return {
+                    label: '确认镜头计划并开始出图',
+                    onClick: () => void handleApproveLegacy(),
+                    disabled: isApprovingLegacy,
+                    loading: isApprovingLegacy,
+                };
+            }
+        }
+
+        return { label: '暂无需要操作', disabled: true };
+    })();
+
     return (
         <div className="min-h-screen bg-slate-50 pb-20">
             <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -1591,6 +2058,14 @@ export default function TaskResultPage() {
                     isDeleting={isDeleting}
                 />
 
+                <WorkflowGuideBar
+                    workflowLabel={workflowRhythm.label}
+                    workflowDescription={workflowRhythm.description}
+                    steps={workflowSteps}
+                    activeStepIndex={activeStepIndex}
+                    primaryAction={primaryAction}
+                />
+
                 {/* Hero Storyboard Workflow */}
                 {isHeroStoryboard && (
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
@@ -1601,47 +2076,173 @@ export default function TaskResultPage() {
                                     <div className="p-2 bg-cyan-50 rounded-lg">
                                         <Camera className="w-5 h-5 text-cyan-700" />
                                     </div>
-                                    <h3 className="text-lg font-semibold text-slate-800">Hero 母版</h3>
-                                    <Badge variant="outline" className="ml-auto text-xs">hero_storyboard</Badge>
+                                    <h3 className="text-lg font-semibold text-slate-800">母版</h3>
+                                    <Badge variant="outline" className="ml-auto text-xs">先出母版后分镜</Badge>
                                 </div>
 
                                 {!task.heroImageUrl && (
                                     <div className="py-10 text-center text-slate-500">
                                         <Loader2 className="w-6 h-6 animate-spin mx-auto mb-3" />
-                                        正在生成 Hero 母版...
+                                        正在生成母版...
                                     </div>
                                 )}
 
                                 {task.heroImageUrl && (
                                     <div className="space-y-3">
                                         <img
-                                            src={task.heroImageUrl}
-                                            alt="Hero"
+                                            src={withTencentCi(task.heroImageUrl, { maxWidth: 1200, maxHeight: 1200, quality: 80 })}
+                                            alt="母版"
                                             className="w-full max-w-md rounded-xl border border-slate-200 shadow-sm"
+                                            loading="lazy"
+                                            decoding="async"
                                         />
-                                        {task.heroShootLog && (
-                                            <div className="space-y-2">
-                                                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                                                    Shoot Log（手账）
+
+                                        {(() => {
+                                            const raw = Array.isArray(task.heroHistory) ? task.heroHistory : [];
+                                            const versions = raw
+                                                .filter((h) => !!(h as any)?.outputImageUrl)
+                                                .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+
+                                            if (versions.length <= 1) return null;
+
+                                            const locked = task.status === 'HERO_RENDERING'
+                                                || task.status === 'STORYBOARD_PLANNING'
+                                                || task.status === 'SHOTS_RENDERING';
+
+                                            return (
+                                                <div className="space-y-2">
+                                                    <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                                        版本库（{versions.length}）
+                                                    </div>
+                                                    {locked && (
+                                                        <div className="text-xs text-slate-500">
+                                                            生成中暂不可切换版本（避免并发写导致工作区混乱）。请等待当前步骤完成。
+                                                        </div>
+                                                    )}
+                                                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                                        {versions.slice(0, 6).map((v) => {
+                                                            const createdAt = Number((v as any).createdAt) || 0;
+                                                            const url = String((v as any).outputImageUrl || '').trim();
+                                                            if (!createdAt || !url) return null;
+
+                                                            const isSelected = (task.heroSelectedAttemptCreatedAt
+                                                                ? task.heroSelectedAttemptCreatedAt === createdAt
+                                                                : task.heroImageUrl === url);
+                                                            const isSelecting = selectingHeroAttemptCreatedAt === createdAt;
+                                                            const canSelect = !locked && !isSelected && !selectingHeroAttemptCreatedAt;
+
+                                                            return (
+                                                                <div
+                                                                    key={createdAt}
+                                                                    className={`rounded-lg border p-2 bg-white ${isSelected ? 'border-cyan-400' : 'border-slate-200'}`}
+                                                                >
+                                                                    <img
+                                                                        src={withTencentCi(url, { maxWidth: 600, maxHeight: 600, quality: 75 })}
+                                                                        alt={`母版版本_${createdAt}`}
+                                                                        className="w-full rounded-md border border-slate-100"
+                                                                        loading="lazy"
+                                                                        decoding="async"
+                                                                    />
+                                                                    <div className="mt-2 flex items-center justify-between gap-2">
+                                                                        <div className="text-[11px] text-slate-500 truncate">
+                                                                            #{createdAt}
+                                                                        </div>
+                                                                        <Button
+                                                                            size="sm"
+                                                                            variant={isSelected ? 'default' : 'outline'}
+                                                                            disabled={!canSelect}
+                                                                            onClick={() => handleSelectHeroVariant(createdAt)}
+                                                                        >
+                                                                            {isSelecting ? '切换中...' : (isSelected ? '当前' : '设为当前')}
+                                                                        </Button>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    {versions.length > 6 && (
+                                                        <div className="text-xs text-slate-500">当前仅展示最近 6 个版本</div>
+                                                    )}
                                                 </div>
-                                                <Textarea value={task.heroShootLog} readOnly className="min-h-[140px]" />
+                                            );
+                                        })()}
+
+                                        {(task.heroShootLog !== undefined || isEditingHeroShootLog) && (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                                        Shoot Log（手账）
+                                                    </div>
+                                                    {!isEditingHeroShootLog ? (
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => {
+                                                                const v = task.heroShootLog || '';
+                                                                setHeroShootLogDraft(isProbablyBase64Blob(v) ? '' : v);
+                                                                setIsEditingHeroShootLog(true);
+                                                            }}
+                                                        >
+                                                            <Edit className="w-3.5 h-3.5 mr-2" />
+                                                            编辑手账
+                                                        </Button>
+                                                    ) : (
+                                                        <div className="flex gap-2">
+                                                            <Button
+                                                                size="sm"
+                                                                onClick={handleSaveHeroShootLog}
+                                                                disabled={savingHeroShootLog}
+                                                            >
+                                                                {savingHeroShootLog ? '保存中...' : '保存'}
+                                                            </Button>
+                                                            <Button
+                                                                size="sm"
+                                                                variant="outline"
+                                                                onClick={() => {
+                                                                    setIsEditingHeroShootLog(false);
+                                                                    setHeroShootLogDraft(task.heroShootLog || '');
+                                                                }}
+                                                                disabled={savingHeroShootLog}
+                                                            >
+                                                                取消
+                                                            </Button>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {(() => {
+                                                    const raw = task.heroShootLog || '';
+                                                    const hidden = !isEditingHeroShootLog && isProbablyBase64Blob(raw);
+                                                    if (!hidden) return null;
+                                                    return (
+                                                        <div className="text-xs text-amber-600">
+                                                            检测到疑似签名/乱码内容（旧版本数据），已隐藏；点击“编辑手账”可覆盖为可读文本。
+                                                        </div>
+                                                    );
+                                                })()}
+
+                                                <Textarea
+                                                    value={isEditingHeroShootLog ? heroShootLogDraft : (isProbablyBase64Blob(task.heroShootLog || '') ? '' : (task.heroShootLog || ''))}
+                                                    onChange={(e) => setHeroShootLogDraft(e.target.value)}
+                                                    readOnly={!isEditingHeroShootLog}
+                                                    className="min-h-[140px]"
+                                                />
                                             </div>
                                         )}
 
-                                        {task.status === 'AWAITING_HERO_APPROVAL' && (
+                                        {task.heroImageUrl && (
                                             <Button
-                                                onClick={handleConfirmHero}
-                                                disabled={isConfirmingHero}
-                                                className="bg-green-600 hover:bg-green-700 text-white"
+                                                onClick={handleOpenHeroEditor}
+                                                disabled={
+                                                    isRegeneratingHero
+                                                    || task.status === 'HERO_RENDERING'
+                                                    || task.status === 'STORYBOARD_PLANNING'
+                                                    || task.status === 'SHOTS_RENDERING'
+                                                }
+                                                variant="outline"
                                             >
-                                                {isConfirmingHero ? (
-                                                    <span className="flex items-center gap-2">
-                                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                                        确认中...
-                                                    </span>
-                                                ) : (
-                                                    '确认Hero并生成分镜'
-                                                )}
+                                                <Edit className="w-4 h-4 mr-2" />
+                                                局部修改母版
                                             </Button>
                                         )}
                                         {task.heroImageUrl && (
@@ -1650,7 +2251,7 @@ export default function TaskResultPage() {
                                                 disabled={isRegeneratingHero || task.status === 'HERO_RENDERING'}
                                                 variant="outline"
                                             >
-                                                {isRegeneratingHero || task.status === 'HERO_RENDERING' ? '重新生成Hero中...' : '重新生成 Hero 母版'}
+                                                {isRegeneratingHero || task.status === 'HERO_RENDERING' ? '重新生成中...' : '重新生成母版'}
                                             </Button>
                                         )}
                                         {task.heroImageUrl && (
@@ -1659,7 +2260,7 @@ export default function TaskResultPage() {
                                                 variant="outline"
                                             >
                                                 <Download className="w-4 h-4 mr-2" />
-                                                下载 Hero
+                                                下载母版
                                             </Button>
                                         )}
                                         {task.status === 'STORYBOARD_PLANNING' && (
@@ -1731,8 +2332,67 @@ export default function TaskResultPage() {
                                                     alt="Grid"
                                                     className="w-full max-w-2xl rounded-xl border border-slate-200 shadow-sm"
                                                 />
-                                                {task.gridShootLog && (
-                                                    <Textarea value={task.gridShootLog} readOnly className="min-h-[120px]" />
+                                                {(task.gridShootLog !== undefined || isEditingGridShootLog) && (
+                                                    <div className="space-y-2">
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                                                Shoot Log（手账）
+                                                            </div>
+                                                            {!isEditingGridShootLog ? (
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="outline"
+                                                                    onClick={() => {
+                                                                        const v = task.gridShootLog || '';
+                                                                        setGridShootLogDraft(isProbablyBase64Blob(v) ? '' : v);
+                                                                        setIsEditingGridShootLog(true);
+                                                                    }}
+                                                                >
+                                                                    <Edit className="w-3.5 h-3.5 mr-2" />
+                                                                    编辑手账
+                                                                </Button>
+                                                            ) : (
+                                                                <div className="flex gap-2">
+                                                                    <Button
+                                                                        size="sm"
+                                                                        onClick={handleSaveGridShootLog}
+                                                                        disabled={savingGridShootLog}
+                                                                    >
+                                                                        {savingGridShootLog ? '保存中...' : '保存'}
+                                                                    </Button>
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="outline"
+                                                                        onClick={() => {
+                                                                            setIsEditingGridShootLog(false);
+                                                                            setGridShootLogDraft(task.gridShootLog || '');
+                                                                        }}
+                                                                        disabled={savingGridShootLog}
+                                                                    >
+                                                                        取消
+                                                                    </Button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        {(() => {
+                                                            const raw = task.gridShootLog || '';
+                                                            const hidden = !isEditingGridShootLog && isProbablyBase64Blob(raw);
+                                                            if (!hidden) return null;
+                                                            return (
+                                                                <div className="text-xs text-amber-600">
+                                                                    检测到疑似签名/乱码内容（旧版本数据），已隐藏；点击“编辑手账”可覆盖为可读文本。
+                                                                </div>
+                                                            );
+                                                        })()}
+
+                                                        <Textarea
+                                                            value={isEditingGridShootLog ? gridShootLogDraft : (isProbablyBase64Blob(task.gridShootLog || '') ? '' : (task.gridShootLog || ''))}
+                                                            onChange={(e) => setGridShootLogDraft(e.target.value)}
+                                                            readOnly={!isEditingGridShootLog}
+                                                            className="min-h-[120px]"
+                                                        />
+                                                    </div>
                                                 )}
                                             </div>
                                         )}
@@ -2021,12 +2681,71 @@ export default function TaskResultPage() {
                                                         return (
                                                             <div className="mt-3 space-y-2">
                                                                 <img
-                                                                    src={shot.imageUrl}
+                                                                    src={withTencentCi(shot.imageUrl, { maxWidth: 1200, maxHeight: 1200, quality: 80 })}
                                                                     alt={`Shot ${c.index}`}
                                                                     className="w-full max-w-md rounded-xl border border-slate-200 shadow-sm"
+                                                                    loading="lazy"
+                                                                    decoding="async"
                                                                 />
-                                                                {shot.shootLog && (
-                                                                    <Textarea value={shot.shootLog} readOnly className="min-h-[120px]" />
+                                                                {(shot.shootLog !== undefined || editingShotLogIndex === c.index) && (
+                                                                    <div className="space-y-2">
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                                                                Shoot Log（手账）
+                                                                            </div>
+                                                                            {editingShotLogIndex !== c.index ? (
+                                                                                <Button
+                                                                                    size="sm"
+                                                                                    variant="outline"
+                                                                                    onClick={() => startEditShotShootLog(c.index, isProbablyBase64Blob(shot.shootLog || '') ? '' : (shot.shootLog || ''))}
+                                                                                >
+                                                                                    <Edit className="w-3.5 h-3.5 mr-2" />
+                                                                                    编辑手账
+                                                                                </Button>
+                                                                            ) : (
+                                                                                <div className="flex gap-2">
+                                                                                    <Button
+                                                                                        size="sm"
+                                                                                        onClick={handleSaveShotShootLog}
+                                                                                        disabled={savingShotShootLog}
+                                                                                    >
+                                                                                        {savingShotShootLog ? '保存中...' : '保存'}
+                                                                                    </Button>
+                                                                                    <Button
+                                                                                        size="sm"
+                                                                                        variant="outline"
+                                                                                        onClick={() => {
+                                                                                            setEditingShotLogIndex(null);
+                                                                                            setShotShootLogDraft('');
+                                                                                        }}
+                                                                                        disabled={savingShotShootLog}
+                                                                                    >
+                                                                                        取消
+                                                                                    </Button>
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+
+                                                                        {(() => {
+                                                                            const raw = shot.shootLog || '';
+                                                                            const hidden = editingShotLogIndex !== c.index && isProbablyBase64Blob(raw);
+                                                                            if (!hidden) return null;
+                                                                            return (
+                                                                                <div className="text-xs text-amber-600">
+                                                                                    检测到疑似签名/乱码内容（旧版本数据），已隐藏；点击“编辑手账”可覆盖为可读文本。
+                                                                                </div>
+                                                                            );
+                                                                        })()}
+
+                                                                        <Textarea
+                                                                            value={editingShotLogIndex === c.index
+                                                                                ? shotShootLogDraft
+                                                                                : (isProbablyBase64Blob(shot.shootLog || '') ? '' : (shot.shootLog || ''))}
+                                                                            onChange={(e) => setShotShootLogDraft(e.target.value)}
+                                                                            readOnly={editingShotLogIndex !== c.index}
+                                                                            className="min-h-[120px]"
+                                                                        />
+                                                                    </div>
                                                                 )}
 
                                                                 {variants.length > 1 && (
@@ -2043,9 +2762,11 @@ export default function TaskResultPage() {
                                                                                     <div key={v.createdAt} className={`shrink-0 rounded-lg border ${isSelected ? 'border-green-400 bg-green-50' : 'border-slate-200 bg-white'} p-2 w-[140px]`}>
                                                                                         <a href={v.outputImageUrl!} target="_blank" rel="noreferrer">
                                                                                             <img
-                                                                                                src={v.outputImageUrl!}
+                                                                                                src={withTencentCi(v.outputImageUrl!, { maxWidth: 320, maxHeight: 320 })}
                                                                                                 alt={`Shot ${c.index} variant`}
                                                                                                 className="w-full h-[140px] object-cover rounded-md border border-slate-100"
+                                                                                                loading="lazy"
+                                                                                                decoding="async"
                                                                                             />
                                                                                         </a>
                                                                                         <div className="mt-2 flex items-center justify-between gap-2">
@@ -2101,6 +2822,17 @@ export default function TaskResultPage() {
                     </motion.div>
                 )}
 
+                {isHeroStoryboard && task.heroImageUrl && (
+                    <ImageEditor
+                        open={heroEditorOpen}
+                        onClose={() => setHeroEditorOpen(false)}
+                        taskId={task.id}
+                        mode="hero"
+                        imageUrl={task.heroImageUrl}
+                        onEditComplete={() => void handleHeroEditComplete()}
+                    />
+                )}
+
                 {/* 2. Visual Analysis (Brain Output) */}
                 {showVisualAnalysis && (
                     <VisualAnalysisCard plan={task.brainPlan!} />
@@ -2114,6 +2846,7 @@ export default function TaskResultPage() {
                 {/* 4. Approval Workflow */}
                 {showApproval && (
                     <ApprovalInterface
+                        ref={approvalRef}
                         taskId={task.id}
                         shots={normalizeBrainPlan(task.brainPlan).shots}
                         onApproved={() => setTask(prev => prev ? { ...prev, status: 'RENDERING' } : null)}

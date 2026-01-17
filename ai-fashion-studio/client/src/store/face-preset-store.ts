@@ -62,9 +62,7 @@ export const useFacePresetStore = create<FacePresetStore>((set) => ({
             if (data.measurements) formData.append('measurements', data.measurements);
             if (data.description) formData.append('description', data.description);
 
-            const res = await api.post('/face-presets', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
+            const res = await api.post('/face-presets', formData);
 
             const newPreset = res.data;
             set(state => ({

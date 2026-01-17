@@ -6,6 +6,7 @@ export type TaskWorkflow = 'legacy' | 'hero_storyboard';
 export type TaskStatus =
     | 'DRAFT'
     | 'PENDING'
+    | 'QUEUED'
     | 'PLANNING'
     | 'AWAITING_APPROVAL'
     | 'RENDERING'
@@ -42,6 +43,7 @@ export interface Shot {
     type?: string;                 // Shot type
     status: 'PENDING' | 'RENDERED' | 'FAILED';
     imagePath?: string;
+    imageUrl?: string;             // ✅ 可选：COS/CDN URL（用于多用户并发时走 CDN，不压后端带宽）
     shootLog?: string;             // ✅ 生图模型返回的“手账”（新流程必落库）
     error?: string;
     qcStatus?: 'PENDING' | 'APPROVED' | 'NEEDS_FIX';
@@ -90,10 +92,66 @@ export interface HeroShotOutput {
     }>;
 }
 
+export type PainterSessionMessage = {
+    role: 'user' | 'model';
+    text: string;
+    createdAt: number;
+};
+
+/**
+ * Painter 会话（“原生会话保持”）：
+ * - 持久化在 task.data（JSON）里，不需要 DB migration
+ * - 仅保存文本历史（user/model），图片仍然通过每轮请求的 fileData(URL) 传入
+ */
+export type PainterSession = {
+    createdAt: number;
+    updatedAt: number;
+    systemPromptVersionId?: string;
+    systemPromptSha256?: string;
+    /**
+     * 为了可复现（以及 prompts 后续被发布更新时不“漂移”），这里可选持久化 system prompt 文本。
+     * 若不存在，则按 versionId 回读版本文件，最后兜底取当前 active prompts。
+     */
+    systemPromptText?: string;
+    messages: PainterSessionMessage[];
+};
+
+/**
+ * Hero 工作区快照（用于 AB 版本对照/切换）：
+ * - 每一个 heroAttemptCreatedAt（母版一次成功产出）对应一套完整工作区
+ * - 切换版本时需要一起切换：Hero + 分镜规划 + 镜头产物 + 拼图 + Painter 会话
+ */
+export type HeroWorkspaceSnapshot = {
+    attemptCreatedAt: number;
+    updatedAt: number;
+    heroImageUrl: string;
+    heroShootLog?: string;
+    heroApprovedAt?: number;
+    storyboardPlan?: HeroStoryboardPlannerOutput;
+    storyboardCards?: StoryboardActionCard[];
+    storyboardPlannedAt?: number;
+    storyboardThinkingProcess?: string;
+    storyboardHistory?: any[];
+    heroShots?: HeroShotOutput[];
+    gridImageUrl?: string;
+    gridShootLog?: string;
+    gridStatus?: 'PENDING' | 'RENDERED' | 'FAILED';
+    painterSession?: PainterSession;
+};
+
 export interface TaskModel {
     id: string;
     userId?: string;          // 创建任务的用户ID（用于积分扣除）
     creditsSpent?: number;    // 消费的积分数量（用于退款）
+    billingEvents?: Array<{
+        key: string;              // 幂等键：同一次成功生成只扣一次
+        kind: 'RESERVE' | 'SETTLE';
+        amount: number;           // 扣费额度（积分）
+        reason: string;           // 扣费原因
+        createdAt: number;
+        meta?: Record<string, number>;
+    }>;
+    billingError?: string;     // 扣费失败时记录（不影响出图）
     createdAt: number;
     claimTokenHash?: string;  // 匿名草稿任务的认领凭证（仅存 hash）
     requirements: string;
@@ -109,6 +167,7 @@ export interface TaskModel {
     location?: string;            // 拍摄地址（如："上海外滩"）
     styleDirection?: string;      // 风格描述（如："日系清新"）
     styleRefPaths?: string[];     // 风格参考图路径
+    poseRefPaths?: string[];      // 姿势参考图路径（知识库条目图片）
     garmentFocus?: 'top' | 'bottom' | 'footwear' | 'accessories' | 'full_outfit';  // 焦点单品
     aspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '21:9';  // 画面比例
 
@@ -128,6 +187,13 @@ export interface TaskModel {
     heroImageUrl?: string;          // Hero 母版（COS URL）
     heroShootLog?: string;          // Hero 手账（TEXT+IMAGE 的 TEXT 部分）
     heroApprovedAt?: number;        // 人工确认时间戳（或 autoApproveHero）
+    heroSelectedAttemptCreatedAt?: number; // 当前选择的 Hero 版本（heroHistory.createdAt）
+    painterSession?: PainterSession; // ✅ Painter 原生会话保持（文本历史）
+    /**
+     * Hero 版本工作区：用于“AB 对照可切回去”。
+     * 说明：主字段（heroImageUrl/storyboardPlan/...）代表“当前工作区视图”，heroWorkspaces 是历史快照集合。
+     */
+    heroWorkspaces?: HeroWorkspaceSnapshot[];
     storyboardPlan?: HeroStoryboardPlannerOutput; // Planner 原始结构化输出（用于审计/复盘）
     storyboardCards?: StoryboardActionCard[]; // 大脑规划出的动作卡（不含衣服描述）
     storyboardPlannedAt?: number;
@@ -187,6 +253,25 @@ export interface TaskModel {
     // Retry counter for painter failures
     painter_retry_count?: number;
 
+    // ===== Direct prompt generation (learn page) =====
+    /**
+     * 直出图模式：跳过 Brain 规划，直接把用户提示词 + 知识库 prompt blocks + 参考图发给 Painter。
+     * 说明：仍复用 Task 的状态流转与结果存储，便于队列/相册/重绘。
+     */
+    directPrompt?: string;
+    directIncludeThoughts?: boolean;
+    directSeed?: number;
+    directTemperature?: number;
+    directStylePresetIds?: string[];
+    directPosePresetIds?: string[];
+    directFacePresetIds?: string[];
+    /**
+     * 直出图“对话流程”会话：用于在同一个任务上追加用户指令进行迭代生成。
+     * - 不做 DB migration：持久化在 task.data(JSON) 中
+     * - 重绘（direct-regenerate）默认不走对话；发送对话（direct-message）才会使用并追加 history
+     */
+    directPainterSession?: PainterSession;
+
     // 模特元数据（从 FacePreset 提取用于 AI 生成）
     modelMetadata?: Array<{
         name: string;
@@ -202,6 +287,7 @@ export interface TaskModel {
 
 export interface FacePreset {
     id: string;
+    userId?: string;          // 归属用户（不填表示历史遗留/全局）
     name: string;              // 用户自定义名称
     imagePath: string;         // 存储路径
     thumbnailPath?: string;    // 缩略图路径（可选优化）
@@ -256,22 +342,18 @@ export interface InviteCodeModel {
 
 export interface StylePreset {
     id: string;
+    userId?: string;           // 所属用户（用于隔离；管理员可全量查看）
+    kind?: 'STYLE' | 'POSE';   // 知识库条目类型：风格/姿势
     name: string;              // 用户自定义名称（例如："日系胶片风"）
     description?: string;      // 可选描述
     imagePaths: string[];      // 图片路径数组（1-3张）
     thumbnailPath?: string;    // 封面缩略图（取第一张）
     tags?: string[];           // 标签（例如：["复古", "暖色调"]）
     styleHint?: string;        // 风格提示（例如："Retro 1980s fashion editorial with Kodak Portra 400 aesthetic"）
+    promptBlock?: string;      // 可复用提示词块（风格/姿势统一使用）
 
-    // New: 6-Dimension Visual Analysis (MCP Style Ingestion)
-    analysis?: {
-        lighting?: string;      // 1. 光影架构 (e.g. "Rembrandt lighting, Softbox")
-        scene?: string;         // 2. 场景语境 (e.g. "Urban Street, Rainy, Neon")
-        grading?: string;       // 3. 色彩分级 (e.g. "Teal and Orange, Low saturation")
-        texture?: string;       // 4. 材质渲染 (e.g. "High gloss, Silk texture")
-        vibe?: string;          // 5. 人物/姿态 (e.g. "High-fashion ennui, Dynamic pose")
-        camera?: string;        // 6. 镜头语言 (e.g. "85mm, Bokeh, Eye-level")
-    };
+    // 结构化分析（用于调试/复盘；不同 kind 的结构可能不同）
+    analysis?: any;
 
     createdAt: number;
 }

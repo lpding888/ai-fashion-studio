@@ -10,7 +10,11 @@ import { Request, Response } from 'express';
 export class StyleAgent implements OnModuleInit {
     private logger = new Logger(StyleAgent.name);
     public server: McpServer;
-    public transport: SSEServerTransport;
+    public transport?: SSEServerTransport;
+    private readonly toolNames: string[] = [];
+    private readonly toolCallCounts: Record<string, number> = {};
+    public lastToolCallAt?: number;
+    public lastConnectedAt?: number;
 
     constructor(private db: DbService) {
         this.server = new McpServer({
@@ -65,11 +69,34 @@ export class StyleAgent implements OnModuleInit {
         this.registerTools();
     }
 
+    recordClientConnected() {
+        this.lastConnectedAt = Date.now();
+    }
+
+    getStatus() {
+        return {
+            name: "Fashion-Style-Agent",
+            version: "1.0.0",
+            tools: this.toolNames.slice(),
+            toolCallCounts: { ...this.toolCallCounts },
+            lastToolCallAt: this.lastToolCallAt,
+            lastConnectedAt: this.lastConnectedAt,
+            hasActiveTransport: Boolean(this.transport),
+        };
+    }
+
+    private recordToolCall(toolName: string) {
+        this.lastToolCallAt = Date.now();
+        this.toolCallCounts[toolName] = (this.toolCallCounts[toolName] || 0) + 1;
+    }
+
     private registerTools() {
+        this.toolNames.push("search_styles");
         this.server.tool(
             "search_styles",
             { query: z.string().describe("Style keywords (e.g. 'cyberpunk', 'vintage', 'rainy')") },
             async ({ query }) => {
+                this.recordToolCall("search_styles");
                 this.logger.log(`🔍 MCP Tool performing search_styles: "${query}"`);
 
                 const allStyles = await this.db.getAllStylePresets();
@@ -106,10 +133,12 @@ export class StyleAgent implements OnModuleInit {
             }
         );
 
+        this.toolNames.push("get_style_details");
         this.server.tool(
             "get_style_details",
             { style_id: z.string().describe("The ID of the style preset to retrieve") },
             async ({ style_id }) => {
+                this.recordToolCall("get_style_details");
                 this.logger.log(`📖 MCP Tool performing get_style_details: "${style_id}"`);
 
                 const style = await this.db.getStylePreset(style_id);
@@ -129,6 +158,7 @@ export class StyleAgent implements OnModuleInit {
             }
         );
 
+        this.toolNames.push("create_image_task");
         this.server.tool(
             "create_image_task",
             {
@@ -138,6 +168,7 @@ export class StyleAgent implements OnModuleInit {
                 aspect_ratio: z.enum(['1:1', '3:4', '16:9']).default('3:4')
             },
             async (args) => {
+                this.recordToolCall("create_image_task");
                 // For now, we return a "Configuration Object" that the Frontend/User will confirm.
                 // We do NOT create the task directly in DB yet, because we need User Approval UI.
                 // The Agent will display this config to the user.

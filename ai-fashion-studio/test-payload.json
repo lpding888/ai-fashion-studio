@@ -1,0 +1,1 @@
+﻿{"contents":[{"role":"user","parts":[{"text":"生成一张测试图片"}]}],"generationConfig":{"responseModalities":["IMAGE"],"candidateCount":1,"imageConfig":{"aspectRatio":"1:1","imageSize":"1K"}}}

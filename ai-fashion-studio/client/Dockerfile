@@ -9,7 +9,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
-COPY next.config.ts tsconfig.json postcss.config.mjs eslint.config.mjs components.json ./
+COPY next.config.js tsconfig.json postcss.config.mjs eslint.config.mjs components.json ./
 COPY public ./public
 COPY src ./src
 
@@ -31,7 +31,7 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.ts ./next.config.ts
+COPY --from=builder /app/next.config.js ./next.config.js
 
 EXPOSE 3000
 

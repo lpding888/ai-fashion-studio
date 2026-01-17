@@ -13,10 +13,13 @@ import {
     Palette,
     Brain,
     Layers,
+    Wand2,
     KeyRound,
     Ticket,
     LogOut,
-    Coins
+    Coins,
+    ScrollText,
+    Network
 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 
@@ -29,8 +32,11 @@ export function AdminSidebar() {
         { href: '/admin/invite-codes', label: '邀请码', icon: Ticket },
         { href: '/admin/credits', label: '积分管理', icon: Coins }, // 新增
         { href: '/admin/tasks', label: '任务审核', icon: ListChecks },
+        { href: '/admin/logs', label: '实时日志', icon: ScrollText },
+        { href: '/admin/mcp', label: 'MCP', icon: Network },
         { href: '/admin/brain-prompts', label: '大脑提示词', icon: Brain },
         { href: '/admin/workflow-prompts', label: '工作流提示词', icon: Layers },
+        { href: '/admin/direct-prompts', label: '直出图提示词', icon: Wand2 },
         { href: '/admin/styles', label: '风格库', icon: Palette },
         { href: '/admin/analytics', label: '数据分析', icon: LineChart },
         { href: '/admin/model-profiles', label: '模型配置', icon: Settings2 },

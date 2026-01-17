@@ -36,5 +36,15 @@ ai-fashion-studio/deploy-minimal/
 ai-fashion-studio/deploy-temp/
 ai-fashion-studio/docs/
 
+# Local agent / scratch artifacts (do not commit)
+ai-fashion-studio/.tmp-*
+ai-fashion-studio/.spec-workflow/
+ai-fashion-studio/data/
+
+# Local Docker image archives (do not commit)
+ai-fashion-studio/*.tar
+ai-fashion-studio/*.tar.gz
+ai-fashion-studio/*.tgz
+
 # NPM lock (this repo uses pnpm)
 package-lock.json

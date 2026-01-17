@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from './ui/card';
-import { Loader2, ArrowRight, Wand2, AlertTriangle, Sparkles, MapPin, Palette, Crop, Shirt, FolderOpen, Upload, Save, Footprints, Watch, Briefcase, User, Layers, BrainCircuit } from 'lucide-react';
+import { Loader2, ArrowRight, Wand2, AlertTriangle, Sparkles, MapPin, Palette, Crop, Shirt, FolderOpen, Upload, Save, Footprints, Watch, Briefcase, User, Layers, BrainCircuit, ChevronDown } from 'lucide-react';
 import { UploadZone } from './upload-zone';
 import { FaceRefUpload } from './face-ref-upload';
 import { FacePresetSelector } from './face-preset-selector';
@@ -20,7 +20,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useToast } from './ui/use-toast';
 import { useCosUpload } from '@/hooks/use-cos-upload';
 import { useAuth } from '@/hooks/use-auth';
-import { useCredits, CREDITS_PER_IMAGE } from '@/hooks/use-credits';
+import { useCredits } from '@/hooks/use-credits';
+import { useFacePresetStore } from '@/store/face-preset-store';
+import { SavedConfigCards } from './saved-config-cards';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
+import { Textarea } from './ui/textarea';
 
 const MAX_TOTAL_IMAGES = 14;
 
@@ -42,6 +46,17 @@ export function RequirementForm() {
     const [shotCount, setShotCount] = React.useState<number>(4);
     const [workflow, setWorkflow] = React.useState<'legacy' | 'hero_storyboard'>('legacy');
     const [autoApproveHero, setAutoApproveHero] = React.useState<boolean>(false);
+    const [watermarkPosition, setWatermarkPosition] = React.useState<'top_left' | 'top_right' | 'bottom_left' | 'bottom_right' | 'center'>('bottom_right');
+    const [watermarkOpacity, setWatermarkOpacity] = React.useState<number>(0.6);
+    const [watermarkSize, setWatermarkSize] = React.useState<'small' | 'medium' | 'large' | 'auto'>('auto');
+    const [watermarkColor, setWatermarkColor] = React.useState<'white' | 'black'>('white');
+    const [watermarkStroke, setWatermarkStroke] = React.useState<boolean>(true);
+    const [watermarkShadow, setWatermarkShadow] = React.useState<boolean>(false);
+    const [isWatermarkCollapsed, setIsWatermarkCollapsed] = React.useState<boolean>(true);
+    const [isSaveDialogOpen, setIsSaveDialogOpen] = React.useState(false);
+    const [saveName, setSaveName] = React.useState('');
+    const [saveNote, setSaveNote] = React.useState('');
+    const [isSavedConfigsCollapsed, setIsSavedConfigsCollapsed] = React.useState(true);
 
     // const [loading, setLoading] = React.useState(false); // 使用 hook 的状态
     const { uploadFiles, isUploading: isUploadingCos, progress: uploadProgress } = useCosUpload();
@@ -50,13 +65,14 @@ export function RequirementForm() {
 
     const { autoApprove } = useSettingsStore();
     const { user } = useAuth();
-    const { balance, checkCredits, calculateRequired, refresh: refreshCredits } = useCredits();
+    const { balance, calculateRequired } = useCredits();
 
     // Form history hook
-    const { historyItems, saveHistory, deleteHistory, clearHistory } = useFormHistory();
+    const { historyItems, saveHistory, deleteHistory, clearHistory, updateHistoryName, updateHistoryNote } = useFormHistory();
 
     // Calculate remaining slots（更新：支持风格预设多图计算）
-    const { presets: stylePresets } = useStylePresetStore();
+    const { presets: stylePresets, fetchPresets: fetchStylePresets } = useStylePresetStore();
+    const { fetchPresets: fetchFacePresets } = useFacePresetStore();
     const stylePresetImageCount = stylePresetIds.reduce((sum, id) => {
         const preset = stylePresets.find(p => p.id === id);
         return sum + (preset?.imagePaths.length || 0);
@@ -76,7 +92,9 @@ export function RequirementForm() {
 
         // 积分检查：如果用户已登录，检查积分是否足够
         if (user?.id) {
-            const requiredCredits = calculateRequired(shotCount);
+            const requiredCredits = workflow === 'hero_storyboard'
+                ? calculateRequired({ shotCount: 1, layoutMode: 'Individual', resolution })
+                : calculateRequired({ shotCount, layoutMode, resolution });
             if (balance < requiredCredits) {
                 toast({
                     title: '积分不足',
@@ -109,9 +127,7 @@ export function RequirementForm() {
                 if (location) formData.append('location', location);
                 if (styleDirection) formData.append('style_direction', styleDirection);
 
-                const res = await api.post('/tasks', formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                });
+                const res = await api.post('/tasks', formData);
 
                 const task = res.data as any;
 
@@ -180,12 +196,33 @@ export function RequirementForm() {
 
     // 保存当前配置
     const handleSaveConfig = () => {
+        setSaveName('');
+        setSaveNote('');
+        setIsSaveDialogOpen(true);
+    };
+
+    const confirmSaveConfig = () => {
         saveHistory({
+            name: saveName.trim() || undefined,
+            note: (saveNote || '').slice(0, 500),
+
             requirements,
             resolution,
             aspectRatio,
             layoutMode,
             shotCount,
+            workflow,
+            autoApproveHero,
+            facePresetIds,
+            stylePresetIds,
+
+            watermarkPosition,
+            watermarkOpacity,
+            watermarkSize,
+            watermarkColor,
+            watermarkStroke,
+            watermarkShadow,
+
             location,
             styleDirection,
             garmentFocus,
@@ -193,21 +230,67 @@ export function RequirementForm() {
             faceRefCount: faceRefs.length,
             styleRefCount: styleRefs.length
         });
-        alert('配置已保存！');
+
+        setIsSaveDialogOpen(false);
+        toast({ title: '配置预设已保存', description: '已加入“配置预设”列表，可随时一键加载。' });
     };
 
     // 加载历史配置
-    const handleLoadHistory = (item: FormHistoryItem) => {
+    const handleLoadHistory = async (item: FormHistoryItem) => {
+        // 先刷新预设列表，避免“已删除预设”仍被选中
+        try {
+            await Promise.all([
+                fetchFacePresets(),
+                fetchStylePresets(),
+            ]);
+        } catch {
+            // 忽略：网络失败不阻断加载基础配置
+        }
+
+        const facePresetList = useFacePresetStore.getState().presets || [];
+        const stylePresetList = useStylePresetStore.getState().presets || [];
+
+        const facePresetIdSet = new Set(facePresetList.map(p => p.id));
+        const stylePresetIdSet = new Set(stylePresetList.map(p => p.id));
+
+        const requestedFaceIds = Array.isArray(item.facePresetIds) ? item.facePresetIds : [];
+        const requestedStyleIds = Array.isArray(item.stylePresetIds) ? item.stylePresetIds : [];
+
+        const validFaceIds = requestedFaceIds.filter(id => facePresetIdSet.has(id));
+        const validStyleIds = requestedStyleIds.filter(id => stylePresetIdSet.has(id));
+
+        const missingFace = requestedFaceIds.filter(id => !facePresetIdSet.has(id));
+        const missingStyle = requestedStyleIds.filter(id => !stylePresetIdSet.has(id));
+
         setRequirements(item.requirements);
         setResolution(item.resolution);
         setAspectRatio(item.aspectRatio);
         setLayoutMode(item.layoutMode);
         setShotCount(item.shotCount);
+        setWorkflow(item.workflow || 'legacy');
+        setAutoApproveHero(!!item.autoApproveHero);
+        setWatermarkPosition(item.watermarkPosition || 'bottom_right');
+        setWatermarkOpacity(typeof item.watermarkOpacity === 'number' ? item.watermarkOpacity : 0.6);
+        setWatermarkSize(item.watermarkSize || 'auto');
+        setWatermarkColor(item.watermarkColor || 'white');
+        setWatermarkStroke(typeof item.watermarkStroke === 'boolean' ? item.watermarkStroke : true);
+        setWatermarkShadow(typeof item.watermarkShadow === 'boolean' ? item.watermarkShadow : false);
         if (item.location) setLocation(item.location);
         if (item.styleDirection) setStyleDirection(item.styleDirection);
         if (item.garmentFocus) setGarmentFocus(item.garmentFocus);
 
-        alert('已加载配置！\n注意：图片需要重新上传');
+        setFacePresetIds(validFaceIds);
+        setStylePresetIds(validStyleIds);
+
+        if (missingFace.length > 0 || missingStyle.length > 0) {
+            toast({
+                title: '部分预设已失效，已自动清空',
+                description: `缺失：${missingFace.length ? `模特预设 ${missingFace.length} 个` : ''}${missingFace.length && missingStyle.length ? '；' : ''}${missingStyle.length ? `风格预设 ${missingStyle.length} 个` : ''}`,
+                variant: 'destructive',
+            });
+        } else {
+            toast({ title: '已加载配置', description: '注意：图片需要重新上传（服装图/参考图不随配置保存）。' });
+        }
     };
 
     return (
@@ -250,7 +333,58 @@ export function RequirementForm() {
                     </div>
                 </CardHeader>
 
-                <CardContent className="space-y-8 p-8">
+                    <CardContent className="space-y-8 p-8">
+                    {!!historyItems.length && (
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-extrabold tracking-wide text-white/90">
+                                        配置预设
+                                        <span className="ml-2 text-[11px] font-bold text-white/50">
+                                            ({historyItems.length}/50)
+                                        </span>
+                                    </div>
+                                    <div className="text-[11px] text-white/45">
+                                        一键加载常用配置（可编辑名称/备注、可删除）
+                                    </div>
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setIsSavedConfigsCollapsed(v => !v)}
+                                    aria-expanded={!isSavedConfigsCollapsed}
+                                    className="h-9 px-4 rounded-full gap-2 border-white/20 bg-black/20 text-white/90 hover:bg-white/10 hover:border-white/30 shadow-[0_6px_18px_rgba(0,0,0,0.25)]"
+                                >
+                                    <FolderOpen className="h-4 w-4" />
+                                    {isSavedConfigsCollapsed ? '展开预设' : '收起预设'}
+                                    <ChevronDown
+                                        className={`h-4 w-4 transition-transform ${isSavedConfigsCollapsed ? '' : 'rotate-180'}`}
+                                    />
+                                </Button>
+                            </div>
+                            <AnimatePresence initial={false}>
+                                {!isSavedConfigsCollapsed && (
+                                    <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                    >
+                                        <SavedConfigCards
+                                            items={historyItems}
+                                            onLoad={handleLoadHistory}
+                                            onDelete={(id) => {
+                                                if (!confirm('确定要删除这个配置预设吗？')) return;
+                                                deleteHistory(id);
+                                            }}
+                                            onUpdateName={updateHistoryName}
+                                            onUpdateNote={updateHistoryNote}
+                                        />
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </div>
+                    )}
 
                     {/* Warning Message */}
                     <AnimatePresence>
@@ -541,8 +675,8 @@ export function RequirementForm() {
                                     </label>
                                     <div className="flex bg-black/20 p-1.5 rounded-xl ring-1 ring-white/10 relative z-0 backdrop-blur-md">
                                         {[
-                                            { id: 'legacy', label: '传统流程', desc: 'Legacy' },
-                                            { id: 'hero_storyboard', label: '母版分镜', desc: 'Hero' },
+                                            { id: 'legacy', label: '先规划后出图', desc: 'Plan → Render' },
+                                            { id: 'hero_storyboard', label: '先出母版后分镜', desc: 'Hero → Storyboard' },
                                         ].map((mode) => {
                                             const isSelected = workflow === mode.id;
                                             return (
@@ -571,7 +705,7 @@ export function RequirementForm() {
 
                                 <div className="space-y-3">
                                     <label className="text-xs font-bold text-white/90 uppercase tracking-wider flex items-center gap-1.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.5)]">
-                                        <BrainCircuit className="w-3.5 h-3.5 text-amber-300" /> Hero 自动进分镜
+                                        <BrainCircuit className="w-3.5 h-3.5 text-amber-300" /> 母版自动进分镜
                                     </label>
                                     <div className="flex bg-black/20 p-1.5 rounded-xl ring-1 ring-white/10 relative z-0 backdrop-blur-md">
                                         <button
@@ -590,7 +724,7 @@ export function RequirementForm() {
                                         </button>
                                     </div>
                                     <p className="text-[11px] text-slate-400 leading-snug">
-                                        开启后：Hero 出图完成会自动生成分镜动作卡（仍可在任务详情页手动确认）。
+                                        开启后：母版生成完成会自动生成分镜动作卡（仍可在任务详情页手动确认）。
                                     </p>
                                 </div>
                             </div>
@@ -606,6 +740,164 @@ export function RequirementForm() {
                                     value={styleDirection}
                                     onChange={(e) => setStyleDirection(e.target.value)}
                                 />
+                            </div>
+
+                            {/* Download Watermark Style */}
+                            <div className="space-y-3">
+                                <div className="flex items-start justify-between gap-3">
+                                    <label className="text-xs font-bold text-white/90 uppercase tracking-wider flex items-center gap-1.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.5)]">
+                                        <Watch className="w-3.5 h-3.5 text-cyan-300" /> 下载水印样式（仅下载时叠加）
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsWatermarkCollapsed((v) => !v)}
+                                        className="h-9 px-4 rounded-full text-[11px] font-bold transition-all border border-white/15 bg-black/20 hover:bg-white/10 hover:border-white/30 text-white/85 flex items-center gap-2"
+                                        aria-expanded={!isWatermarkCollapsed}
+                                    >
+                                        {isWatermarkCollapsed ? '展开' : '收起'}
+                                        <ChevronDown className={`h-4 w-4 transition-transform ${isWatermarkCollapsed ? '' : 'rotate-180'}`} />
+                                    </button>
+                                </div>
+
+                                <div className="flex flex-wrap gap-2 text-[11px] text-white/70">
+                                    <span className="px-2 py-1 rounded-lg bg-black/20 border border-white/10">位置 {({ top_left: '左上', top_right: '右上', bottom_left: '左下', bottom_right: '右下', center: '居中' } as const)[watermarkPosition]}</span>
+                                    <span className="px-2 py-1 rounded-lg bg-black/20 border border-white/10">字号 {({ small: '小', medium: '中', large: '大', auto: '自动' } as const)[watermarkSize]}</span>
+                                    <span className="px-2 py-1 rounded-lg bg-black/20 border border-white/10">颜色 {watermarkColor === 'white' ? '白' : '黑'}</span>
+                                    <span className="px-2 py-1 rounded-lg bg-black/20 border border-white/10">透明度 {Math.round(watermarkOpacity * 100)}%</span>
+                                    <span className="px-2 py-1 rounded-lg bg-black/20 border border-white/10">描边 {watermarkStroke ? '开' : '关'}</span>
+                                    <span className="px-2 py-1 rounded-lg bg-black/20 border border-white/10">阴影 {watermarkShadow ? '开' : '关'}</span>
+                                </div>
+
+                                <AnimatePresence initial={false}>
+                                    {!isWatermarkCollapsed && (
+                                        <motion.div
+                                            initial={{ opacity: 0, height: 0 }}
+                                            animate={{ opacity: 1, height: 'auto' }}
+                                            exit={{ opacity: 0, height: 0 }}
+                                            className="space-y-4"
+                                        >
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div className="space-y-2">
+                                                    <div className="text-[11px] font-bold text-white/70">位置</div>
+                                                    <div className="grid grid-cols-5 gap-2">
+                                                        {[
+                                                            { v: 'top_left', label: '左上' },
+                                                            { v: 'top_right', label: '右上' },
+                                                            { v: 'bottom_left', label: '左下' },
+                                                            { v: 'bottom_right', label: '右下' },
+                                                            { v: 'center', label: '居中' },
+                                                        ].map((p) => {
+                                                            const active = watermarkPosition === (p.v as any);
+                                                            return (
+                                                                <button
+                                                                    key={p.v}
+                                                                    type="button"
+                                                                    onClick={() => setWatermarkPosition(p.v as any)}
+                                                                    className={`h-9 rounded-xl text-[11px] font-bold transition-all ring-1
+                                                                        ${active ? 'bg-cyan-500/25 text-white ring-cyan-400/40 shadow-[0_0_18px_rgba(34,211,238,0.18)]' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
+                                                                >
+                                                                    {p.label}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+
+                                                <div className="space-y-2">
+                                                    <div className="text-[11px] font-bold text-white/70">字号</div>
+                                                    <div className="grid grid-cols-4 gap-2">
+                                                        {[
+                                                            { v: 'small', label: '小' },
+                                                            { v: 'medium', label: '中' },
+                                                            { v: 'large', label: '大' },
+                                                            { v: 'auto', label: '自动' },
+                                                        ].map((s) => {
+                                                            const active = watermarkSize === (s.v as any);
+                                                            return (
+                                                                <button
+                                                                    key={s.v}
+                                                                    type="button"
+                                                                    onClick={() => setWatermarkSize(s.v as any)}
+                                                                    className={`h-9 rounded-xl text-[11px] font-bold transition-all ring-1
+                                                                        ${active ? 'bg-indigo-500/25 text-white ring-indigo-400/40 shadow-[0_0_18px_rgba(99,102,241,0.18)]' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
+                                                                >
+                                                                    {s.label}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+
+                                                <div className="space-y-2">
+                                                    <div className="text-[11px] font-bold text-white/70">颜色</div>
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        {[
+                                                            { v: 'white', label: '白' },
+                                                            { v: 'black', label: '黑' },
+                                                        ].map((c) => {
+                                                            const active = watermarkColor === (c.v as any);
+                                                            return (
+                                                                <button
+                                                                    key={c.v}
+                                                                    type="button"
+                                                                    onClick={() => setWatermarkColor(c.v as any)}
+                                                                    className={`h-9 rounded-xl text-[11px] font-bold transition-all ring-1
+                                                                        ${active ? 'bg-white/15 text-white ring-white/30 shadow-[0_0_18px_rgba(255,255,255,0.12)]' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
+                                                                >
+                                                                    {c.label}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+
+                                                <div className="space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="text-[11px] font-bold text-white/70">透明度</div>
+                                                        <div className="text-[11px] font-mono text-white/60">{Math.round(watermarkOpacity * 100)}%</div>
+                                                    </div>
+                                                    <Input
+                                                        type="number"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.05"
+                                                        value={String(watermarkOpacity)}
+                                                        onChange={(e) => {
+                                                            const v = Number(e.target.value);
+                                                            const next = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.6;
+                                                            setWatermarkOpacity(next);
+                                                        }}
+                                                        className="h-10 bg-white/5 border-white/10 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 text-white rounded-xl placeholder:text-slate-500"
+                                                        placeholder="0~1"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setWatermarkStroke((v) => !v)}
+                                                    className={`h-9 px-3 rounded-xl text-[11px] font-bold transition-all ring-1
+                                                        ${watermarkStroke ? 'bg-amber-500/25 text-white ring-amber-400/40' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
+                                                >
+                                                    描边 {watermarkStroke ? '开' : '关'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setWatermarkShadow((v) => !v)}
+                                                    className={`h-9 px-3 rounded-xl text-[11px] font-bold transition-all ring-1
+                                                        ${watermarkShadow ? 'bg-emerald-500/25 text-white ring-emerald-400/40' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
+                                                >
+                                                    阴影 {watermarkShadow ? '开' : '关'}
+                                                </button>
+                                            </div>
+
+                                            <p className="text-[11px] text-slate-400 leading-snug">
+                                                该设置会随“保存配置”一起保存；水印文字（款号）在 Batch 创建任务时逐组输入。
+                                            </p>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
                             </div>
 
                             {/* Resolution */}
@@ -706,6 +998,42 @@ export function RequirementForm() {
                     </Button>
                 </CardFooter>
             </Card>
+
+            <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
+                <DialogContent className="bg-slate-950 border-white/10">
+                    <DialogHeader>
+                        <DialogTitle>保存为配置预设</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                            <div className="text-xs font-bold text-white/80">名称（可选）</div>
+                            <Input
+                                value={saveName}
+                                onChange={(e) => setSaveName(e.target.value)}
+                                className="bg-white/5 border-white/10 text-white"
+                                placeholder="例如：外滩-男装-2K-单图"
+                            />
+                        </div>
+
+                        <div className="space-y-2">
+                            <div className="text-xs font-bold text-white/80">备注（最多 500 字）</div>
+                            <Textarea
+                                value={saveNote}
+                                onChange={(e) => setSaveNote(e.target.value.slice(0, 500))}
+                                className="bg-white/5 border-white/10 text-white min-h-[120px]"
+                                placeholder="写下本次配置的要点/适用场景/注意事项…"
+                            />
+                            <div className="text-[11px] text-slate-400 text-right">{saveNote.length}/500</div>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsSaveDialogOpen(false)}>取消</Button>
+                        <Button onClick={confirmSaveConfig}>保存</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </motion.div>
     );
 }

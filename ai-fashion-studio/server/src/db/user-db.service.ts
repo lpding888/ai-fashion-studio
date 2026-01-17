@@ -171,6 +171,22 @@ export class UserDbService implements OnModuleInit {
       const existing = await tx.user.findUnique({ where: { username } });
       if (existing) throw new Error('用户名已存在');
 
+      const now = new Date();
+      const row = await tx.user.create({
+        data: {
+          id: userId,
+          username,
+          passwordHash: await bcrypt.hash(params.password, 10),
+          nickname: params.nickname || username,
+          email: params.email ?? null,
+          status: 'ACTIVE',
+          role: 'USER',
+          credits: params.initialCredits ?? 100,
+          totalTasks: 0,
+          createdAt: now,
+        },
+      });
+
       if (params.inviteRequired) {
         if (!inviteCode) throw new Error('邀请码不能为空');
 
@@ -183,7 +199,7 @@ export class UserDbService implements OnModuleInit {
             usedByUserId: null,
           },
           data: {
-            usedAt: new Date(),
+            usedAt: now,
             usedByUserId: userId,
           },
         });
@@ -192,21 +208,6 @@ export class UserDbService implements OnModuleInit {
           throw new Error('邀请码无效或已被使用');
         }
       }
-
-      const row = await tx.user.create({
-        data: {
-          id: userId,
-          username,
-          passwordHash: await bcrypt.hash(params.password, 10),
-          nickname: params.nickname || username,
-          email: params.email ?? null,
-          status: 'ACTIVE',
-          role: 'USER',
-          credits: params.initialCredits ?? 100,
-          totalTasks: 0,
-          createdAt: new Date(),
-        },
-      });
 
       return this.mapUser(row as any);
     });
@@ -347,4 +348,3 @@ export class UserDbService implements OnModuleInit {
     });
   }
 }
-

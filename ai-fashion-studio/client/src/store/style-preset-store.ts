@@ -4,12 +4,15 @@ import api from '@/lib/api';
 
 export interface StylePreset {
     id: string;
+    userId?: string;
+    kind?: 'STYLE' | 'POSE';
     name: string;
     description?: string;
     imagePaths: string[];
     thumbnailPath?: string;
     tags?: string[];
     styleHint?: string;
+    promptBlock?: string;
     createdAt: number;
 }
 
@@ -23,6 +26,7 @@ interface StylePresetStore {
     addPreset: (files: File[], name: string, description?: string, tags?: string[], styleHint?: string) => Promise<StylePreset>;
     updatePreset: (id: string, updates: { name?: string; description?: string; tags?: string[]; styleHint?: string }) => Promise<void>;
     deletePreset: (id: string) => Promise<void>;
+    relearnPreset: (id: string) => Promise<StylePreset>;
 }
 
 export const useStylePresetStore = create<StylePresetStore>((set) => ({
@@ -54,9 +58,7 @@ export const useStylePresetStore = create<StylePresetStore>((set) => ({
             if (tags && tags.length > 0) formData.append('tags', JSON.stringify(tags));
             if (styleHint) formData.append('styleHint', styleHint);
 
-            const res = await api.post('/style-presets', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
+            const res = await api.post('/style-presets', formData);
 
             const newPreset = res.data;
             set(state => ({
@@ -108,5 +110,22 @@ export const useStylePresetStore = create<StylePresetStore>((set) => ({
             set({ error: 'Failed to delete style preset' });
             throw error;
         }
-    }
+    },
+
+    relearnPreset: async (id: string) => {
+        set({ loading: true, error: null });
+        try {
+            const res = await api.post(`/style-presets/${id}/relearn`, {});
+            const preset = res.data?.preset || res.data;
+            set(state => ({
+                presets: state.presets.map(p => p.id === id ? preset : p),
+                loading: false,
+            }));
+            return preset;
+        } catch (error) {
+            console.error('Failed to relearn style preset:', error);
+            set({ error: 'Failed to relearn style preset', loading: false });
+            throw error;
+        }
+    },
 }));

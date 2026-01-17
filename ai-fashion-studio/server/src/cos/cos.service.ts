@@ -15,11 +15,22 @@ export class CosService {
     constructor() {
         // 只在配置了密钥时初始化COS客户端
         if (process.env.TENCENT_SECRET_ID && process.env.TENCENT_SECRET_KEY) {
+            const useInternal = String(process.env.COS_USE_INTERNAL_ENDPOINT || '').trim().toLowerCase();
+            const enableInternal =
+                useInternal === 'true' || useInternal === '1' || useInternal === 'yes';
+
+            // COS SDK 支持自定义请求域名模板（会替换 {Bucket}/{Region}）
+            // - 公网默认：{Bucket}.cos.{Region}.myqcloud.com
+            // - 内网建议：{Bucket}.cos-internal.{Region}.myqcloud.com（仅同地域腾讯云内可用）
+            const domainTemplate = (process.env.COS_UPLOAD_DOMAIN_TEMPLATE || '').trim()
+                || (enableInternal ? '{Bucket}.cos-internal.{Region}.myqcloud.com' : '');
+
             this.cos = new COS({
                 SecretId: process.env.TENCENT_SECRET_ID,
-                SecretKey: process.env.TENCENT_SECRET_KEY
+                SecretKey: process.env.TENCENT_SECRET_KEY,
+                ...(domainTemplate ? { Domain: domainTemplate } : {}),
             });
-            this.logger.log('COS客户端初始化成功');
+            this.logger.log(`COS客户端初始化成功（uploadDomain=${domainTemplate || 'default'}）`);
         } else {
             this.logger.warn('未配置腾讯云密钥，COS功能禁用');
         }

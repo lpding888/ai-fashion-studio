@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Textarea } from '@/components/ui/textarea';
 import {
     Table,
     TableBody,
@@ -54,6 +55,7 @@ export function ModelProfilesPage() {
     const [success, setSuccess] = React.useState<string | null>(null);
 
     const [active, setActive] = React.useState<{ BRAIN?: string; PAINTER?: string }>({});
+    const [activePool, setActivePool] = React.useState<{ BRAIN?: string[]; PAINTER?: string[] }>({});
     const [profiles, setProfiles] = React.useState<ModelProfilePublic[]>([]);
 
     const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -68,6 +70,9 @@ export function ModelProfilesPage() {
 
     const [testingId, setTestingId] = React.useState<string | null>(null);
     const [testResult, setTestResult] = React.useState<Record<string, { ok: boolean; message: string }>>({});
+
+    const [addingGroup, setAddingGroup] = React.useState<string | null>(null); // `${kind}|${gateway}|${model}`
+    const [addingKeysText, setAddingKeysText] = React.useState('');
 
     const authHeaders = React.useMemo(() => {
         if (typeof window === 'undefined') return {};
@@ -91,6 +96,7 @@ export function ModelProfilesPage() {
         try {
             const res = await api.get('/admin/model-profiles', { headers: authHeaders });
             setActive(res.data.active || {});
+            setActivePool(res.data.activePool || {});
             setProfiles(res.data.profiles || []);
         } catch (e: unknown) {
             setError(getErrorMessage(e));
@@ -194,6 +200,53 @@ export function ModelProfilesPage() {
         }
     };
 
+    const setAsActivePool = async (kind: ModelProfileKind, ids: string[]) => {
+        setError(null);
+        setSuccess(null);
+        setLoading(true);
+        try {
+            await api.post(
+                '/admin/model-profiles/set-active',
+                kind === 'BRAIN' ? { brainProfileIds: ids } : { painterProfileIds: ids },
+                { headers: { ...authHeaders, 'Content-Type': 'application/json' } }
+            );
+            setSuccess(`已更新 ${kind} Key 池（${ids.length} 个）`);
+            await loadProfiles();
+        } catch (e: unknown) {
+            setError(getErrorMessage(e));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const togglePoolMember = async (p: ModelProfilePublic) => {
+        const kind = p.kind;
+        const rawCurrent = (activePool[kind] && activePool[kind]!.length > 0)
+            ? activePool[kind]!
+            : (active[kind] ? [active[kind] as string] : []);
+
+        const getById = (id: string) => profiles.find((x) => x.id === id);
+        const currentProfiles = rawCurrent.map(getById).filter(Boolean) as ModelProfilePublic[];
+        const currentGroup = currentProfiles[0] ? { gateway: currentProfiles[0].gateway, model: currentProfiles[0].model } : undefined;
+
+        const isSameGroup = currentGroup ? (p.gateway === currentGroup.gateway && p.model === currentGroup.model) : true;
+        const current = isSameGroup ? rawCurrent : [];
+
+        if (!isSameGroup) {
+            // 切换到该组：避免把不同网关/模型混进同一个 activePool
+            await setAsActive(p);
+            return;
+        }
+
+        const has = current.includes(p.id);
+        const next = has ? current.filter((id) => id !== p.id) : [...current, p.id];
+        if (next.length === 0) {
+            setError('Key 池不能为空（至少保留 1 个）');
+            return;
+        }
+        await setAsActivePool(kind, next);
+    };
+
     const testProfile = async (id: string) => {
         setTestingId(id);
         try {
@@ -225,7 +278,91 @@ export function ModelProfilesPage() {
     const brainProfiles = React.useMemo(() => profiles.filter((p) => p.kind === 'BRAIN'), [profiles]);
     const painterProfiles = React.useMemo(() => profiles.filter((p) => p.kind === 'PAINTER'), [profiles]);
 
-    const renderTable = (items: ModelProfilePublic[], activeId?: string) => (
+    type ProfileGroup = {
+        kind: ModelProfileKind;
+        gateway: string;
+        model: string;
+        profiles: ModelProfilePublic[];
+    };
+
+    const groupProfiles = (items: ModelProfilePublic[]) => {
+        const map = new Map<string, ProfileGroup>();
+        for (const p of items) {
+            const key = `${p.kind}|${p.gateway}|${p.model}`;
+            const existing = map.get(key);
+            if (existing) {
+                existing.profiles.push(p);
+            } else {
+                map.set(key, { kind: p.kind, gateway: p.gateway, model: p.model, profiles: [p] });
+            }
+        }
+        return Array.from(map.values());
+    };
+
+    const parseKeys = (raw: string) =>
+        raw
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+    const buildAutoName = (base: string, index: number) => {
+        const safe = (base || '').trim() || 'key';
+        return `${safe} #${index}`;
+    };
+
+    const addKeysToGroup = async (group: ProfileGroup, activeId?: string, poolIds?: string[]) => {
+        const keys = parseKeys(addingKeysText);
+        if (keys.length === 0) {
+            setError('请输入至少 1 个 API Key（支持多行）');
+            return;
+        }
+
+        setError(null);
+        setSuccess(null);
+        setLoading(true);
+
+        try {
+            const createdIds: string[] = [];
+            const existingCount = group.profiles.length;
+
+            for (let i = 0; i < keys.length; i++) {
+                const key = keys[i];
+                const body = {
+                    kind: group.kind,
+                    name: buildAutoName(group.model, existingCount + i + 1),
+                    gateway: group.gateway,
+                    model: group.model,
+                    apiKey: key,
+                };
+                const res = await api.post('/admin/model-profiles', body, { headers: authHeaders });
+                const id = res?.data?.profile?.id as string | undefined;
+                if (id) createdIds.push(id);
+            }
+
+            await loadProfiles();
+
+            // 仅在“当前生效组”内自动加入池（避免误切换到其他模型/网关）
+            const effectivePool = (poolIds && poolIds.length > 0) ? poolIds : (activeId ? [activeId] : []);
+            const isActiveGroup = !!activeId && group.profiles.some((p) => p.id === activeId);
+
+            if (isActiveGroup && createdIds.length > 0) {
+                const next = Array.from(new Set([...effectivePool, ...createdIds]));
+                await setAsActivePool(group.kind, next);
+                setSuccess(`已新增 ${createdIds.length} 个 Key，并加入池`);
+            } else {
+                setSuccess(`已新增 ${createdIds.length} 个 Key（未自动加入池；请先把该组设为主Key/加入池）`);
+            }
+
+            setAddingKeysText('');
+            setAddingGroup(null);
+        } catch (e: unknown) {
+            setError(getErrorMessage(e));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const renderTable = (items: ModelProfilePublic[], activeId?: string, poolIds?: string[]) => (
         <Table>
             <TableHeader>
                 <TableRow>
@@ -238,66 +375,162 @@ export function ModelProfilesPage() {
                 </TableRow>
             </TableHeader>
             <TableBody>
-                {items.map((p) => {
-                    const isActive = p.id === activeId;
-                    const lastTest = testResult[p.id];
+                {groupProfiles(items).map((group) => {
+                    const pool = (poolIds && poolIds.length > 0) ? poolIds : (activeId ? [activeId] : []);
+                    const groupHasActive = !!activeId && group.profiles.some((p) => p.id === activeId);
+
+                    const sorted = [...group.profiles].sort((a, b) => {
+                        const aPrimary = a.id === activeId ? 1 : 0;
+                        const bPrimary = b.id === activeId ? 1 : 0;
+                        if (aPrimary !== bPrimary) return bPrimary - aPrimary;
+                        const aInPool = pool.includes(a.id) ? 1 : 0;
+                        const bInPool = pool.includes(b.id) ? 1 : 0;
+                        if (aInPool !== bInPool) return bInPool - aInPool;
+                        return b.updatedAt - a.updatedAt;
+                    });
+
+                    const groupKey = `${group.kind}|${group.gateway}|${group.model}`;
+                    const isAdding = addingGroup === groupKey;
+
                     return (
-                        <TableRow key={p.id} className={isActive ? 'bg-emerald-50/40' : undefined}>
+                        <TableRow key={groupKey} className={groupHasActive ? 'bg-emerald-50/40' : undefined}>
                             <TableCell className="font-medium">
                                 <div className="flex items-center gap-2">
-                                    <span>{p.name}</span>
-                                    {isActive && <Badge variant="default">Active</Badge>}
+                                    <span className="font-mono text-xs text-muted-foreground">{group.kind}</span>
+                                    <span>{group.model}</span>
+                                    {groupHasActive && <Badge variant="default">当前生效</Badge>}
+                                    <Badge variant="secondary">{sorted.length} keys</Badge>
                                 </div>
                             </TableCell>
-                            <TableCell className="font-mono text-xs text-muted-foreground max-w-[260px] truncate">{p.gateway}</TableCell>
-                            <TableCell className="font-mono text-xs">{p.model}</TableCell>
-                            <TableCell className="font-mono text-xs">{p.keyMasked}</TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground max-w-[260px] truncate">{group.gateway}</TableCell>
+                            <TableCell className="font-mono text-xs">{group.model}</TableCell>
+                            <TableCell className="space-y-2">
+                                {sorted.map((p) => {
+                                    const isPrimary = p.id === activeId;
+                                    const isInPool = pool.includes(p.id);
+                                    const lastTest = testResult[p.id];
+                                    return (
+                                        <div key={p.id} className="rounded border border-border/60 p-2 bg-background/50">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-mono text-xs">{p.keyMasked}</span>
+                                                        {isPrimary && <Badge variant="default">Active</Badge>}
+                                                        {!isPrimary && isInPool && <Badge variant="secondary">Pool</Badge>}
+                                                        {p.disabled && <Badge variant="outline">Disabled</Badge>}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground truncate" title={p.name}>{p.name}</div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 flex-shrink-0">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => testProfile(p.id)}
+                                                        disabled={testingId === p.id}
+                                                        className="gap-1"
+                                                    >
+                                                        {testingId === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                                        测试
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => setAsActive(p)}
+                                                        disabled={loading || isPrimary || p.disabled}
+                                                        className="gap-1"
+                                                    >
+                                                        <CheckCircle2 className="h-4 w-4" />
+                                                        设为主Key
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => togglePoolMember(p)}
+                                                        disabled={loading || p.disabled}
+                                                        className="gap-1"
+                                                    >
+                                                        {isInPool ? <XCircle className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                                                        {isInPool ? '停用' : '启用'}
+                                                    </Button>
+                                                    <Button variant="ghost" size="sm" onClick={() => openEdit(p)} className="gap-1">
+                                                        <Pencil className="h-4 w-4" />
+                                                        编辑
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => removeProfile(p)}
+                                                        disabled={loading}
+                                                        className="gap-1 text-red-600 hover:text-red-700"
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
+                                                        删除
+                                                    </Button>
+                                                </div>
+                                            </div>
+
+                                            {lastTest && (
+                                                <div className={`mt-2 text-xs flex items-center gap-1 ${lastTest.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                    {lastTest.ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                                                    <span className="truncate max-w-[520px]">{lastTest.message}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+
+                                {isAdding ? (
+                                    <div className="rounded border border-dashed border-border p-3 bg-background/50 space-y-2">
+                                        <div className="text-xs text-muted-foreground">粘贴 API Key（支持多行，每行一把）</div>
+                                        <Textarea
+                                            value={addingKeysText}
+                                            onChange={(e) => setAddingKeysText(e.target.value)}
+                                            placeholder="每行一把 key，例如：sk-..."
+                                            className="min-h-[96px]"
+                                        />
+                                        <div className="flex gap-2">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => {
+                                                    setAddingGroup(null);
+                                                    setAddingKeysText('');
+                                                }}
+                                            >
+                                                取消
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                onClick={() => addKeysToGroup(group, activeId, poolIds)}
+                                                disabled={loading}
+                                                className="gap-1"
+                                            >
+                                                <Plus className="h-4 w-4" />
+                                                添加 Key
+                                            </Button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                            setAddingGroup(groupKey);
+                                            setAddingKeysText('');
+                                        }}
+                                        className="gap-1"
+                                    >
+                                        <Plus className="h-4 w-4" />
+                                        添加 Key
+                                    </Button>
+                                )}
+                            </TableCell>
                             <TableCell>
-                                {p.disabled ? <Badge variant="outline">Disabled</Badge> : <Badge variant="secondary">Enabled</Badge>}
+                                <div className="text-xs text-muted-foreground">此组 Key 共享网关/模型</div>
                             </TableCell>
                             <TableCell className="text-right">
-                                <div className="flex justify-end gap-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => testProfile(p.id)}
-                                        disabled={testingId === p.id}
-                                        className="gap-1"
-                                    >
-                                        {testingId === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                                        测试
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setAsActive(p)}
-                                        disabled={loading || isActive || p.disabled}
-                                        className="gap-1"
-                                    >
-                                        <CheckCircle2 className="h-4 w-4" />
-                                        生效
-                                    </Button>
-                                    <Button variant="ghost" size="sm" onClick={() => openEdit(p)} className="gap-1">
-                                        <Pencil className="h-4 w-4" />
-                                        编辑
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => removeProfile(p)}
-                                        disabled={loading || isActive}
-                                        className="gap-1 text-red-600 hover:text-red-700"
-                                    >
-                                        <Trash2 className="h-4 w-4" />
-                                        删除
-                                    </Button>
-                                </div>
-                                {lastTest && (
-                                    <div className={`mt-2 text-xs flex items-center gap-1 ${lastTest.ok ? 'text-emerald-700' : 'text-red-700'}`}>
-                                        {lastTest.ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-                                        <span className="truncate max-w-[520px]">{lastTest.message}</span>
-                                    </div>
-                                )}
+                                <div className="text-xs text-muted-foreground">—</div>
                             </TableCell>
                         </TableRow>
                     );
@@ -311,7 +544,7 @@ export function ModelProfilesPage() {
             <div className="flex items-start justify-between gap-4">
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">系统设置（模型连接）</h2>
-                    <p className="text-muted-foreground">全站共用：管理员在服务端加密存储，并选择当前生效的 Brain/Painter 配置</p>
+                    <p className="text-muted-foreground">全站共用：管理员在服务端加密存储；支持把多个配置加入 Key 池用于高并发（主Key=池中第一个）</p>
                 </div>
                 <div className="flex gap-2">
                     <Button variant="outline" onClick={loadProfiles} disabled={loading} className="gap-2">
@@ -349,7 +582,7 @@ export function ModelProfilesPage() {
                     </Button>
                 </CardHeader>
                 <CardContent>
-                    {brainProfiles.length === 0 ? <div className="text-sm text-muted-foreground">暂无 Brain 配置</div> : renderTable(brainProfiles, active.BRAIN)}
+                    {brainProfiles.length === 0 ? <div className="text-sm text-muted-foreground">暂无 Brain 配置</div> : renderTable(brainProfiles, active.BRAIN, activePool.BRAIN)}
                 </CardContent>
             </Card>
 
@@ -364,7 +597,7 @@ export function ModelProfilesPage() {
                     </Button>
                 </CardHeader>
                 <CardContent>
-                    {painterProfiles.length === 0 ? <div className="text-sm text-muted-foreground">暂无 Painter 配置</div> : renderTable(painterProfiles, active.PAINTER)}
+                    {painterProfiles.length === 0 ? <div className="text-sm text-muted-foreground">暂无 Painter 配置</div> : renderTable(painterProfiles, active.PAINTER, activePool.PAINTER)}
                 </CardContent>
             </Card>
 

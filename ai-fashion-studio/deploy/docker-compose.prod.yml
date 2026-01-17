@@ -15,7 +15,7 @@ services:
     image: ai-fashion-server-migrator:latest
     restart: on-failure
     env_file:
-      - "./deploy/.env.production"
+      - ".env.production"
     depends_on:
       - postgres
 
@@ -26,7 +26,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - "./deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "./Caddyfile:/etc/caddy/Caddyfile:ro"
       - "caddy_data:/data"
       - "caddy_config:/config"
     depends_on:
@@ -37,10 +37,10 @@ services:
     image: ai-fashion-server:latest
     restart: unless-stopped
     env_file:
-      - "./deploy/.env.production"
+      - ".env.production"
     volumes:
-      - "./server/data:/app/data"
-      - "./server/uploads:/app/uploads"
+      - "../server/data:/app/data"
+      - "../server/uploads:/app/uploads"
     depends_on:
       - postgres
     expose:

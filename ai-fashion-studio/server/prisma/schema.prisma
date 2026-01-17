@@ -27,6 +27,11 @@ enum CreditTransactionType {
   SPEND
 }
 
+enum BillingEventKind {
+  RESERVE
+  SETTLE
+}
+
 model User {
   id           String     @id @db.Uuid
   username     String     @unique
@@ -44,6 +49,7 @@ model User {
 
   tasks                Task[]
   creditTransactions   CreditTransaction[]
+  billingEvents        BillingEvent[]
   inviteCodesCreated   InviteCode[] @relation("InviteCreatedBy")
   inviteCodesUsed      InviteCode[] @relation("InviteUsedBy")
 
@@ -76,6 +82,7 @@ model Task {
   data         Json
 
   user User? @relation(fields: [userId], references: [id])
+  billingEvents BillingEvent[]
 
   @@index([createdAt(sort: Desc)])
   @@index([userId])
@@ -121,6 +128,27 @@ model CreditTransaction {
   @@index([createdAt(sort: Desc)])
   @@index([userId])
   @@map("credit_transactions")
+}
+
+model BillingEvent {
+  id        String           @id @db.Uuid
+  taskId    String           @map("task_id") @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  kind      BillingEventKind
+  eventKey  String           @map("event_key")
+  amount    Int
+  reason    String
+  meta      Json?
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, eventKey])
+  @@index([createdAt(sort: Desc)])
+  @@index([taskId])
+  @@index([userId])
+  @@map("billing_events")
 }
 
 // 兼容遗留：/admin/users 这套“面板用户”与 Auth 用户模型不同，不参与登录鉴权

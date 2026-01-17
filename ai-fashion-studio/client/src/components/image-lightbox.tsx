@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { X, Download, ChevronLeft, ChevronRight, RefreshCcw, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { downloadImageWithOptionalTaskWatermark } from '@/lib/watermark';
 
 export interface LightboxItem {
     id: string; // Shot ID
@@ -19,6 +20,8 @@ interface ImageLightboxProps {
     onOpenChange: (open: boolean) => void;
     onRegenerate?: (id: string) => void;
     isRegenerating?: boolean;
+    watermarkTaskId?: string;
+    regenerateLabel?: string;
 }
 
 export function ImageLightbox({
@@ -27,9 +30,17 @@ export function ImageLightbox({
     open,
     onOpenChange,
     onRegenerate,
-    isRegenerating = false
+    isRegenerating = false,
+    watermarkTaskId,
+    regenerateLabel
 }: ImageLightboxProps) {
     const [currentIndex, setCurrentIndex] = useState(initialIndex);
+
+    useEffect(() => {
+        if (!open) return;
+        const next = Math.max(0, Math.min(images.length - 1, initialIndex));
+        setCurrentIndex(next);
+    }, [open, initialIndex, images.length]);
 
     const handlePrevious = () => {
         setCurrentIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
@@ -42,34 +53,25 @@ export function ImageLightbox({
     const handleDownload = async () => {
         const image = images[currentIndex];
         try {
-            const response = await fetch(image.url);
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `shot-${image.id}.jpg`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+            await downloadImageWithOptionalTaskWatermark({
+                taskId: watermarkTaskId || '',
+                url: image.url,
+                filename: `shot-${image.id}.jpg`,
+            });
         } catch (error) {
             console.error('Download failed:', error);
+            alert('下载失败：图片跨域限制或网络错误。若需水印下载，请确保 COS 已开启 CORS。');
         }
     };
 
     const handleDownloadAll = async () => {
         for (let i = 0; i < images.length; i++) {
             try {
-                const response = await fetch(images[i].url);
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `shot-${images[i].id}.jpg`;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
+                await downloadImageWithOptionalTaskWatermark({
+                    taskId: watermarkTaskId || '',
+                    url: images[i].url,
+                    filename: `shot-${images[i].id}.jpg`,
+                });
 
                 // Add delay between downloads
                 if (i < images.length - 1) {
@@ -166,7 +168,7 @@ export function ImageLightbox({
                                 ) : (
                                     <RefreshCcw className="h-4 w-4 mr-2" />
                                 )}
-                                不满意? 重绘
+                                {regenerateLabel || '不满意? 重绘'}
                             </Button>
                         )}
 

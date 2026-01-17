@@ -6,10 +6,13 @@ import * as crypto from 'crypto';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { z } from 'zod';
+import sharp from 'sharp';
 import { ModelConfig } from '../common/model-config';
 import { TranslationService } from '../translation/translation.service';
 import { CosService } from '../cos/cos.service';  // ✅ 导入 CosService
 import { dumpModelResponseIfEnabled } from '../common/model-response-dump';
+import { dumpPromptText } from '../common/prompt-dump';
+import { logLargeText } from '../common/log-large-text';
 
 // Define image metadata schema
 const ImageMetadataSchema = z.object({
@@ -18,6 +21,304 @@ const ImageMetadataSchema = z.object({
     description: z.string(),
     focus_area: z.string().optional()
 });
+
+const EcommerceColorManagementSchema = z
+    .object({
+        white_balance_kelvin: z.number().optional(),
+        tint: z.string().optional(),
+        color_anchor: z.enum(['gray_card', 'color_checker', 'none']).optional(),
+        constraints: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+    })
+    .passthrough();
+
+const EcommercePlatformComplianceSchema = z
+    .object({
+        target_platform: z.string().optional(),
+        product_fill_ratio: z
+            .object({
+                min: z.number().optional(),
+                max: z.number().optional(),
+            })
+            .passthrough()
+            .optional(),
+        product_is_hero: z.boolean().optional(),
+        allow_lifestyle: z.boolean().optional(),
+        no_watermark: z.boolean().optional(),
+        no_extra_items: z.boolean().optional(),
+        background_policy: z.string().optional(),
+        cropping_rules: z.array(z.string()).optional(),
+        forbidden: z.array(z.string()).optional(),
+    })
+    .passthrough();
+
+// /learn: Style JSON block (English values) for re-use in direct generation prompts.
+// Keep schema strict at the top-level (required keys), but flexible inside nested objects.
+const StyleLearnV1Schema = z
+    .object({
+        schema: z.literal('afs_style_v1'),
+        name: z.string().trim().min(1),
+        description: z.string().trim().min(1),
+        lighting: z.object({}).passthrough(),
+        camera: z.object({}).passthrough(),
+        composition: z.object({}).passthrough(),
+        scene: z.object({}).passthrough(),
+        color_grading: z.object({}).passthrough(),
+        quality: z.object({}).passthrough(),
+        negative_constraints: z.array(z.string()).optional(),
+    })
+    .passthrough();
+
+const PoseLearnV1Schema = z
+    .object({
+        schema: z.literal('afs_pose_v1'),
+        name: z.string().trim().min(1),
+        description: z.string().trim().min(1),
+        framing: z.object({}).passthrough(),
+        pose: z.object({}).passthrough(),
+        must_keep_visible: z.array(z.string()).optional(),
+        occlusion_no_go: z.array(z.string()).optional(),
+        constraints: z.array(z.string()).optional(),
+    })
+    .passthrough();
+
+function normalizeStyleLearnV1(input: any): z.infer<typeof StyleLearnV1Schema> {
+    const src: any = input && typeof input === 'object' ? input : {};
+    const name =
+        String(src?.name || '').trim() ||
+        `Auto Style ${new Date().toLocaleDateString('en-US')}`;
+    const description =
+        String(src?.description || '').trim() ||
+        String(src?.vibe || '').trim() ||
+        'Learned fashion photography style.';
+
+    const lightingObj = (() => {
+        const v = src?.lighting;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        const summary = String(v || '').trim() || 'Physically plausible studio/daylight setup.';
+        return { summary };
+    })();
+
+    const cameraObj = (() => {
+        const v = src?.camera;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        const summary = String(v || '').trim() || 'Commercial fashion photo lens + DOF.';
+        return { summary };
+    })();
+
+    const compositionObj = (() => {
+        const v = src?.composition;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        return { summary: 'Clean fashion composition, subject-centered, readable garment silhouette.' };
+    })();
+
+    const sceneObj = (() => {
+        const v = src?.scene;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        const summary = String(v || '').trim() || 'Minimal commercial set / location context.';
+        return { summary };
+    })();
+
+    const gradingObj = (() => {
+        const v = src?.color_grading ?? src?.grading;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        const summary = String(v || '').trim() || 'Neutral-to-stylized commercial color grading.';
+        return { summary };
+    })();
+
+    const qualityObj = (() => {
+        const v = src?.quality;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        const texture = String(src?.texture || '').trim();
+        return {
+            realism: 'photorealistic',
+            texture_detail: texture || 'high',
+            notes: 'High detail, natural skin and fabric micro-texture.'
+        };
+    })();
+
+    const negative = (() => {
+        const v = src?.negative_constraints;
+        if (Array.isArray(v) && v.length) return v.map((x) => String(x).trim()).filter(Boolean);
+        return [
+            'No text overlays, captions, watermarks, or UI elements.',
+            'No collage, no pasted reference backgrounds.',
+            'No cartoon/CGI/plastic look; keep photorealistic skin and fabric.',
+        ];
+    })();
+
+    const normalized: any = {
+        schema: 'afs_style_v1',
+        name,
+        description,
+        lighting: lightingObj,
+        camera: cameraObj,
+        composition: compositionObj,
+        scene: sceneObj,
+        color_grading: gradingObj,
+        quality: qualityObj,
+        negative_constraints: negative,
+    };
+
+    const parsed = StyleLearnV1Schema.safeParse(normalized);
+    if (parsed.success) return parsed.data;
+    // last resort: return the normalized object (should be rare)
+    return normalized as any;
+}
+
+function normalizePoseLearnV1(input: any): z.infer<typeof PoseLearnV1Schema> {
+    const src: any = input && typeof input === 'object' ? input : {};
+    const name =
+        String(src?.name || '').trim() ||
+        `Auto Pose ${new Date().toLocaleDateString('en-US')}`;
+    const description =
+        String(src?.description || '').trim() ||
+        String(src?.summary || '').trim() ||
+        'Learned fashion pose.';
+
+    const framingObj = (() => {
+        const v = src?.framing;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        return {
+            shot_type: 'full body',
+            camera_angle: 'eye level',
+            lens_hint: '50mm',
+        };
+    })();
+
+    const poseObj = (() => {
+        const v = src?.pose;
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+        const constraints = Array.isArray(src?.pose_constraints) ? src.pose_constraints : [];
+        const summary = String(src?.summary || '').trim();
+        return {
+            summary: summary || 'Natural fashion pose with clear garment visibility.',
+            constraints: constraints.map((x: any) => String(x).trim()).filter(Boolean),
+        };
+    })();
+
+    const mustKeep = (() => {
+        const v = src?.must_keep_visible;
+        if (Array.isArray(v) && v.length) return v.map((x) => String(x).trim()).filter(Boolean);
+        return ['garment front panel', 'face (if present)'];
+    })();
+
+    const occlusionNoGo = (() => {
+        const v = src?.occlusion_no_go;
+        if (Array.isArray(v) && v.length) return v.map((x) => String(x).trim()).filter(Boolean);
+        return [
+            'Do not cover the garment front panel with hands or props.',
+            'No props blocking torso/waist.',
+        ];
+    })();
+
+    const constraints = (() => {
+        const v = src?.constraints;
+        if (Array.isArray(v) && v.length) return v.map((x) => String(x).trim()).filter(Boolean);
+        const legacy = Array.isArray(src?.pose_constraints) ? src.pose_constraints : [];
+        return legacy.map((x: any) => String(x).trim()).filter(Boolean);
+    })();
+
+    const normalized: any = {
+        schema: 'afs_pose_v1',
+        name,
+        description,
+        framing: framingObj,
+        pose: poseObj,
+        must_keep_visible: mustKeep,
+        occlusion_no_go: occlusionNoGo,
+        constraints,
+    };
+
+    const parsed = PoseLearnV1Schema.safeParse(normalized);
+    if (parsed.success) return parsed.data;
+    return normalized as any;
+}
+
+type BrainEncodedImage =
+    | { kind: 'fileData'; fileUri: string; mimeType: string }
+    | { kind: 'inlineData'; data: string; mimeType: string };
+
+const EcommerceExportSpecSchema = z
+    .object({
+        aspect_ratio: z.string().optional(),
+        resolution_px: z.string().optional(),
+        format: z.string().optional(),
+        watermark: z.enum(['none', 'allowed']).optional(),
+    })
+    .passthrough();
+
+const EcommerceShotPurposeSchema = z.preprocess((value) => {
+    if (value === null || value === undefined) return value;
+
+    // Some models may emit an array or a combined string; normalize best-effort for reliability.
+    const raw =
+        Array.isArray(value) && typeof value[0] === 'string'
+            ? value[0]
+            : typeof value === 'string'
+                ? value
+                : '';
+
+    const normalized = raw
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, '_');
+
+    const firstToken = normalized.split(/[|/,]+/)[0]?.trim();
+    const v = firstToken || normalized;
+
+    if (!v) return undefined;
+
+    // Chinese shortcuts
+    if (v.includes('主图') || v.includes('封面') || v.includes('首图')) return 'main_listing';
+    if (v.includes('细节') || v.includes('特写')) return 'detail';
+    if (v.includes('背面') || v === '背') return 'back';
+    if (v.includes('侧面') || v === '侧') return 'side';
+    if (v.includes('纹理') || v.includes('材质') || v.includes('面料')) return 'texture';
+    if (v.includes('场景') || v.includes('生活') || v.includes('氛围')) return 'lifestyle';
+    if (v.includes('尺码') || v.includes('标签') || v.includes('洗标')) return 'size_tag';
+    if (v.includes('包装') || v.includes('吊牌') || v.includes('外箱')) return 'packaging';
+
+    // English synonyms
+    if (['main', 'hero', 'cover', 'listing', 'primary', 'main_image', 'mainimage'].includes(v)) return 'main_listing';
+    if (['detail', 'closeup', 'close_up', 'macro'].includes(v)) return 'detail';
+    if (['back', 'rear', 'reverse'].includes(v)) return 'back';
+    if (['side', 'profile'].includes(v)) return 'side';
+    if (['texture', 'fabric', 'material'].includes(v)) return 'texture';
+    if (['lifestyle', 'scene', 'context'].includes(v)) return 'lifestyle';
+    if (['size_tag', 'size', 'tag', 'label', 'care_label'].includes(v)) return 'size_tag';
+    if (['packaging', 'package', 'pack'].includes(v)) return 'packaging';
+    if (['other', 'misc'].includes(v)) return 'other';
+
+    // Fallback: keep pipeline running
+    return 'other';
+}, z.enum(['main_listing', 'detail', 'back', 'side', 'texture', 'lifestyle', 'size_tag', 'packaging', 'other']));
+
+const EcommerceShotSheetSchema = z
+    .object({
+        action_index: z.number().optional(),
+        big_scene: z.string().optional(),
+        scene_area: z.string().optional(),
+        scene_route_anchor: z.string().optional(),
+        shot_purpose: EcommerceShotPurposeSchema.optional(),
+        action_description: z.string().optional(),
+        action_logic: z.string().optional(),
+        core_show_points: z.array(z.string()).optional(),
+        occlusion_no_go: z.array(z.string()).optional(),
+        background_detail: z.string().optional(),
+        model_spec: z.any().optional(),
+        lighting_plan: z.any().optional(),
+        composition: z.any().optional(),
+        depth_of_field: z.string().optional(),
+        color_management: EcommerceColorManagementSchema.optional(),
+        platform_compliance: EcommercePlatformComplianceSchema.optional(),
+        postprocess_rules: z.array(z.string()).optional(),
+        export_spec: EcommerceExportSpecSchema.optional(),
+        filename_suggestion: z.string().optional(),
+        reference_requirements: z.any().optional(),
+        universal_requirements: z.any().optional(),
+    })
+    .passthrough();
 
 // Define the expected Output Schema from Brain
 const ShotSchema = z.object({
@@ -30,11 +331,20 @@ const ShotSchema = z.object({
     prompt: z.string().optional(), // API returns 'prompt', fallback to prompt_en
     camera_angle: z.string().optional(),
     lighting: z.string().optional(),
+    sheet: EcommerceShotSheetSchema.optional(),
 }).refine(data => data.prompt || data.prompt_en, {
     message: "Either 'prompt' or 'prompt_en' must be provided"
 });
 
 export const BrainPlanSchema = z.object({
+    version: z.string().optional(),
+    shooting_theme: z.string().optional(),
+    big_scene: z.string().optional(),
+    scene_route_plan: z.string().optional(),
+    shooting_goal: z.string().optional(),
+    color_management: EcommerceColorManagementSchema.optional(),
+    platform_compliance: EcommercePlatformComplianceSchema.optional(),
+    output_spec: EcommerceExportSpecSchema.optional(),
     image_analysis: z.array(ImageMetadataSchema).optional(), // NEW: Analyzed uploaded images
     visual_analysis: z.object({
         category: z.string(),
@@ -95,6 +405,7 @@ export class BrainService {
     private logger = new Logger(BrainService.name);
     private systemPrompt: string;
     private openai: OpenAI;
+    private keyRr = 0;
 
     constructor(
         private translation: TranslationService,
@@ -372,10 +683,24 @@ export class BrainService {
      * 重要约束（业务决定）：
      * - 发送给模型的图片一律使用 URL（COS 链接优先），禁止服务器转 base64（inline_data）上传。
      */
-    private async encodeImageForBrain(filePath: string): Promise<{
-        url: string;
-        mimeType: string;
-    }> {
+    private toBrainImagePart(encoded: BrainEncodedImage): any {
+        if (encoded.kind === 'inlineData') {
+            return {
+                inlineData: {
+                    data: encoded.data,
+                    mimeType: encoded.mimeType,
+                },
+            };
+        }
+        return {
+            fileData: {
+                fileUri: encoded.fileUri,
+                mimeType: encoded.mimeType,
+            },
+        };
+    }
+
+    private async encodeImageForBrain(filePath: string): Promise<BrainEncodedImage> {
         const input = (filePath ?? '').trim();
         if (!input) {
             throw new Error('图片路径为空');
@@ -386,7 +711,9 @@ export class BrainService {
             const useDirectURL = process.env.USE_DIRECT_IMAGE_URL !== 'false'; // 默认启用
 
             // COS URL：可选用万象做缩放/压缩（仍然是 URL，不走 base64）
-            if (useDirectURL && this.cosService.isValidCosUrl(input)) {
+            const brainCiEnabled = String(process.env.BRAIN_CI_ENABLED || 'true').trim().toLowerCase() !== 'false';
+
+            if (useDirectURL && brainCiEnabled && this.cosService.isValidCosUrl(input)) {
                 try {
                     const urlObj = new URL(input);
                     const key = urlObj.pathname.substring(1);
@@ -401,7 +728,8 @@ export class BrainService {
                     });
 
                     return {
-                        url: optimizedUrl,
+                        kind: 'fileData',
+                        fileUri: optimizedUrl,
                         mimeType: this.guessMimeTypeFromPathOrHeader(input),
                     };
                 } catch (error) {
@@ -410,7 +738,8 @@ export class BrainService {
             }
 
             return {
-                url: input,
+                kind: 'fileData',
+                fileUri: input,
                 mimeType: this.guessMimeTypeFromPathOrHeader(input),
             };
         }
@@ -419,8 +748,32 @@ export class BrainService {
         if (!(await fs.pathExists(input))) {
             throw new Error(`图片文件不存在: ${input}`);
         }
+
+        // 生产环境：仍然强制走 COS URL，避免 inlineData 造成带宽/内存浪费与日志风险。
         if (!this.cosService.isEnabled()) {
-            throw new Error('COS未配置：禁止服务器把图片转Base64发给模型；请启用COS或改为前端直传COS URL');
+            const allowInline =
+                String(process.env.ALLOW_BRAIN_INLINE_DATA || '').trim().toLowerCase() === 'true'
+                || String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production';
+
+            if (!allowInline) {
+                throw new Error('COS未配置：生产环境禁止服务器把图片转Base64发给模型；请启用COS或改为前端直传COS URL');
+            }
+
+            // 开发/测试兜底：本地图片 -> inlineData（压缩到合理大小）
+            const maxWidth = Number(process.env.BRAIN_INLINE_MAX_WIDTH || 1536);
+            const quality = Number(process.env.BRAIN_INLINE_QUALITY || 82);
+
+            const buf = await sharp(input)
+                .rotate()
+                .resize({ width: maxWidth, withoutEnlargement: true })
+                .jpeg({ quality, mozjpeg: true })
+                .toBuffer();
+
+            return {
+                kind: 'inlineData',
+                data: buf.toString('base64'),
+                mimeType: 'image/jpeg',
+            };
         }
 
         const ext = path.extname(input) || '.jpg';
@@ -428,7 +781,8 @@ export class BrainService {
         await this.cosService.uploadFile(key, input);
 
         return {
-            url: this.cosService.getImageUrl(key),
+            kind: 'fileData',
+            fileUri: this.cosService.getImageUrl(key),
             mimeType: this.guessMimeTypeFromPathOrHeader(input),
         };
     }
@@ -460,8 +814,8 @@ export class BrainService {
     ): Promise<BrainResult> {
 
         // MOCK MODE
-        const activeKey = config?.brainKey || config?.apiKey;
-        const shouldMock = process.env.MOCK_BRAIN === 'true' && !activeKey;
+        const keyPool = this.getBrainKeyPool(config);
+        const shouldMock = process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
 
         if (shouldMock) {
             this.logger.warn('USING MOCK BRAIN RESPONSE');
@@ -495,7 +849,8 @@ export class BrainService {
             baseUrl = baseUrl.replace(/\/$/, "") + '/v1beta';
         }
 
-        const endpoint = `${baseUrl}/models/${model}:generateContent?key=${activeKey}`;
+        const buildEndpoint = (key: string) =>
+            `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
         // Build content parts for Google Native format
         // Construct user prompt with all provided parameters
@@ -541,13 +896,8 @@ export class BrainService {
             try {
                 const encoded = await this.encodeImageForBrain(imgPath);
 
-                contentParts.push({
-                    fileData: {
-                        fileUri: encoded.url,
-                        mimeType: encoded.mimeType,
-                    },
-                });
-                this.logger.log(`🌐 Garment image (fileData): ${encoded.url}`);
+                contentParts.push(this.toBrainImagePart(encoded));
+                this.logger.log(`🌐 Garment image (${encoded.kind}): ${encoded.kind === 'fileData' ? encoded.fileUri : '[inlineData]'}`);
             } catch (e) {
                 this.logger.error(`Failed to encode image ${imgPath}`, e);
             }
@@ -560,13 +910,8 @@ export class BrainService {
                 try {
                     const encoded = await this.encodeImageForBrain(refPath);
 
-                    contentParts.push({
-                        fileData: {
-                            fileUri: encoded.url,
-                            mimeType: encoded.mimeType,
-                        },
-                    });
-                    this.logger.log(`🌐 Style ref (fileData): ${encoded.url}`);
+                    contentParts.push(this.toBrainImagePart(encoded));
+                    this.logger.log(`🌐 Style ref (${encoded.kind}): ${encoded.kind === 'fileData' ? encoded.fileUri : '[inlineData]'}`);
                 } catch (e) {
                     this.logger.error(`Failed to read style reference ${refPath}`, e);
                 }
@@ -580,13 +925,8 @@ export class BrainService {
                 try {
                     const encoded = await this.encodeImageForBrain(facePath);
 
-                    contentParts.push({
-                        fileData: {
-                            fileUri: encoded.url,
-                            mimeType: encoded.mimeType,
-                        },
-                    });
-                    this.logger.log(`🌐 Face ref (fileData): ${encoded.url}`);
+                    contentParts.push(this.toBrainImagePart(encoded));
+                    this.logger.log(`🌐 Face ref (${encoded.kind}): ${encoded.kind === 'fileData' ? encoded.fileUri : '[inlineData]'}`);
                 } catch (e) {
                     this.logger.error(`Failed to read face reference ${facePath}`, e);
                 }
@@ -614,13 +954,40 @@ export class BrainService {
 
         try {
             this.logger.log(`🚀 Calling Brain API with model: ${model}`);
-            const safeEndpoint = activeKey ? endpoint.replace(activeKey, 'sk-***') : endpoint;
-            this.logger.log(`📤 Request endpoint: ${safeEndpoint}`);
-            this.logger.log(`📤 Request body preview (first 500 chars): ${JSON.stringify(requestBody).substring(0, 500)}`);
+            // endpoint/key 脱敏由 postWithKeyFailover 统一处理
 
-            const response = await this.fetchWithRetry(endpoint, requestBody, {
-                headers: { 'Content-Type': 'application/json' },
-                timeout: 300000 // 5min
+            // 日志脱敏：requestBody 可能包含 inline_data(base64) 或长文本，禁止直接 JSON.stringify 打印
+            const summarizeRequest = () => {
+                try {
+                    const contents = Array.isArray((requestBody as any)?.contents) ? (requestBody as any).contents : [];
+                    const parts = Array.isArray(contents?.[0]?.parts) ? contents[0].parts : [];
+                    const hasInline = parts.some((p: any) => !!p?.inline_data || !!p?.inlineData);
+                    const hasFileData = parts.some((p: any) => !!p?.fileData);
+                    const textLen = parts
+                        .map((p: any) => (typeof p?.text === 'string' ? p.text.length : 0))
+                        .reduce((a: number, b: number) => a + b, 0);
+                    return {
+                        parts: parts.length,
+                        textLen,
+                        hasInline,
+                        hasFileData,
+                        responseMimeType: (requestBody as any)?.generationConfig?.responseMimeType,
+                    };
+                } catch {
+                    return { parts: 0 };
+                }
+            };
+            this.logger.log(`📤 Request summary: ${JSON.stringify(summarizeRequest())}`);
+
+            const response = await this.postWithKeyFailover({
+                keyPool,
+                buildEndpoint,
+                requestBody,
+                axiosConfig: {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 300000 // 5min
+                },
+                logLabel: 'plan_task',
             });
 
             await dumpModelResponseIfEnabled({
@@ -673,17 +1040,54 @@ export class BrainService {
             } catch (e) {
                 this.logger.error(`❌ JSON Parse Failed!`);
                 this.logger.error(`Parse error: ${e.message}`);
-                this.logger.error(`Content that failed to parse: ${cleanContent.substring(0, 1000)}`);
+                // 避免把大段内容打到日志（且可能包含长 base64 段）
+                const preview = cleanContent.length > 600 ? `${cleanContent.slice(0, 600)}…` : cleanContent;
+                this.logger.error(`Content preview that failed to parse: ${preview}`);
                 throw new Error(`Failed to parse AI response: ${e.message}`);
             }
 
             this.logger.log(`🔍 Validating JSON against schema...`);
-            const parseResult = BrainPlanSchema.safeParse(json);
+
+            // Some Gemini variants occasionally return an array of plan objects (e.g. per reference image).
+            // Accept both formats and normalize to a single plan object.
+            let candidateJson: unknown = json;
+            if (Array.isArray(candidateJson)) {
+                // 1) Prefer the first element that matches the expected plan schema
+                for (const item of candidateJson) {
+                    const itemResult = BrainPlanSchema.safeParse(item);
+                    if (itemResult.success) {
+                        candidateJson = itemResult.data;
+                        break;
+                    }
+                }
+
+                // 2) If it's actually an array of shots, wrap it
+                if (Array.isArray(candidateJson)) {
+                    const shotsResult = z.array(ShotSchema).safeParse(candidateJson);
+                    if (shotsResult.success) {
+                        candidateJson = { shots: shotsResult.data };
+                    }
+                }
+            }
+
+            const parseResult = BrainPlanSchema.safeParse(candidateJson);
             if (!parseResult.success) {
                 this.logger.error('❌ ========== JSON VALIDATION FAILED ==========');
-                this.logger.error(`Validation errors: ${JSON.stringify(parseResult.error.flatten().fieldErrors)}`);
+                const flattened = parseResult.error.flatten();
+                this.logger.error(
+                    `Validation errors: ${JSON.stringify({
+                        formErrors: flattened.formErrors,
+                        fieldErrors: flattened.fieldErrors,
+                        issues: parseResult.error.issues,
+                    })}`,
+                );
                 this.logger.error('============================================');
-                throw new Error(`Brain API returned invalid JSON structure: ${JSON.stringify(parseResult.error.flatten().fieldErrors)}`);
+                throw new Error(
+                    `Brain API returned invalid JSON structure: ${JSON.stringify({
+                        formErrors: flattened.formErrors,
+                        fieldErrors: flattened.fieldErrors,
+                    })}`,
+                );
             }
             this.logger.log(`✅ JSON validation passed`);
             const plan = parseResult.data;
@@ -765,8 +1169,8 @@ export class BrainService {
         thinkingProcess?: string;
         audit?: { userPromptText: string; heroImageUrl: string; referenceImageUrls: string[] };
     }> {
-        const activeKey = config?.brainKey || config?.apiKey;
-        const shouldMock = process.env.MOCK_BRAIN === 'true' && !activeKey;
+        const keyPool = this.getBrainKeyPool(config);
+        const shouldMock = process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
 
         if (shouldMock) {
             this.logger.warn('USING MOCK STORYBOARD RESPONSE');
@@ -802,7 +1206,8 @@ export class BrainService {
             baseUrl = baseUrl.replace(/\/$/, "") + '/v1beta';
         }
 
-        const endpoint = `${baseUrl}/models/${model}:generateContent?key=${activeKey}`;
+        const buildEndpoint = (key: string) =>
+            `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
         let userPrompt = `shot_count=${options.shot_count}`;
         if (options.requirements && options.requirements.trim()) {
@@ -835,23 +1240,13 @@ export class BrainService {
 
         const contentParts: any[] = [{ text: userPrompt }];
         const encodedHero = await this.encodeImageForBrain(heroImageUrl);
-        contentParts.push({
-            fileData: {
-                fileUri: encodedHero.url,
-                mimeType: encodedHero.mimeType,
-            },
-        });
+        contentParts.push(this.toBrainImagePart(encodedHero));
 
         // 业务要求：Planner 需要同时看 Hero + 参考图（衣服/细节/模特/风格）做 visual_audit
         const refs = (referenceImageUrls || []).filter(Boolean);
         for (const ref of refs) {
             const encoded = await this.encodeImageForBrain(ref);
-            contentParts.push({
-                fileData: {
-                    fileUri: encoded.url,
-                    mimeType: encoded.mimeType,
-                },
-            });
+            contentParts.push(this.toBrainImagePart(encoded));
         }
 
         const requestBody = {
@@ -873,9 +1268,15 @@ export class BrainService {
 
         try {
             this.logger.log(`🎬 Calling Brain storyboard planner... model=${model}`);
-            const response = await this.fetchWithRetry(endpoint, requestBody, {
-                headers: { 'Content-Type': 'application/json' },
-                timeout: 300000,
+            const response = await this.postWithKeyFailover({
+                keyPool,
+                buildEndpoint,
+                requestBody,
+                axiosConfig: {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 300000,
+                },
+                logLabel: 'plan_storyboard',
             });
 
             await dumpModelResponseIfEnabled({
@@ -930,20 +1331,65 @@ export class BrainService {
         }
     }
 
-    /**
-     * Helper to retry requests on 429/5xx errors with exponential backoff
-     */
-    private async fetchWithRetry(url: string, payload: any, config: any, retries = 3, backoff = 2000): Promise<any> {
+    private getBrainKeyPool(config?: ModelConfig): string[] {
+        const pool = Array.isArray(config?.brainKeys) ? config?.brainKeys : [];
+        const single = (config?.brainKey || (config as any)?.apiKey || '').trim();
+        const keys = pool.length > 0 ? pool : (single ? [single] : []);
+        return Array.from(new Set(keys.map((k) => String(k).trim()).filter(Boolean)));
+    }
+
+    private pickKeyPair(keys: string[]): string[] {
+        if (!keys.length) return [];
+        const idx = this.keyRr % keys.length;
+        this.keyRr = (this.keyRr + 1) % keys.length;
+        const primary = keys[idx];
+        const secondary = keys.length > 1 ? keys[(idx + 1) % keys.length] : undefined;
+        return secondary && secondary !== primary ? [primary, secondary] : [primary];
+    }
+
+    private isFailoverableError(error: any): boolean {
+        const status = Number(error?.response?.status);
+        if (Number.isFinite(status)) {
+            if (status === 429) return true;
+            if (status >= 500) return true;
+            return false;
+        }
+
+        const code = String(error?.code || '').toUpperCase();
+        if (code === 'ECONNABORTED' || code === 'ETIMEDOUT' || code === 'ECONNRESET') return true;
+
+        const msg = String(error?.message || '').toLowerCase();
+        if (msg.includes('timeout') || msg.includes('timed out')) return true;
+        if (msg.includes('aborted') || msg.includes('canceled')) return true;
+
+        return false;
+    }
+
+    private async postWithKeyFailover(params: {
+        keyPool: string[];
+        buildEndpoint: (key: string) => string;
+        requestBody: any;
+        axiosConfig: any;
+        logLabel: string;
+    }): Promise<any> {
+        const { keyPool, buildEndpoint, requestBody, axiosConfig, logLabel } = params;
+        const keys = this.pickKeyPair(keyPool);
+        if (keys.length === 0) {
+            throw new Error('Brain密钥未配置，请在设置页面配置Brain Key');
+        }
+
+        const safeEndpoint = buildEndpoint('***');
+        this.logger.log(`📤 [${logLabel}] Endpoint: ${safeEndpoint}`);
+        this.logger.log(`🔑 [${logLabel}] Key pool size: ${keyPool.length}`);
+
         try {
-            return await axios.post(url, payload, config);
-        } catch (error: any) {
-            const status = error.response?.status;
-            if (retries > 0 && (status === 429 || status >= 500)) {
-                this.logger.warn(`API Request failed with ${status}. Retrying in ${backoff / 1000}s... (${retries} retries left)`);
-                await new Promise(r => setTimeout(r, backoff));
-                return this.fetchWithRetry(url, payload, config, retries - 1, backoff * 2);
+            return await axios.post(buildEndpoint(keys[0]), requestBody, axiosConfig);
+        } catch (e: any) {
+            if (keys.length < 2 || !this.isFailoverableError(e)) {
+                throw e;
             }
-            throw error;
+            this.logger.warn(`⚠️ [${logLabel}] 上游失败（可切换 key 重试 1 次），正在切换到下一把 key...`);
+            return axios.post(buildEndpoint(keys[1]), requestBody, axiosConfig);
         }
     }
 
@@ -957,8 +1403,8 @@ export class BrainService {
     ): Promise<{ fixPromptEn: string }> {
 
         // MOCK MODE
-        const activeKey = config?.brainKey || config?.apiKey;
-        const shouldMock = process.env.MOCK_BRAIN === 'true' && !activeKey;
+        const keyPool = this.getBrainKeyPool(config);
+        const shouldMock = process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
 
         if (shouldMock) {
             this.logger.warn('USING MOCK FIX TRANSLATION');
@@ -975,7 +1421,8 @@ export class BrainService {
 
         const activeGateway = config?.brainGateway || config?.gatewayUrl || 'https://api.vectorengine.ai/v1';
         const baseUrl = activeGateway.replace('/v1', '/v1beta');
-        const endpoint = `${baseUrl}/models/${model}:generateContent?key=${activeKey}`;
+        const buildEndpoint = (key: string) =>
+            `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
         const systemInstruction = `You are a professional fashion photography prompt engineer.
 Your task is to modify an existing image generation prompt based on user feedback.
@@ -1010,16 +1457,18 @@ Please output the modified English prompt that incorporates the user's requested
         try {
             this.logger.log(`Calling Brain for fix translation...`);
 
-            const response = await axios.post(
-                endpoint,
+            const response = await this.postWithKeyFailover({
+                keyPool,
+                buildEndpoint,
                 requestBody,
-                {
+                axiosConfig: {
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     timeout: 30000
-                }
-            );
+                },
+                logLabel: 'translate_fix_feedback',
+            });
 
             const candidate = response.data.candidates?.[0];
             if (!candidate) {
@@ -1045,26 +1494,44 @@ Please output the modified English prompt that incorporates the user's requested
             };
         }
     }
-    async analyzeStyleImage(imagePaths: string | string[], config?: ModelConfig): Promise<any> {
+    async analyzeStyleImage(
+        imagePaths: string | string[],
+        config?: ModelConfig,
+        trace?: { traceId?: string }
+    ): Promise<any> {
         // Normalize to array
         const paths = Array.isArray(imagePaths) ? imagePaths : [imagePaths];
 
         // MOCK MODE
-        const activeKey = config?.brainKey || config?.apiKey;
-        const shouldMock = process.env.MOCK_BRAIN === 'true' && !activeKey;
+        const keyPool = this.getBrainKeyPool(config);
+        const shouldMock = process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
 
         if (shouldMock) {
             this.logger.warn('USING MOCK STYLE ANALYSIS');
-            return {
-                name: "Rainy Cyberpunk Noir",
-                description: "A moody, high-contrast urban aesthetic combining neon lights with wet textures.",
-                lighting: "Soft, diffused natural light (Golden Hour)",
-                scene: "Outdoor urban street with rainy atmosphere",
-                grading: "Cyberpunk teal and orange, high contrast",
-                texture: "Reflective wet pavement, synthetic fabrics",
-                vibe: "Melancholic, cinematic, solitary",
-                camera: "35mm focal length, f/2.0 aperture, slight vignetting"
-            };
+            return normalizeStyleLearnV1({
+                schema: 'afs_style_v1',
+                name: 'Rainy Cyberpunk Noir',
+                description: 'Moody high-contrast neon-on-wet-streets fashion photo style.',
+                lighting: {
+                    environment: 'night / mixed',
+                    key_light: { type: 'neon practicals', direction: 'side/back', softness: 'hard', color_temperature_k: 3200 },
+                    fill_light: { type: 'ambient bounce', softness: 'soft', intensity: 'low' },
+                    rim_light: { type: 'streetlight rim', direction: 'back', intensity: 'medium' },
+                    shadow_character: 'high contrast, crisp shadows with soft ambient lift',
+                },
+                camera: {
+                    shot_type: 'three-quarter',
+                    camera_height: 'eye level',
+                    camera_angle: 'three-quarter',
+                    lens_focal_length_mm: 35,
+                    aperture: 'f/2.0',
+                    focus: 'sharp subject, shallow DOF bokeh highlights',
+                },
+                composition: { orientation: 'portrait', subject_placement: 'centered', crop_notes: 'keep full garment silhouette readable' },
+                scene: { location: 'urban street', background: 'wet pavement, neon signs', time_of_day: 'night', weather: 'rainy' },
+                color_grading: { white_balance: 'cool shadows / warm highlights', palette: ['teal', 'magenta', 'amber'], contrast: 'high', saturation: 'medium-high' },
+                quality: { realism: 'photorealistic', texture_detail: 'high', grain: 'subtle' },
+            });
         }
 
         const model = config?.brainModel || 'gemini-2.0-flash-exp'; // Use a fast vision model
@@ -1078,43 +1545,107 @@ Please output the modified English prompt that incorporates the user's requested
             baseUrl = baseUrl.replace(/\/$/, "") + '/v1beta';
         }
 
-        const endpoint = `${baseUrl}/models/${model}:generateContent?key=${activeKey}`;
+        const buildEndpoint = (key: string) =>
+            `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
-        const prompt = `Act as a world-class Fashion Photographer and Art Director.
-Analyze this set of images to reverse-engineer their **shared aesthetic formula** ("The Common DNA").
-Ignore outliers if any, focus on the consistent visual theme across the series.
+        const prompt = `You are a world-class fashion photographer and art director.
+Task: learn a reusable PHOTOGRAPHIC STYLE blueprint from the input image set.
+If multiple images are provided, infer their shared "common DNA" and ignore outliers.
+Focus ONLY on photography: lighting physics, scene/set design, composition, camera, color grading, and post-processing.
+DO NOT describe garments, brands, logos, specific model identity, or any unique objects that would leak content.
+Be concrete and specific, but keep it generic enough to be reusable as a style template.
+All string values MUST be in English.
+Return ONLY valid JSON (no markdown, no commentary) that conforms EXACTLY to this schema.
+You MUST fill every field with a best-guess; never return null or empty strings.
 
-First, give this style a creative, evocative **Name** (max 4-5 words, e.g. "Cyberpunk Neon Noir", "Vintage French Film").
-Second, write a compelling **Description** (1-2 sentences) summarizing the mood and visual impact.
-Third, break it down into these 6 critical dimensions.
-Be extremely specific with technical terminology (e.g. "Rembrandt lighting", "85mm lens", "Teal & Orange grading").
-
-Output ONLY a JSON object with these keys:
 {
-  "name": "Creative Style Name",
-  "description": "Compelling summary of the aesthetic",
-  "lighting": "Detailed description of light quality, direction, and color temperature",
-  "scene": "Environment, time of day, weather, and spatial context",
-  "grading": "Color palette, saturation, contrast, and film look",
-  "texture": "Key surface details, fabric qualities, and resolution feel",
-  "vibe": "Emotional atmosphere, model attitude, and energy",
-  "camera": "Lens focal length, depth of field (bokeh), and camera angle"
+  "schema": "afs_style_v1",
+  "name": "Evocative style name (max 5 words)",
+  "description": "1-2 sentences describing mood + commercial intent",
+  "lighting": {
+    "environment": "studio | daylight | mixed | night",
+    "key_light": {
+      "type": "softbox/window/sun/practical",
+      "direction": "front/side/back + angle (e.g. 45 deg side-back)",
+      "height": "low/eye/high",
+      "softness": "soft/medium/hard",
+      "color_temperature_k": 5600,
+      "intensity": "low/medium/high",
+      "notes": "what the key is doing"
+    },
+    "fill_light": { "type": "bounce/negative_fill/none", "intensity": "none/low/medium/high", "notes": "..." },
+    "rim_light": { "type": "none/practical/strip", "direction": "back/side", "intensity": "none/low/medium/high", "notes": "..." },
+    "shadow_character": "soft wrap / crisp / high-contrast, physically plausible",
+    "specular_character": "matte / glossy highlights, highlight roll-off notes",
+    "notes": "any important lighting constraints"
+  },
+  "camera": {
+    "shot_type": "full body | three-quarter | half body | close-up",
+    "camera_height": "low | eye level | high",
+    "camera_angle": "front | three-quarter | profile",
+    "lens_focal_length_mm": 85,
+    "aperture": "f/2.8",
+    "focus": "sharpness + depth of field notes",
+    "capture_notes": "ISO/shutter or motion/flash notes if implied",
+    "shutter_speed": "e.g. 1/250",
+    "iso": "e.g. 100"
+  },
+  "composition": {
+    "orientation": "portrait | landscape | square",
+    "subject_placement": "centered | rule of thirds | negative space",
+    "negative_space": "low | medium | high",
+    "horizon_line": "low | mid | high | not visible",
+    "foreground_background_layers": "describe depth layering and separation",
+    "crop_notes": "cropping and silhouette readability notes"
+  },
+  "scene": {
+    "location": "studio / street / indoor / outdoor etc.",
+    "set_design": "key set design cues (seamless paper, concrete wall, skate park, etc)",
+    "background": "background materials + textures + visual noise level",
+    "floor": "floor material/texture if implied",
+    "props": ["list props as generic types only"],
+    "time_of_day": "morning / noon / golden hour / night etc.",
+    "weather": "clear / cloudy / rainy etc.",
+    "atmosphere": "haze/smoke/dust/rain droplets/none",
+    "notes": "any additional scene rules (clean vs gritty, bokeh highlights, depth cues)"
+  },
+  "color_grading": {
+    "white_balance": "neutral / warm / cool (+ nuance)",
+    "palette": ["#RRGGBB", "#RRGGBB", "#RRGGBB"],
+    "contrast": "low/medium/high (+ curve notes)",
+    "saturation": "low/medium/high",
+    "film_emulation": "film stock / digital look if implied",
+    "grain": "none/subtle/noticeable",
+    "notes": "what the grade is doing (neutral midtones, highlight roll-off, etc)"
+  },
+  "quality": {
+    "realism": "photorealistic",
+    "texture_detail": "low/medium/high",
+    "skin_retouch": "none/subtle/beauty",
+    "sharpness": "natural/crisp",
+    "notes": "any additional rendering/retouch constraints"
+  },
+  "negative_constraints": [
+    "No text overlays/watermarks.",
+    "No pasted backgrounds/collage.",
+    "No CGI/plastic look."
+  ]
 }`;
 
-        const contentParts: any[] = [{ text: prompt }];
+        const imageParts: any[] = [];
+        // Encode all images once to avoid duplicate uploads on retry.
+        for (const path of paths) {
+            const encoded = await this.encodeImageForBrain(path);
+            imageParts.push(this.toBrainImagePart(encoded));
+            this.logger.log(`🌐 Using image reference (${encoded.kind}): ${encoded.kind === 'fileData' ? encoded.fileUri : '[inlineData]'}`);
+        }
 
-        try {
-            // Encode all images using Gemini-native format
-            for (const path of paths) {
-                const encoded = await this.encodeImageForBrain(path);
-                contentParts.push({
-                    fileData: {
-                        fileUri: encoded.url,
-                        mimeType: encoded.mimeType,
-                    },
-                });
-                this.logger.log(`🌐 Using URL reference (fileData): ${encoded.url}`);
-            }
+        const maxAttempts = 2;
+        let lastError: any;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+            const contentParts: any[] = [{ text: prompt }, ...imageParts];
 
             const requestBody = {
                 contents: [{ role: 'user', parts: contentParts }],
@@ -1124,14 +1655,101 @@ Output ONLY a JSON object with these keys:
                 }
             };
 
+            // Dump exact outgoing prompt (no base64; only text + file URIs / inlineData placeholder)
+            try {
+                const refId = String(trace?.traceId || '').trim() || undefined;
+                const lines: string[] = [];
+                lines.push('[BRAIN_REQUEST] analyze_style_image');
+                lines.push('[TEXT]');
+                lines.push(prompt);
+                lines.push('');
+                lines.push('[IMAGE_PARTS]');
+                for (const p of contentParts) {
+                    if (typeof p?.text === 'string') continue;
+                    if (p?.fileData?.fileUri) {
+                        lines.push(`- fileData: ${String(p.fileData.fileUri)}`);
+                        continue;
+                    }
+                    if (p?.inlineData?.data) {
+                        const mime = String(p?.inlineData?.mimeType || '');
+                        const len = String(p?.inlineData?.data || '').length;
+                        lines.push(`- inlineData: mime=${mime || 'unknown'} base64Len=${len}`);
+                        continue;
+                    }
+                    lines.push(`- part: ${JSON.stringify(Object.keys(p || {}))}`);
+                }
+                lines.push('');
+                lines.push('[GENERATION_CONFIG]');
+                lines.push(JSON.stringify(requestBody.generationConfig));
+
+                const dumped = await dumpPromptText({
+                    kind: 'BRAIN',
+                    stage: 'analyze_style_image_request',
+                    refId,
+                    content: lines.join('\n'),
+                });
+
+                logLargeText({
+                    log: (m) => this.logger.log(m),
+                    header: `🧾 Brain Style Learn REQUEST (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+                    text: lines.join('\n'),
+                    chunkSize: 3200,
+                    maxLen: 120_000,
+                });
+            } catch {
+                // ignore dump failures
+            }
+
             this.logger.log(`🔍 Analyzing style image with ${model}...`);
-            const response = await this.fetchWithRetry(endpoint, requestBody, {
-                headers: { 'Content-Type': 'application/json' },
-                timeout: 60000
+            const response = await this.postWithKeyFailover({
+                keyPool,
+                buildEndpoint,
+                requestBody,
+                axiosConfig: {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 300000
+                },
+                logLabel: 'analyze_style_image',
             });
 
-            const rawContent = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (!rawContent) throw new Error('No content in analysis response');
+            await dumpModelResponseIfEnabled({
+                kind: 'BRAIN',
+                stage: 'analyze_style_image',
+                model,
+                responseData: response.data,
+            });
+
+            const candidate = response.data.candidates?.[0];
+            if (!candidate) throw new Error('No candidates in analysis response');
+
+            let rawContent = '';
+            for (const part of candidate.content?.parts || []) {
+                if (part?.thought) continue;
+                if (typeof part?.text === 'string') rawContent += part.text;
+            }
+            rawContent = String(rawContent || '').trim();
+            if (!rawContent) throw new Error('No text content in analysis response');
+
+            // Dump raw response text (what model returned as text parts)
+            try {
+                const refId = String(trace?.traceId || '').trim() || undefined;
+                const dumped = await dumpPromptText({
+                    kind: 'BRAIN',
+                    stage: 'analyze_style_image_response_text',
+                    refId,
+                    content: rawContent,
+                });
+
+                logLargeText({
+                    log: (m) => this.logger.log(m),
+                    header: `🧾 Brain Style Learn RESPONSE_TEXT (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+                    text: rawContent,
+                    chunkSize: 3200,
+                    maxLen: 120_000,
+                });
+            } catch {
+                // ignore
+            }
 
             const cleanContent = this.extractLastCompleteJSON(rawContent);
             const json = JSON.parse(cleanContent);
@@ -1146,19 +1764,279 @@ Output ONLY a JSON object with these keys:
             // Decision: Keep English for precision, as these are "Tech Specs". 
             // If user wants to see them, we can translate on read.
 
-            return json;
+            const normalized = normalizeStyleLearnV1(json);
 
-        } catch (error: any) {
-            this.logger.error('Style Analysis Failed', error.message);
-            // Fallback to empty analysis rather than blocking
-            return {
-                lighting: "N/A",
-                scene: "N/A",
-                grading: "N/A",
-                texture: "N/A",
-                vibe: "N/A",
-                camera: "N/A"
-            };
+            // Dump final parsed JSON (what we store as promptBlock)
+            try {
+                const refId = String(trace?.traceId || '').trim() || undefined;
+                const dumped = await dumpPromptText({
+                    kind: 'BRAIN',
+                    stage: 'analyze_style_image_response_json',
+                    refId,
+                    content: JSON.stringify(normalized, null, 2),
+                });
+
+                logLargeText({
+                    log: (m) => this.logger.log(m),
+                    header: `🧾 Brain Style Learn RESPONSE_JSON (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+                    text: JSON.stringify(normalized, null, 2),
+                    chunkSize: 3200,
+                    maxLen: 120_000,
+                });
+            } catch {
+                // ignore
+            }
+
+            return normalized;
+            } catch (error: any) {
+                lastError = error;
+                this.logger.error(
+                    `Style Analysis Failed (attempt ${attempt}/${maxAttempts})`,
+                    error?.response?.data || error?.message || error
+                );
+                if (attempt < maxAttempts) {
+                    this.logger.warn('🔁 Retrying style analysis once...');
+                }
+            }
         }
+
+        throw lastError || new Error('Style Analysis Failed');
+    }
+
+    /**
+     * AI 姿势学习：分析姿势参考图，输出可复用的 pose prompt block（JSON -> server 格式化后落库）。
+     * 约束：只负责“人体姿势/构图/遮挡禁区”，不描述衣服细节。
+     */
+    async analyzePoseImage(
+        imagePath: string,
+        config?: ModelConfig,
+        trace?: { traceId?: string }
+    ): Promise<any> {
+        const input = String(imagePath || '').trim();
+        if (!input) {
+            throw new Error('imagePath 不能为空');
+        }
+
+        const keyPool = this.getBrainKeyPool(config);
+        const shouldMock = process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
+        if (shouldMock) {
+            this.logger.warn('USING MOCK POSE ANALYSIS');
+            return normalizePoseLearnV1({
+                schema: 'afs_pose_v1',
+                name: 'Auto Pose 001',
+                description: 'A clean standing pose with slight contrapposto.',
+                framing: {
+                    shot_type: 'full body',
+                    camera_angle: 'eye level',
+                    camera_height: 'eye level',
+                    lens_hint: '50mm',
+                    crop_notes: 'Keep full silhouette visible.',
+                },
+                pose: {
+                    head: 'Head slightly turned to camera-left.',
+                    gaze: 'Eyes to camera or slightly off-camera.',
+                    shoulders: 'Relaxed shoulders, chest open.',
+                    torso: 'Slight S-curve, natural posture.',
+                    arms_hands: 'One hand near hip, the other relaxed.',
+                    legs_feet: 'Weight on one leg, other leg slightly forward.',
+                },
+                must_keep_visible: ['garment front panel', 'face'],
+                occlusion_no_go: [
+                    'Do not cover the garment front panel with hands.',
+                    'No props blocking the torso.',
+                ],
+            });
+        }
+
+        const model = config?.brainModel || 'gemini-2.0-flash-exp';
+        const activeGateway = config?.brainGateway || config?.gatewayUrl || 'https://api.vectorengine.ai/v1';
+
+        // Convert to v1beta for Google Native format
+        let baseUrl = activeGateway;
+        if (baseUrl.endsWith('/v1')) {
+            baseUrl = baseUrl.replace('/v1', '/v1beta');
+        } else if (!baseUrl.includes('/v1beta')) {
+            baseUrl = baseUrl.replace(/\/$/, "") + '/v1beta';
+        }
+
+        const buildEndpoint = (key: string) =>
+            `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+        const prompt = `You are a world-class fashion pose director.
+Task: learn a reusable POSE blueprint from the input image.
+Focus ONLY on human pose + framing. Do NOT describe garment details, fabric, patterns, logos, brand, or identity.
+All string values MUST be in English.
+Return ONLY valid JSON (no markdown, no commentary) that conforms EXACTLY to this schema.
+You MUST fill every field with a best-guess; never return null.
+
+{
+  "schema": "afs_pose_v1",
+  "name": "Short pose name (max 6 words)",
+  "description": "1 sentence, what this pose communicates",
+  "framing": {
+    "shot_type": "full body | three-quarter | half body | close-up",
+    "camera_angle": "eye level | low angle | high angle",
+    "camera_height": "low | eye level | high",
+    "lens_hint": "e.g. 35mm/50mm/85mm",
+    "crop_notes": "cropping notes"
+  },
+  "pose": {
+    "head": "head orientation",
+    "gaze": "gaze direction",
+    "shoulders": "shoulder line + rotation",
+    "torso": "torso angle + posture",
+    "hips": "hip rotation + stance",
+    "arms_hands": "arm positions + hand placement",
+    "legs_feet": "leg positions + foot direction",
+    "weight_distribution": "where the weight sits"
+  },
+  "must_keep_visible": [
+    "what must stay visible (e.g. garment front panel, face)"
+  ],
+  "occlusion_no_go": [
+    "what must NOT be occluded, one per line"
+  ],
+  "constraints": [
+    "extra constraints as short English bullets"
+  ]
+}`;
+
+        const encoded = await this.encodeImageForBrain(input);
+        const requestBody = {
+            contents: [
+                {
+                    role: 'user',
+                    parts: [
+                        { text: prompt },
+                        this.toBrainImagePart(encoded),
+                    ],
+                },
+            ],
+            generationConfig: {
+                temperature: 0.2,
+                responseMimeType: 'application/json',
+            },
+        };
+
+        const maxAttempts = 2;
+        let lastError: any;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+            // Dump outgoing prompt (no base64)
+            try {
+                const refId = String(trace?.traceId || '').trim() || undefined;
+                const lines: string[] = [];
+                lines.push('[BRAIN_REQUEST] analyze_pose_image');
+                lines.push('[TEXT]');
+                lines.push(prompt);
+                lines.push('');
+                lines.push('[IMAGE_PART]');
+                if (encoded.kind === 'fileData') {
+                    lines.push(`fileData: ${encoded.fileUri}`);
+                } else {
+                    lines.push(`inlineData: mime=${encoded.mimeType} base64Len=${encoded.data.length}`);
+                }
+                lines.push('');
+                lines.push('[GENERATION_CONFIG]');
+                lines.push(JSON.stringify(requestBody.generationConfig));
+                const dumped = await dumpPromptText({ kind: 'BRAIN', stage: 'analyze_pose_image_request', refId, content: lines.join('\n') });
+                logLargeText({
+                    log: (m) => this.logger.log(m),
+                    header: `🧾 Brain Pose Learn REQUEST (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+                    text: lines.join('\n'),
+                    chunkSize: 3200,
+                    maxLen: 120_000,
+                });
+            } catch {
+                // ignore
+            }
+
+            const response = await this.postWithKeyFailover({
+                keyPool,
+                buildEndpoint,
+                requestBody,
+                axiosConfig: {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 300000,
+                },
+                logLabel: 'analyze_pose_image',
+            });
+
+            await dumpModelResponseIfEnabled({
+                kind: 'BRAIN',
+                stage: 'analyze_pose_image',
+                model,
+                responseData: response.data,
+            });
+
+            const candidate = response.data.candidates?.[0];
+            if (!candidate) throw new Error('No candidates in pose analysis response');
+
+            let rawContent = '';
+            for (const part of candidate.content?.parts || []) {
+                if (part?.thought) continue;
+                if (typeof part?.text === 'string') rawContent += part.text;
+            }
+            rawContent = String(rawContent || '').trim();
+            if (!rawContent) throw new Error('No text content in pose analysis response');
+
+            // Dump raw response text
+            try {
+                const refId = String(trace?.traceId || '').trim() || undefined;
+                const dumped = await dumpPromptText({
+                    kind: 'BRAIN',
+                    stage: 'analyze_pose_image_response_text',
+                    refId,
+                    content: rawContent,
+                });
+                logLargeText({
+                    log: (m) => this.logger.log(m),
+                    header: `🧾 Brain Pose Learn RESPONSE_TEXT (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+                    text: rawContent,
+                    chunkSize: 3200,
+                    maxLen: 120_000,
+                });
+            } catch {
+                // ignore
+            }
+
+            const cleanContent = this.extractLastCompleteJSON(rawContent);
+            const normalized = normalizePoseLearnV1(JSON.parse(cleanContent));
+
+            // Dump final parsed JSON (what we store as promptBlock)
+            try {
+                const refId = String(trace?.traceId || '').trim() || undefined;
+                const dumped = await dumpPromptText({
+                    kind: 'BRAIN',
+                    stage: 'analyze_pose_image_response_json',
+                    refId,
+                    content: JSON.stringify(normalized, null, 2),
+                });
+                logLargeText({
+                    log: (m) => this.logger.log(m),
+                    header: `🧾 Brain Pose Learn RESPONSE_JSON (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+                    text: JSON.stringify(normalized, null, 2),
+                    chunkSize: 3200,
+                    maxLen: 120_000,
+                });
+            } catch {
+                // ignore
+            }
+
+            return normalized;
+            } catch (e: any) {
+                lastError = e;
+                this.logger.error(
+                    `Pose Analysis Failed (attempt ${attempt}/${maxAttempts})`,
+                    e?.response?.data || e?.message || e
+                );
+                if (attempt < maxAttempts) {
+                    this.logger.warn('🔁 Retrying pose analysis once...');
+                }
+            }
+        }
+
+        throw lastError || new Error('Pose Analysis Failed');
     }
 }

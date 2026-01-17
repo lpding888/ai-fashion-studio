@@ -32,7 +32,8 @@ type ModelProfileStored = ModelProfilePublic & {
 
 type StoreFileV1 = {
   version: 1;
-  active: { BRAIN?: string; PAINTER?: string };
+  // Backward compatible: can be a single id or a pool of ids
+  active: { BRAIN?: string | string[]; PAINTER?: string | string[] };
   profiles: ModelProfileStored[];
 };
 
@@ -144,12 +145,24 @@ export class ModelProfileService {
   }
 
   async list(): Promise<{
-    active: StoreFileV1['active'];
+    // 为了不破坏现有前端：active 仍返回“单个主 ID”（池的第一个）
+    active: { BRAIN?: string; PAINTER?: string };
+    // 新增：返回 Key 池（用于多 Key 并发）
+    activePool: { BRAIN?: string[]; PAINTER?: string[] };
     profiles: ModelProfilePublic[];
   }> {
     const store = await this.readStore();
+    const poolBrain = this.normalizeActiveIds(store.active?.BRAIN);
+    const poolPainter = this.normalizeActiveIds(store.active?.PAINTER);
     return {
-      active: store.active,
+      active: {
+        BRAIN: poolBrain[0],
+        PAINTER: poolPainter[0],
+      },
+      activePool: {
+        BRAIN: poolBrain.length > 0 ? poolBrain : undefined,
+        PAINTER: poolPainter.length > 0 ? poolPainter : undefined,
+      },
       profiles: store.profiles.map(({ encryptedKey: _k, ...pub }) => pub),
     };
   }
@@ -255,12 +268,49 @@ export class ModelProfileService {
 
   async remove(id: string): Promise<void> {
     const store = await this.readStore();
-    if (store.active.BRAIN === id || store.active.PAINTER === id) {
-      throw new Error('不能删除当前生效的配置');
+    const target = store.profiles.find((p) => p.id === id);
+    if (!target) throw new Error('profile 不存在');
+
+    const kind = target.kind;
+
+    const pickReplacement = (preferredGateway: string, preferredModel: string) => {
+      const byGroup = store.profiles
+        .filter(
+          (p) =>
+            p.kind === kind &&
+            !p.disabled &&
+            p.id !== id &&
+            p.gateway === preferredGateway &&
+            p.model === preferredModel,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      if (byGroup.length > 0) return byGroup[0].id;
+
+      const any = store.profiles
+        .filter((p) => p.kind === kind && !p.disabled && p.id !== id)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      return any[0]?.id;
+    };
+
+    // 先从 activePool 移除，并在必要时自动挑一个替代主 Key，避免删除 Active 导致系统无可用 Key
+    const currentActive = this.normalizeActiveIds(store.active?.[kind]).filter((activeId) => {
+      const exists = store.profiles.some((p) => p.id === activeId && p.kind === kind && !p.disabled);
+      return exists;
+    });
+
+    const nextActive = currentActive.filter((activeId) => activeId !== id);
+    if (currentActive.includes(id) && nextActive.length === 0) {
+      const replacement = pickReplacement(target.gateway, target.model);
+      if (replacement) nextActive.push(replacement);
     }
-    const before = store.profiles.length;
+
+    if (nextActive.length > 0) {
+      store.active[kind] = nextActive;
+    } else {
+      delete store.active[kind];
+    }
+
     store.profiles = store.profiles.filter((p) => p.id !== id);
-    if (store.profiles.length === before) throw new Error('profile 不存在');
     await this.writeStore(store);
   }
 
@@ -274,9 +324,31 @@ export class ModelProfileService {
     if (!profile) throw new Error('profile 不存在或类型不匹配');
     if (profile.disabled) throw new Error('profile 已禁用');
 
-    store.active[kind] = id;
+    store.active[kind] = [id];
     profile.updatedAt = Date.now();
     profile.updatedBy = admin;
+    await this.writeStore(store);
+  }
+
+  async setActivePool(
+    kind: ModelProfileKind,
+    ids: string[],
+    admin: { id: string; username: string },
+  ) {
+    const store = await this.readStore();
+    const unique = Array.from(new Set((ids || []).map((v) => String(v).trim()).filter(Boolean)));
+    if (unique.length === 0) throw new Error('activePool 不能为空');
+
+    const profiles = unique.map((id) => store.profiles.find((p) => p.id === id && p.kind === kind));
+    if (profiles.some((p) => !p)) throw new Error('activePool 包含不存在或类型不匹配的 profileId');
+    if (profiles.some((p) => (p as any).disabled)) throw new Error('activePool 包含已禁用的 profile');
+
+    store.active[kind] = unique;
+    const now = Date.now();
+    for (const p of profiles as any[]) {
+      p.updatedAt = now;
+      p.updatedBy = admin;
+    }
     await this.writeStore(store);
   }
 
@@ -299,9 +371,30 @@ export class ModelProfileService {
 
   async getActiveRuntime(kind: ModelProfileKind): Promise<ModelProfileRuntime> {
     const store = await this.readStore();
-    const activeId = store.active[kind];
+    const ids = this.normalizeActiveIds(store.active?.[kind]);
+    const activeId = ids[0];
     if (!activeId) throw new Error(`未设置当前生效的 ${kind} 配置`);
     return this.getRuntimeById(activeId);
+  }
+
+  async getActiveRuntimePool(kind: ModelProfileKind): Promise<ModelProfileRuntime[]> {
+    const store = await this.readStore();
+    const ids = this.normalizeActiveIds(store.active?.[kind]);
+    if (ids.length === 0) throw new Error(`未设置当前生效的 ${kind} 配置`);
+    const runtimes: ModelProfileRuntime[] = [];
+    for (const id of ids) {
+      runtimes.push(await this.getRuntimeById(id));
+    }
+    return runtimes;
+  }
+
+  private normalizeActiveIds(value: unknown): string[] {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+      return Array.from(new Set(value.map((v) => String(v).trim()).filter(Boolean)));
+    }
+    const single = String(value).trim();
+    return single ? [single] : [];
   }
 
     private normalizeGatewayToV1beta(gateway: string) {
@@ -334,9 +427,10 @@ export class ModelProfileService {
     private buildTestPayload(kind: ModelProfileKind) {
         if (kind === 'PAINTER') {
             return {
-                contents: [{ role: 'user', parts: [{ text: 'Generate a simple studio product photo of a banana on white background.' }] }],
+                contents: [{ role: 'user', parts: [{ text: 'Generate a simple studio product photo of a banana on white background. Return IMAGE only.' }] }],
                 generationConfig: {
-                    responseModalities: ['TEXT', 'IMAGE'],
+                    // 图片模型测试：只要 IMAGE，避免网关/模型偏向返回 TEXT 导致“测试通过但无图”
+                    responseModalities: ['IMAGE'],
                     candidateCount: 1,
                     imageConfig: { imageSize: '1K', aspectRatio: '1:1' },
                 },

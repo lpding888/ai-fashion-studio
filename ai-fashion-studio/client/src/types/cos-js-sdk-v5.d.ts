@@ -14,8 +14,16 @@ declare module 'cos-js-sdk-v5' {
         [key: string]: any;
     }
 
+    interface HeadObjectOptions {
+        Bucket: string;
+        Region: string;
+        Key: string;
+        [key: string]: any;
+    }
+
     export default class COS {
         constructor(options: COSOptions);
         uploadFile(options: UploadFileOptions, callback: (err: Error | null, data: any) => void): void;
+        headObject(options: HeadObjectOptions, callback: (err: any, data: any) => void): void;
     }
 }

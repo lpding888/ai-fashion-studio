@@ -6,18 +6,44 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 
 @Controller('admin/mcp')
 export class McpController {
+    private readonly transports = new Map<string, SSEServerTransport>();
+
     constructor(private styleAgent: StyleAgent) { }
+
+    @Get('status')
+    async status() {
+        return {
+            success: true,
+            status: {
+                ...this.styleAgent.getStatus(),
+                activeSessions: this.transports.size,
+                sessionIds: Array.from(this.transports.keys()),
+            },
+        };
+    }
 
     @Get('sse')
     async handleSse(@Res() res: Response) {
         // Create a new transport for this connection
         // The endpoint "/api/mcp/messages" is where the client (Cursor/Gemini) sends POST messages
         const transport = new SSEServerTransport("/api/admin/mcp/messages", res);
+        this.transports.set(transport.sessionId, transport);
+        // Backward-compatible: remember the last active transport (useful for quick status)
+        this.styleAgent.transport = transport;
+        this.styleAgent.recordClientConnected();
 
         // Connect the shared server to this transport
         // Note: Ideally we want a new server instance per connection to avoid crossed wires 
         // if SDK keeps state. But for tools, it should be fine.
         await this.styleAgent.server.connect(transport);
+
+        transport.onclose = () => {
+            this.transports.delete(transport.sessionId);
+            if (this.styleAgent.transport === transport) {
+                // If this was the last active transport, clear the pointer.
+                this.styleAgent.transport = undefined;
+            }
+        };
 
         // The transport handles the response lifecycle (headers, keep-alive)
         // We just need to ensure NestJS doesn't close it prematurely?
@@ -25,7 +51,12 @@ export class McpController {
     }
 
     @Post('messages')
-    async handleMessages(@Req() req: Request, @Res() res: Response) {
+    async handleMessages(
+        @Req() req: Request,
+        @Res() res: Response,
+        @Query('sessionId') sessionId?: string,
+        @Body() body?: unknown,
+    ) {
         // This endpoint handles the POST messages from the client
         // We need to route this to the active transport?
         // Wait, SSEServerTransport logic is: 
@@ -56,12 +87,15 @@ export class McpController {
         // But for this step, let's look at `style-agent.ts`: I defined `public transport`.
         // I will use that for now (Single User Mode).
 
-        const transport = this.styleAgent.transport;
+        const transport =
+            (sessionId ? this.transports.get(sessionId) : undefined) ||
+            this.styleAgent.transport;
         if (!transport) {
             res.status(500).send("No active transport");
             return;
         }
 
-        await transport.handlePostMessage(req, res);
+        // NestJS bodyParser already consumed the request stream; provide parsed body to SDK to avoid raw-body failures.
+        await transport.handlePostMessage(req, res, body as any);
     }
 }

@@ -11,7 +11,8 @@ export function getImageUrl(path: string): string {
   if (path.startsWith('http://') || path.startsWith('https://')) {
     return path;
   }
+  const origin = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/+$/, '');
   // 移除开头的 ./ 但保留 uploads/
-  const cleanPath = path.replace(/^\.\//, '');
-  return `http://localhost:3002/${cleanPath}`;
+  const cleanPath = path.replace(/^\.\//, '').replace(/^\/+/, '');
+  return `${origin}/${cleanPath}`;
 }

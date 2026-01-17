@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '@/lib/api';
+import { BACKEND_ORIGIN } from '@/lib/api';
+import { withTencentCi } from '@/lib/image-ci';
+import { useAuth } from '@/hooks/use-auth';
 
 interface Task {
     id: string;
@@ -37,33 +40,94 @@ interface Task {
     createdAt: number;
     resultImages?: string[];
     brainPlan?: any;
+    heroImageUrl?: string;
+    gridImageUrl?: string;
+    heroShots?: Array<{
+        index: number;
+        status?: string;
+        imageUrl?: string;
+        selectedAttemptCreatedAt?: number;
+        attempts?: Array<{ createdAt: number; outputImageUrl?: string }>;
+    }>;
 }
 
 type ViewMode = 'grid' | 'list';
 type StatusFilter = 'all' | 'COMPLETED' | 'RENDERING' | 'FAILED' | 'AWAITING_APPROVAL';
+type ScopeFilter = 'all' | 'mine';
+
+const PAGE_SIZE = 30;
 
 export default function HistoryPage() {
+    const { isAdmin } = useAuth();
     const [tasks, setTasks] = useState<Task[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
     const [viewMode, setViewMode] = useState<ViewMode>('grid');
     const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
+    const [scope, setScope] = useState<ScopeFilter>('mine');
+    const [scopeManuallySet, setScopeManuallySet] = useState(false);
+    const [page, setPage] = useState(1);
+    const [total, setTotal] = useState(0);
+    const [totalPages, setTotalPages] = useState(1);
 
     useEffect(() => {
-        fetchTasks();
-    }, []);
+        // 非管理员没有“全部任务”视图；管理员默认看全部（但不覆盖用户手工选择）
+        if (scopeManuallySet) return;
+        setScope(isAdmin ? 'all' : 'mine');
+    }, [isAdmin, scopeManuallySet]);
 
-    const fetchTasks = async () => {
+    const fetchTasks = useCallback(async (opts?: { reset?: boolean; nextPage?: number }) => {
         try {
-            setLoading(true);
-            const res = await api.get('/tasks');
-            setTasks(res.data?.tasks || []);
+            const reset = !!opts?.reset;
+            const targetPage = opts?.nextPage ?? 1;
+            if (reset) {
+                setLoading(true);
+            } else {
+                setLoadingMore(true);
+            }
+
+            const res = await api.get('/tasks', {
+                params: { page: targetPage, limit: PAGE_SIZE, scope },
+            });
+            const nextTasks = (res.data?.tasks || []) as Task[];
+
+            setTotal(Number(res.data?.total || 0));
+            setTotalPages(Number(res.data?.totalPages || 1));
+            setPage(Number(res.data?.page || targetPage));
+
+            if (reset) {
+                setTasks(nextTasks);
+                setSelectedTasks(new Set());
+            } else {
+                // 去重追加（按 id）
+                setTasks((prev) => {
+                    const seen = new Set(prev.map((t) => t.id));
+                    const merged = [...prev];
+                    for (const t of nextTasks) {
+                        if (seen.has(t.id)) continue;
+                        seen.add(t.id);
+                        merged.push(t);
+                    }
+                    return merged;
+                });
+            }
         } catch (err) {
             console.error('Failed to fetch tasks:', err);
         } finally {
             setLoading(false);
+            setLoadingMore(false);
         }
+    }, [scope]);
+
+    useEffect(() => {
+        void fetchTasks({ reset: true });
+    }, [fetchTasks]);
+
+    const onChangeScope = (value: ScopeFilter) => {
+        setScopeManuallySet(true);
+        setScope(value);
     };
 
     const filteredTasks = tasks.filter(task => {
@@ -106,6 +170,29 @@ export default function HistoryPage() {
         setSelectedTasks(new Set());
     };
 
+    const pickHeroShotPreview = (shots: Task['heroShots']) => {
+        const first = (shots || []).sort((a, b) => (a?.index || 0) - (b?.index || 0))[0];
+        if (!first) return undefined;
+
+        if (first.selectedAttemptCreatedAt) {
+            const selected = (first.attempts || []).find((a) => a.createdAt === first.selectedAttemptCreatedAt && !!a.outputImageUrl);
+            if (selected?.outputImageUrl) return selected.outputImageUrl;
+        }
+
+        if (first.imageUrl) return first.imageUrl;
+        const latest = (first.attempts || []).filter((a) => !!a.outputImageUrl).sort((a, b) => b.createdAt - a.createdAt)[0];
+        return latest?.outputImageUrl;
+    };
+
+    const getPreviewImageUrl = (task: Task) => {
+        return task.heroImageUrl || task.gridImageUrl || pickHeroShotPreview(task.heroShots) || task.resultImages?.[0];
+    };
+
+    const toImgSrc = (pathOrUrl: string, ci?: { maxWidth: number; maxHeight: number }) => {
+        const raw = pathOrUrl.startsWith('http') ? pathOrUrl : `${BACKEND_ORIGIN}/${String(pathOrUrl).replace(/^\/+/, '')}`;
+        return ci ? withTencentCi(raw, ci) : raw;
+    };
+
     return (
         <div className="container py-8 max-w-screen-2xl min-h-screen">
             {/* Header */}
@@ -114,7 +201,7 @@ export default function HistoryPage() {
                     历史记录
                 </h1>
                 <p className="text-slate-500">
-                    查看您的所有创作历程
+                    查看任务历史（支持分页加载）
                 </p>
             </div>
 
@@ -146,6 +233,19 @@ export default function HistoryPage() {
                                 <SelectItem value="FAILED">失败</SelectItem>
                             </SelectContent>
                         </Select>
+
+                        {/* Scope Filter (Admin only) */}
+                        {isAdmin && (
+                            <Select value={scope} onValueChange={onChangeScope}>
+                                <SelectTrigger className="w-full md:w-[180px] h-10">
+                                    <SelectValue placeholder="范围" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">全部任务</SelectItem>
+                                    <SelectItem value="mine">我的任务</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        )}
 
                         {/* View Mode Toggle */}
                         <div className="flex gap-2">
@@ -185,7 +285,7 @@ export default function HistoryPage() {
 
             {/* Results Count */}
             <div className="mb-4 text-sm text-slate-500">
-                找到 {filteredTasks.length} 个任务
+                找到 {filteredTasks.length} 个任务（已加载 {tasks.length}/{total || tasks.length}）
             </div>
 
             {/* Loading */}
@@ -221,6 +321,7 @@ export default function HistoryPage() {
                                 const statusInfo = getStatusInfo(task.status);
                                 const StatusIcon = statusInfo.icon;
                                 const isSelected = selectedTasks.has(task.id);
+                                const preview = getPreviewImageUrl(task);
 
                                 return (
                                     <motion.div
@@ -237,11 +338,13 @@ export default function HistoryPage() {
                                             <CardContent className="p-0">
                                                 {/* Image Preview */}
                                                 <div className="relative h-48 bg-gradient-to-br from-slate-100 to-slate-200 overflow-hidden rounded-t-lg">
-                                                    {task.resultImages && task.resultImages.length > 0 ? (
+                                                    {preview ? (
                                                         <img
-                                                            src={task.resultImages[0]}
+                                                            src={toImgSrc(preview, { maxWidth: 480, maxHeight: 480 })}
                                                             alt="Task result"
                                                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                                            loading="lazy"
+                                                            decoding="async"
                                                         />
                                                     ) : (
                                                         <div className="flex items-center justify-center h-full text-slate-400">
@@ -326,6 +429,7 @@ export default function HistoryPage() {
                                 const statusInfo = getStatusInfo(task.status);
                                 const StatusIcon = statusInfo.icon;
                                 const isSelected = selectedTasks.has(task.id);
+                                const preview = getPreviewImageUrl(task);
 
                                 return (
                                     <Card
@@ -346,8 +450,14 @@ export default function HistoryPage() {
 
                                                 {/* Thumbnail */}
                                                 <div className="w-16 h-16 flex-shrink-0 rounded bg-slate-100 overflow-hidden">
-                                                    {task.resultImages?.[0] ? (
-                                                        <img src={task.resultImages[0]} alt="" className="w-full h-full object-cover" />
+                                                    {preview ? (
+                                                        <img
+                                                            src={toImgSrc(preview, { maxWidth: 160, maxHeight: 160 })}
+                                                            alt=""
+                                                            className="w-full h-full object-cover"
+                                                            loading="lazy"
+                                                            decoding="async"
+                                                        />
                                                     ) : (
                                                         <div className="w-full h-full flex items-center justify-center text-slate-400">
                                                             <Calendar className="h-6 w-6" />
@@ -389,6 +499,27 @@ export default function HistoryPage() {
                         </motion.div>
                     )}
                 </AnimatePresence>
+            )}
+
+            {/* Pagination */}
+            {!loading && tasks.length < (total || tasks.length) && (
+                <div className="flex items-center justify-center py-8">
+                    <Button
+                        variant="outline"
+                        className="min-w-[220px]"
+                        disabled={loadingMore || page >= totalPages}
+                        onClick={() => void fetchTasks({ reset: false, nextPage: page + 1 })}
+                    >
+                        {loadingMore ? (
+                            <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                加载中...
+                            </>
+                        ) : (
+                            '加载更多'
+                        )}
+                    </Button>
+                </div>
             )}
         </div>
     );
