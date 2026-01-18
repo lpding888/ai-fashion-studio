@@ -35,8 +35,8 @@ export function PresetCard(props: {
   return (
     <Card
       className={
-        "group overflow-hidden border transition-colors cursor-pointer " +
-        (selected ? "border-purple-500 ring-2 ring-purple-200" : "border-border hover:border-purple-300")
+        "group overflow-hidden border transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 active:scale-95 " +
+        (selected ? "border-purple-500 ring-2 ring-purple-200 shadow-purple-200/50" : "border-border hover:border-purple-300 hover:shadow-purple-100")
       }
       onClick={() => !editing && onToggle()}
       title={name}

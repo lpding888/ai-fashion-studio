@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { UploadCloud, Wand2, Loader2, X, UserRound } from "lucide-react";
+import { UploadCloud, Loader2, UserRound } from "lucide-react";
 
 import api from "@/lib/api";
 import {
@@ -25,8 +25,6 @@ import { useFacePresetStore } from "@/store/face-preset-store";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ImageLightbox, type LightboxItem } from "@/components/image-lightbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -34,6 +32,9 @@ import { QueueSidebar } from "@/components/learn/queue-sidebar";
 import { AssetLibrary } from "@/components/learn/asset-library";
 import { AdvancedSettings } from "@/components/learn/advanced-settings";
 import { toImgSrc } from "@/components/learn/learn-utils";
+import { GlassPanel } from "@/components/learn/glass-panel";
+import { FluidBackground } from "@/components/learn/layout/fluid-background";
+import { CreationStage } from "@/components/learn/creation-stage";
 import type { PromptSnippet, QueueItem, TaskApi } from "@/components/learn/types";
 import { cn } from "@/lib/utils";
 
@@ -58,29 +59,6 @@ function useObjectUrls(files: File[]) {
 
   return urls;
 }
-
-const STYLE_HINT_ACCENTS = [
-  {
-    pill: "bg-violet-100/80 text-violet-700 border-violet-200/60",
-    glow: "shadow-[0_0_18px_rgba(139,92,246,0.45)] ring-violet-300/60",
-  },
-  {
-    pill: "bg-rose-100/80 text-rose-700 border-rose-200/60",
-    glow: "shadow-[0_0_18px_rgba(244,63,94,0.45)] ring-rose-300/60",
-  },
-  {
-    pill: "bg-emerald-100/80 text-emerald-700 border-emerald-200/60",
-    glow: "shadow-[0_0_18px_rgba(16,185,129,0.45)] ring-emerald-300/60",
-  },
-  {
-    pill: "bg-amber-100/80 text-amber-700 border-amber-200/60",
-    glow: "shadow-[0_0_18px_rgba(245,158,11,0.45)] ring-amber-300/60",
-  },
-  {
-    pill: "bg-sky-100/80 text-sky-700 border-sky-200/60",
-    glow: "shadow-[0_0_18px_rgba(56,189,248,0.45)] ring-sky-300/60",
-  },
-] as const;
 
 function buildAutoStylePrompt(stylePresets: StylePreset[], styleId?: string | null) {
   if (!styleId) return "";
@@ -125,20 +103,15 @@ export function LearnGeneratePage() {
 
   const [garmentFiles, setGarmentFiles] = React.useState<File[]>([]);
   const garmentUrls = useObjectUrls(garmentFiles);
-  const [garmentDragOver, setGarmentDragOver] = React.useState(false);
-  const garmentDragCounterRef = React.useRef(0);
-
   // Dual prompt system: auto-filled style prompt + user custom prompt
   const [autoStylePrompt, setAutoStylePrompt] = React.useState<string>(""); // Auto-filled from style selection
-  const [autoPromptExpanded, setAutoPromptExpanded] = React.useState(false);
-  const [autoPromptGlow, setAutoPromptGlow] = React.useState(false);
-  const [autoPromptAccentIndex, setAutoPromptAccentIndex] = React.useState(0);
   const [userPrompt, setUserPrompt] = React.useState<string>(""); // User's custom additions
   const lastAutoStyleSignatureRef = React.useRef<string | null>(null);
   const [promptSnippets, setPromptSnippets] = React.useState<PromptSnippet[]>([]);
   const [promptSnippetsLoading, setPromptSnippetsLoading] = React.useState(false);
   const [promptSnippetsBusy, setPromptSnippetsBusy] = React.useState<"create" | "delete" | null>(null);
   const [selectedSnippetId, setSelectedSnippetId] = React.useState<string | null>(null);
+  const [snippetRemark, setSnippetRemark] = React.useState<string>("");
 
   const [resolution, setResolution] = React.useState<"1K" | "2K" | "4K">("2K");
   const [aspectRatio, setAspectRatio] = React.useState<"1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9">("3:4");
@@ -159,9 +132,13 @@ export function LearnGeneratePage() {
   const [lightboxRegenerating, setLightboxRegenerating] = React.useState(false);
   const [activeTaskId, setActiveTaskId] = React.useState<string | undefined>(undefined);
   const [chatMessage, setChatMessage] = React.useState<string>("");
+
+  // New Interactive States for Redesign
+  const [isFocused, setIsFocused] = React.useState(false);
+  const [backgroundVariant, setBackgroundVariant] = React.useState<"default" | "warm" | "cool" | "cyber">("default");
+
   // 口径对齐后端：Individual 1 张图=1；4K=4x
   const estimatedCreditsCost = resolution === "4K" ? 4 : 1;
-  const styleAccent = STYLE_HINT_ACCENTS[autoPromptAccentIndex % STYLE_HINT_ACCENTS.length];
   const activeStyleName =
     selectedStyleIds.length > 0
       ? String((stylePresetsAll || []).find((p) => p.id === selectedStyleIds[0])?.name || "").trim()
@@ -169,7 +146,6 @@ export function LearnGeneratePage() {
 
   const styleInputRef = React.useRef<HTMLInputElement>(null);
   const poseInputRef = React.useRef<HTMLInputElement>(null);
-  const garmentInputRef = React.useRef<HTMLInputElement>(null);
 
   const facePresetsAll = useFacePresetStore((s) => s.presets);
   const fetchFacePresets = useFacePresetStore((s) => s.fetchPresets);
@@ -231,15 +207,18 @@ export function LearnGeneratePage() {
     const base = buildAutoStylePrompt(stylePresetsAll || [], id);
     setAutoStylePrompt(base);
     lastAutoStyleSignatureRef.current = signature;
-    setAutoPromptAccentIndex((prev) => (prev + 1) % STYLE_HINT_ACCENTS.length);
-    setAutoPromptGlow(true);
   }, [selectedStyleIds, stylePresetsAll]);
 
   React.useEffect(() => {
-    if (!autoPromptGlow) return;
-    const timer = setTimeout(() => setAutoPromptGlow(false), 1200);
-    return () => clearTimeout(timer);
-  }, [autoPromptGlow]);
+    if (selectedStyleIds.length > 0) {
+      const id = selectedStyleIds[0];
+      const variants = ["default", "warm", "cool", "cyber"] as const;
+      const index = id.charCodeAt(0) % variants.length;
+      setBackgroundVariant(variants[index]);
+      return;
+    }
+    setBackgroundVariant("default");
+  }, [selectedStyleIds]);
 
   const pollOne = React.useCallback(async (taskId: string) => {
     try {
@@ -427,31 +406,6 @@ export function LearnGeneratePage() {
     }
   };
 
-  const onGarmentDragEnter = (e: React.DragEvent) => {
-    e.preventDefault();
-    garmentDragCounterRef.current += 1;
-    setGarmentDragOver(true);
-  };
-
-  const onGarmentDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    garmentDragCounterRef.current = Math.max(0, garmentDragCounterRef.current - 1);
-    if (garmentDragCounterRef.current === 0) setGarmentDragOver(false);
-  };
-
-  const onGarmentDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-  };
-
-  const onGarmentDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    garmentDragCounterRef.current = 0;
-    setGarmentDragOver(false);
-    const files = Array.from(e.dataTransfer?.files || []);
-    addGarmentFiles(files);
-  };
-
   const addGarmentFiles = (incoming: File[]) => {
     const images = incoming.filter((f) => f.type.startsWith("image/"));
     if (!images.length) return;
@@ -470,7 +424,7 @@ export function LearnGeneratePage() {
     });
   };
 
-  const savePromptSnippet = async () => {
+  const savePromptSnippet = async (nameOverride?: string) => {
     const text = userPrompt.trim();
     if (!text) {
       alert("请先填写用户补充内容");
@@ -478,7 +432,8 @@ export function LearnGeneratePage() {
     }
     setPromptSnippetsBusy("create");
     try {
-      const name = text.slice(0, 24).replace(/\s+/g, " ");
+      const trimmedName = String(nameOverride || "").trim();
+      const name = trimmedName || text.slice(0, 24).replace(/\s+/g, " ");
       const created = await createPromptSnippet({
         text,
         ...(name ? { name } : {}),
@@ -489,6 +444,7 @@ export function LearnGeneratePage() {
       } else {
         await loadPromptSnippets();
       }
+      setSnippetRemark("");
       flashNotice("已保存到云端模板");
     } catch (e: any) {
       console.error(e);
@@ -505,6 +461,7 @@ export function LearnGeneratePage() {
       await deletePromptSnippet(id);
       setPromptSnippets((prev) => prev.filter((p) => p.id !== id));
       if (selectedSnippetId === id) setSelectedSnippetId(null);
+      setSnippetRemark("");
       flashNotice("已删除模板");
     } catch (e: any) {
       console.error(e);
@@ -670,328 +627,154 @@ export function LearnGeneratePage() {
     );
   }
 
+  const activeFace = selectedFaceIds.length > 0
+    ? (facePresetsAll || []).find(p => p.id === selectedFaceIds[0])
+    : null;
+
   return (
-    // Mobile Drawer logic can be added later, for now focused on the desktop structure as primary.
-    // Using a fixed height container to allow internal scrolling.
-    <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(216,180,254,0.35),_rgba(255,255,255,0)_60%),radial-gradient(circle_at_top_left,_rgba(125,211,252,0.35),_rgba(255,255,255,0)_60%),linear-gradient(135deg,_#f8fafc_0%,_#f3e8ff_50%,_#e0f2fe_100%)]">
+    <div className="relative h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-slate-50">
+      {/* 0. Ambient Background */}
+      <FluidBackground variant={backgroundVariant} />
 
-      {/* Left Column: Asset Library */}
-      <div className="w-[300px] flex-shrink-0 flex flex-col h-full border-r border-white/40 bg-white/60 backdrop-blur-xl shadow-sm z-10">
-        <AssetLibrary
-          stylePresets={stylePresetsAll || []}
-          posePresets={posePresetsAll || []}
-          facePresets={facePresetsAll || []}
-          selectedStyleIds={selectedStyleIds}
-          setSelectedStyleIds={setSelectedStyleIds}
-          selectedPoseIds={selectedPoseIds}
-          togglePoseSelect={togglePoseSelect}
-          selectedFaceIds={selectedFaceIds}
-          toggleFaceSelect={toggleFaceSelect}
-          onDeleteStyle={deleteStylePreset}
-          onDeletePose={deletePosePreset}
-          onDeleteFace={deleteFacePreset}
-          onUpdateStyle={updateStylePreset}
-          onUpdatePose={updatePosePreset}
-          onUpdateFace={updateFacePreset}
-          onRelearnStyle={(id: string) => (relearnStylePreset as any)(id)}
-          onRelearnPose={(id: string) => (relearnPosePreset as any)(id)}
-        />
-
-        {/* Style/Pose Upload Buttons moved to inside AssetLibrary or kept here? 
-            AssetLibrary has logic for display, but upload logic was in parent. 
-            Let's keep upload logic simple: AssetLibrary can have a "Add" button that triggers the hidden inputs here 
-            OR we pass the refs to AssetLibrary. 
-            For now, let's just put the upload buttons at the bottom of AssetLibrary or similar.
-            Actually, AssetLibrary UI has tabs. Let's add a "Upload" button group at the bottom of the Left Column here.
-        */}
-        <div className="p-3 border-t border-white/40 bg-white/50 backdrop-blur space-y-2">
-          <Button variant="outline" className="w-full justify-start gap-2" onClick={() => styleInputRef.current?.click()} disabled={styleLearning}>
-            {styleLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-            上传风格图学习
-          </Button>
-          <Button variant="outline" className="w-full justify-start gap-2" onClick={() => poseInputRef.current?.click()} disabled={poseLearning}>
-            {poseLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-            上传姿势图学习
-          </Button>
-          <Button variant="outline" className="w-full justify-start gap-2" onClick={() => setFaceDialogOpen(true)}>
-            <UserRound className="w-4 h-4" />
-            管理人脸模特
-          </Button>
-          {/* Hidden Inputs */}
-          <input
-            ref={styleInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              const files = Array.from(e.target.files || []).slice(0, MAX_STYLE_LEARN_IMAGES);
-              e.currentTarget.value = "";
-              void onLearnStyle(files);
+      {/* 1. Center Stage (Z-Index 10) */}
+      <div className="absolute inset-0 flex items-center justify-center p-4 md:p-8 z-10 pointer-events-none">
+        <div
+          className="pointer-events-auto w-full max-w-5xl h-full transition-transform duration-500 ease-out"
+          onMouseEnter={() => setIsFocused(true)}
+          onMouseLeave={() => setIsFocused(false)}
+        >
+          {/* CreationStage Wrapper to ensure pointer events are correct */}
+          <CreationStage
+            garmentFiles={garmentFiles}
+            garmentUrls={garmentUrls}
+            addGarmentFiles={addGarmentFiles}
+            removeGarmentAt={removeGarmentAt} // Fix: Ensure this prop name matches
+            prompt={userPrompt}
+            setPrompt={(v) => {
+              setUserPrompt(v);
+              if (selectedSnippetId) setSelectedSnippetId(null);
             }}
-          />
-          <input
-            ref={poseInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.currentTarget.value = "";
-              if (file) void onLearnPose(file);
+            autoStylePrompt={autoStylePrompt}
+            styleLabel={activeStyleName}
+            onGenerate={onGenerate}
+            creating={creating}
+            estimatedCreditsCost={estimatedCreditsCost}
+            balance={balance}
+            creditsLoaded={creditsLoaded}
+            notice={workbenchNotice}
+            promptSnippets={promptSnippets}
+            promptSnippetsLoading={promptSnippetsLoading}
+            promptSnippetsBusy={promptSnippetsBusy}
+            selectedSnippetId={selectedSnippetId}
+            onSelectSnippet={(id) => {
+              const snippet = promptSnippets.find((x) => x.id === id);
+              setSelectedSnippetId(id);
+              if (snippet) setUserPrompt(snippet.text);
+              setSnippetRemark("");
             }}
+            onSaveSnippet={() => void savePromptSnippet(snippetRemark)}
+            onDeleteSnippet={() => {
+              if (!selectedSnippetId) return;
+              void removePromptSnippet(selectedSnippetId);
+            }}
+            snippetRemark={snippetRemark}
+            setSnippetRemark={setSnippetRemark}
+            // New Props for Interactivity
+            isFocused={isFocused}
+            onInteraction={() => {
+              // Keep random interaction for fun, or remove if user only wants style-driven
+              // setBackgroundVariant((prev) => prev); 
+            }}
+            poseCount={selectedPoseIds.length}
+            faceRemark={activeFace?.description || activeFace?.name}
           />
         </div>
       </div>
 
-      {/* Middle Column: Workbench */}
-      <div className="flex-1 flex flex-col min-w-0 h-full overflow-y-auto relative">
-        <div className="flex-1 p-4">
-          <div className="mx-auto w-full max-w-4xl space-y-4 rounded-3xl border border-white/50 bg-white/60 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur-xl">
-
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">创作工作台</h1>
-              <div className="text-sm text-muted-foreground mt-1">
-                拖拽右侧任务复用参数，或直接开始创作。
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => {
-                setUserPrompt("");
-                setAutoStylePrompt("");
-                setAutoPromptExpanded(false);
-                lastAutoStyleSignatureRef.current = null;
-                setSelectedSnippetId(null);
-                setGarmentFiles([]);
-                setSelectedStyleIds([]);
-                setSelectedPoseIds([]);
-                setSelectedFaceIds([]);
-              }}>清空当前</Button>
-            </div>
+      {/* 2. Left Sidebar: Asset Library (Z-Index 20) */}
+      <div
+        className={cn(
+          "absolute top-4 left-4 bottom-4 w-[300px] z-20 flex flex-col pointer-events-none transition-all duration-500 ease-in-out",
+          isFocused ? "opacity-30 blur-[2px] scale-95 grayscale-[0.5]" : "opacity-100 hover:opacity-100"
+        )}
+      >
+        <GlassPanel className="flex-1 flex flex-col pointer-events-auto h-full overflow-hidden shadow-2xl" intensity="medium">
+          <AssetLibrary
+            stylePresets={stylePresetsAll || []}
+            posePresets={posePresetsAll || []}
+            facePresets={facePresetsAll || []}
+            selectedStyleIds={selectedStyleIds}
+            setSelectedStyleIds={setSelectedStyleIds}
+            selectedPoseIds={selectedPoseIds}
+            togglePoseSelect={togglePoseSelect}
+            selectedFaceIds={selectedFaceIds}
+            toggleFaceSelect={toggleFaceSelect}
+            onDeleteStyle={deleteStylePreset}
+            onDeletePose={deletePosePreset}
+            onDeleteFace={deleteFacePreset}
+            onUpdateStyle={updateStylePreset}
+            onUpdatePose={updatePosePreset}
+            onUpdateFace={updateFacePreset}
+            onRelearnStyle={(id: string) => (relearnStylePreset as any)(id)}
+            onRelearnPose={(id: string) => (relearnPosePreset as any)(id)}
+          />
+          {/* Upload Actions */}
+          <div className="p-3 border-t border-white/20 bg-white/30 space-y-2 backdrop-blur-sm">
+            <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => styleInputRef.current?.click()} disabled={styleLearning}>
+              {styleLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+              上传风格图学习
+            </Button>
+            <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => poseInputRef.current?.click()} disabled={poseLearning}>
+              {poseLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+              上传姿势图学习
+            </Button>
+            <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => setFaceDialogOpen(true)}>
+              <UserRound className="w-4 h-4" />
+              管理人脸模特
+            </Button>
           </div>
-          {workbenchNotice && (
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/70 px-3 py-1 text-xs text-slate-600 shadow-sm backdrop-blur">
-              {workbenchNotice}
-            </div>
-          )}
+        </GlassPanel>
 
-          {/* Drag Drop Hint */}
-          <div
-            className={cn(
-              "rounded-3xl border border-dashed p-4 transition-all duration-200 ease-in-out backdrop-blur",
-              garmentFiles.length > 0
-                ? "border-white/50 bg-white/70 shadow-sm"
-                : "border-white/40 bg-white/50 hover:bg-white/70 hover:border-purple-300/70",
-              garmentDragOver && "border-purple-400 bg-purple-50/80 ring-4 ring-purple-200/60 shadow-[0_0_30px_rgba(168,85,247,0.25)]"
-            )}
-            onDragEnter={onGarmentDragEnter}
-            onDragLeave={onGarmentDragLeave}
-            onDragOver={onGarmentDragOver}
-            onDrop={onGarmentDrop}
-          >
-            <div className="flex flex-col items-center justify-center text-center space-y-4">
+        {/* Hidden Inputs */}
+        <input ref={styleInputRef} type="file" accept="image/*" multiple className="hidden"
+          onChange={(e) => {
+            const files = Array.from(e.target.files || []).slice(0, MAX_STYLE_LEARN_IMAGES);
+            e.currentTarget.value = "";
+            void onLearnStyle(files);
+          }}
+        />
+        <input ref={poseInputRef} type="file" accept="image/*" className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.currentTarget.value = "";
+            if (file) void onLearnPose(file);
+          }}
+        />
+      </div>
 
-              {garmentFiles.length > 0 ? (
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4 w-full">
-                  {garmentUrls.map((u, idx) => (
-                    <div key={`${u}-${idx}`} className="relative aspect-[3/4] group rounded-xl overflow-hidden shadow-sm border bg-white">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={u} alt="garment" className="w-full h-full object-cover" />
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <Button variant="destructive" size="icon" className="h-8 w-8 rounded-full" onClick={(e) => {
-                          e.stopPropagation();
-                          removeGarmentAt(idx);
-                        }}>
-                          <X className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                  {garmentFiles.length < MAX_GARMENT_IMAGES && (
-                    <button
-                      onClick={() => garmentInputRef.current?.click()}
-                      className="flex flex-col items-center justify-center aspect-[3/4] rounded-xl border-2 border-dashed border-slate-200 hover:border-purple-400 hover:bg-purple-50 text-muted-foreground hover:text-purple-600 transition-colors"
-                    >
-                      <UploadCloud className="w-6 h-6 mb-2" />
-                      <span className="text-xs font-medium">添加图片</span>
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="py-4" onClick={() => garmentInputRef.current?.click()}>
-                  <div className="w-12 h-12 bg-purple-100/50 text-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-2">
-                    <UploadCloud className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-base font-semibold text-slate-900">上传衣服参考图</h3>
-                  <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-                    拖拽图片到这里，或点击上传。支持 JPG/PNG。<br />
-                    最多 {MAX_GARMENT_IMAGES} 张。
-                  </p>
-                </div>
-              )}
+      {/* 3. Right Sidebar: Queue & Settings (Z-Index 20) */}
+      <div
+        className={cn(
+          "absolute top-4 right-4 bottom-4 w-[320px] z-20 pointer-events-none flex flex-col gap-4 transition-all duration-500 ease-in-out",
+          isFocused ? "opacity-30 blur-[2px] scale-95 grayscale-[0.5]" : "opacity-100 hover:opacity-100"
+        )}
+      >
+        {/* Queue Panel */}
+        <GlassPanel className="flex-1 pointer-events-auto overflow-hidden flex flex-col shadow-2xl" intensity="medium">
+          <QueueSidebar
+            queue={queue}
+            tasksById={tasksById}
+            onOpenTask={openTaskLightbox}
+            onReuseTask={(taskId) => void reuseFromTaskId(taskId)}
+            onClear={() => {
+              setQueue([]);
+              setTasksById({});
+            }}
+          />
+        </GlassPanel>
 
-              <input
-                ref={garmentInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files || []);
-                  e.currentTarget.value = "";
-                  addGarmentFiles(files);
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Prompt Section */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-semibold text-slate-700">提示词组合</label>
-              <div className="flex items-center gap-2">
-                {promptSnippets.length > 0 && (
-                  <Select
-                    value={selectedSnippetId ?? undefined}
-                    onValueChange={(id) => {
-                      const snippet = promptSnippets.find((x) => x.id === id);
-                      setSelectedSnippetId(id);
-                      if (snippet) setUserPrompt(snippet.text);
-                    }}
-                  >
-                    <SelectTrigger className="h-8 w-[160px] text-xs" disabled={promptSnippetsLoading}>
-                      <SelectValue placeholder={promptSnippetsLoading ? "模板加载中..." : "加载补充模板..."} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {promptSnippets.map((p) => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.name || p.text.slice(0, 24)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {selectedSnippetId && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 text-xs text-muted-foreground"
-                    onClick={() => void removePromptSnippet(selectedSnippetId)}
-                    disabled={promptSnippetsBusy === "delete"}
-                  >
-                    {promptSnippetsBusy === "delete" ? "删除中..." : "删除模板"}
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-500">风格推荐词（自动）</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => setAutoPromptExpanded((prev) => !prev)}
-                  >
-                    {autoPromptExpanded ? "收起" : "展开"}
-                  </Button>
-                </div>
-                {autoPromptExpanded ? (
-                  <div
-                    className={cn(
-                      "rounded-2xl border bg-white/70 p-2 shadow-sm backdrop-blur transition",
-                      autoStylePrompt ? "border-white/50" : "border-slate-200/60",
-                      autoPromptGlow && autoStylePrompt && "ring-2",
-                      autoPromptGlow && autoStylePrompt && styleAccent.glow,
-                    )}
-                  >
-                    <div className="mb-2 flex items-center justify-between">
-                      <span
-                        className={cn(
-                          "inline-flex items-center rounded-full border px-2 py-1 text-[11px]",
-                          autoStylePrompt
-                            ? styleAccent.pill
-                            : "bg-slate-100/70 text-slate-500 border-slate-200/60",
-                        )}
-                      >
-                        {activeStyleName ? `风格：${activeStyleName}` : "风格推荐词"}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => setAutoPromptExpanded(false)}
-                      >
-                        收起
-                      </Button>
-                    </div>
-                    <Textarea
-                      value={autoStylePrompt}
-                      onChange={(e) => setAutoStylePrompt(e.target.value)}
-                      placeholder="风格推荐词会在你选择风格后自动填充"
-                      className="min-h-[120px] text-xs rounded-xl border-slate-200/60 bg-white/80 p-3 focus:border-purple-400 focus:ring-purple-400/20 resize-y"
-                    />
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center justify-between rounded-full border px-4 py-2 text-xs transition",
-                      autoStylePrompt
-                        ? styleAccent.pill
-                        : "bg-slate-100/70 text-slate-500 border-slate-200/60",
-                      autoPromptGlow && autoStylePrompt && "ring-2",
-                      autoPromptGlow && autoStylePrompt && styleAccent.glow,
-                    )}
-                    onClick={() => setAutoPromptExpanded(true)}
-                  >
-                    <span className="font-semibold">
-                      {activeStyleName ? `风格推荐词 · ${activeStyleName}` : "风格推荐词"}
-                    </span>
-                    <span className="text-[11px] opacity-70">
-                      {autoStylePrompt ? "点击展开查看/编辑" : "选择风格后自动生成"}
-                    </span>
-                  </button>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-500">用户补充（手动，可保存）</span>
-                  {!promptSnippets.length && promptSnippetsLoading && (
-                    <span className="text-xs text-muted-foreground">模板加载中...</span>
-                  )}
-                </div>
-                <div className="relative">
-                  <Textarea
-                    value={userPrompt}
-                    onChange={(e) => {
-                      setUserPrompt(e.target.value);
-                      if (selectedSnippetId) setSelectedSnippetId(null);
-                    }}
-                    placeholder="补充你想要的细节：动作、场景、镜头语言、光影氛围..."
-                    className="min-h-[140px] text-sm p-3 rounded-2xl border-white/50 bg-white/70 shadow-sm backdrop-blur focus:border-purple-400 focus:ring-purple-400/20 resize-y"
-                  />
-                  <div className="absolute bottom-3 right-3 flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs text-muted-foreground"
-                      onClick={() => void savePromptSnippet()}
-                      disabled={promptSnippetsBusy === "create"}
-                    >
-                      {promptSnippetsBusy === "create" ? "保存中..." : "保存补充"}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Advanced Settings */}
+        {/* Advanced Settings (Floating Panel) */}
+        <div className="pointer-events-auto">
           <AdvancedSettings
             resolution={resolution}
             setResolution={setResolution as any}
@@ -1004,74 +787,10 @@ export function LearnGeneratePage() {
             includeThoughts={includeThoughts}
             setIncludeThoughts={setIncludeThoughts}
           />
-
-          {/* Generate Button Area - Sticky Bottom or just normal */}
-          <div className="pt-2 sticky bottom-0 bg-gradient-to-t from-white/80 via-white/40 to-transparent pb-4 z-10">
-            <div className="flex items-center justify-between mb-2 px-1">
-              <div className="text-xs text-muted-foreground">
-                预计消耗: <span className="font-medium text-slate-900">{estimatedCreditsCost}</span> 积分
-                <span className="mx-2">|</span>
-                余额: {creditsLoaded ? balance : "..."}
-              </div>
-              {creditsLoaded && balance < estimatedCreditsCost && (
-                <span className="text-xs text-rose-500 font-medium">积分不足</span>
-              )}
-            </div>
-            <Button
-              size="lg"
-              className="w-full h-11 text-base font-semibold shadow-lg shadow-purple-500/20 bg-gradient-to-r from-orange-500 via-pink-500 to-violet-600 hover:opacity-90 active:scale-[0.98] transition-all"
-              onClick={onGenerate}
-              disabled={creating || (creditsLoaded && balance < estimatedCreditsCost)}
-            >
-              {creating ? (
-                <>
-                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  正在生成任务...
-                </>
-              ) : (
-                <>
-                  <Wand2 className="w-5 h-5 mr-2" />
-                  立即生成 (Generate)
-                </>
-              )}
-            </Button>
-          </div>
-          </div>
         </div>
       </div>
 
-      {/* Right Column: Queue */}
-      <div
-        className="w-[320px] flex-shrink-0 border-l border-white/40 bg-white/60 backdrop-blur-xl flex flex-col shadow-sm z-10"
-        onDragOver={(e) => {
-          const types = Array.from(e.dataTransfer.types || []);
-          if (!types.includes("application/x-afs-task-ref")) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
-        }}
-        onDrop={(e) => {
-          const raw = e.dataTransfer.getData("application/x-afs-task-ref");
-          if (!raw) return;
-          e.preventDefault();
-          try {
-            const parsed = JSON.parse(raw) as { taskId?: string };
-            const taskId = String(parsed?.taskId || "").trim();
-            if (taskId) void reuseFromTaskId(taskId);
-          } catch { }
-        }}
-      >
-        <QueueSidebar
-          queue={queue}
-          tasksById={tasksById}
-          onOpenTask={openTaskLightbox}
-          onReuseTask={(taskId) => void reuseFromTaskId(taskId)}
-          onClear={() => {
-            setQueue([]);
-            setTasksById({});
-          }}
-        />
-      </div>
-
+      {/* Lightbox & Dialogs */}
       <ImageLightbox
         images={lightboxImages}
         initialIndex={lightboxInitialIndex}

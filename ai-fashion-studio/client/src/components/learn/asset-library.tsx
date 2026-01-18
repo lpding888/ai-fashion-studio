@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Search } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -88,7 +88,8 @@ export function AssetLibrary({
     };
 
     return (
-        <div className="flex flex-col h-full bg-white/50 backdrop-blur-xl border-r border-slate-200/60">
+        <div className="flex flex-col h-full bg-transparent">
+            {/* Header / Search */}
             <div className="p-4 space-y-4 flex-shrink-0">
                 <h2 className="text-lg font-bold text-slate-800">资源库</h2>
                 <div className="relative">
@@ -109,6 +110,7 @@ export function AssetLibrary({
                 </Tabs>
             </div>
 
+            {/* Scrollable List */}
             <ScrollArea className="flex-1 px-4 pb-4">
                 <div className="space-y-4">
                     {activeTab === "styles" && (
