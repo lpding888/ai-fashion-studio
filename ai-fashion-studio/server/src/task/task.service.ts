@@ -297,6 +297,7 @@ export class TaskService {
     for (const id of stylePresetIds) {
       const preset = await this.db.getStylePreset(id);
       if (!preset) continue;
+      if ((preset as any).learnStatus === 'FAILED') continue;
       if ((preset as any).kind === 'POSE') continue;
       this.requireOwnerOrAdminForPreset(preset, user, '风格');
       const block = String((preset as any).promptBlock || (preset as any).styleHint || '').trim();
@@ -306,6 +307,7 @@ export class TaskService {
     for (const id of posePresetIds) {
       const preset = await this.db.getStylePreset(id);
       if (!preset) continue;
+      if ((preset as any).learnStatus === 'FAILED') continue;
       if ((preset as any).kind !== 'POSE') continue;
       this.requireOwnerOrAdminForPreset(preset, user, '姿势');
       const block = String((preset as any).promptBlock || '').trim();
@@ -483,6 +485,7 @@ export class TaskService {
     for (const id of stylePresetIds) {
       const preset = await this.db.getStylePreset(id);
       if (!preset) continue;
+      if ((preset as any).learnStatus === 'FAILED') continue;
       if ((preset as any).kind === 'POSE') continue;
       this.requireOwnerOrAdminForPreset(preset, user, '风格');
       const block = String((preset as any).promptBlock || (preset as any).styleHint || '').trim();
@@ -492,6 +495,7 @@ export class TaskService {
     for (const id of posePresetIds) {
       const preset = await this.db.getStylePreset(id);
       if (!preset) continue;
+      if ((preset as any).learnStatus === 'FAILED') continue;
       if ((preset as any).kind !== 'POSE') continue;
       this.requireOwnerOrAdminForPreset(preset, user, '姿势');
       const block = String((preset as any).promptBlock || '').trim();

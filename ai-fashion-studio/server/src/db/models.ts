@@ -354,8 +354,20 @@ export interface StylePreset {
 
     // 结构化分析（用于调试/复盘；不同 kind 的结构可能不同）
     analysis?: any;
+    // 学习状态（模型返回为空时标记失败）
+    learnStatus?: 'SUCCESS' | 'FAILED';
+    learnError?: string;
 
     createdAt: number;
+}
+
+export interface PromptSnippetModel {
+    id: string;
+    userId: string;
+    name?: string;
+    text: string;
+    createdAt: number;
+    updatedAt: number;
 }
 
 export interface User {

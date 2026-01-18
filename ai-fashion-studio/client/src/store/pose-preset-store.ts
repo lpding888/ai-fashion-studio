@@ -11,6 +11,8 @@ export interface PosePreset {
   thumbnailPath?: string;
   tags?: string[];
   promptBlock?: string;
+  learnStatus?: 'SUCCESS' | 'FAILED';
+  learnError?: string;
   createdAt: number;
 }
 

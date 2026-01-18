@@ -58,6 +58,20 @@ export class StylePresetController {
     fs.ensureDirSync(STYLE_PRESETS_DIR);
   }
 
+  private isEmptyAnalysis(analysis: any): boolean {
+    const hasMeaningfulValue = (value: any): boolean => {
+      if (value === null || value === undefined) return false;
+      if (typeof value === 'string') return value.trim().length > 0;
+      if (typeof value === 'number' || typeof value === 'boolean') return true;
+      if (Array.isArray(value)) return value.some((item) => hasMeaningfulValue(item));
+      if (typeof value === 'object') {
+        return Object.values(value).some((item) => hasMeaningfulValue(item));
+      }
+      return false;
+    };
+    return !hasMeaningfulValue(analysis);
+  }
+
   private requireOwnerOrAdmin(preset: StylePreset, user: UserModel) {
     if (!preset) throw new BadRequestException('Preset not found');
 
@@ -426,6 +440,24 @@ export class StylePresetController {
         config,
         { traceId: presetId },
       );
+      if (this.isEmptyAnalysis(analysis)) {
+        const preset: StylePreset = {
+          id: presetId,
+          userId: user?.id,
+          kind: 'STYLE',
+          name: '风格学习失败',
+          description: '模型返回为空，请点击重新学习',
+          imagePaths: filePaths,
+          thumbnailPath: filePaths[0],
+          tags: ['AI Learned', 'Failed'],
+          createdAt: Date.now(),
+          learnStatus: 'FAILED',
+          learnError: '模型返回为空',
+        };
+        await this.db.saveStylePreset(preset);
+        this.logger.warn(`⚠️ Style learning returned empty analysis: ${presetId}`);
+        return { success: false, preset, reason: 'EMPTY_ANALYSIS' };
+      }
 
       // 2. Construct Style Hint
       const pickSummary = (v: any) => {
@@ -470,6 +502,7 @@ export class StylePresetController {
         styleHint: styleHint,
         promptBlock,
         analysis: analysis,
+        learnStatus: 'SUCCESS',
         createdAt: Date.now(),
       };
 
@@ -521,6 +554,14 @@ export class StylePresetController {
       config,
       { traceId: `${id}:relearn:${Date.now()}` },
     );
+    if (this.isEmptyAnalysis(analysis)) {
+      const next = await this.db.updateStylePreset(id, {
+        learnStatus: 'FAILED',
+        learnError: '模型返回为空',
+      });
+      if (!next) throw new BadRequestException('Preset not found');
+      return { success: false, preset: next, reason: 'EMPTY_ANALYSIS' };
+    }
 
     const pickSummary = (v: any) => {
       if (!v) return '';
@@ -554,6 +595,8 @@ export class StylePresetController {
       styleHint: styleHint || (existing as any).styleHint,
       promptBlock,
       analysis,
+      learnStatus: 'SUCCESS',
+      learnError: undefined,
       // 保护：thumbnail 仍沿用原第一张图
       thumbnailPath: (existing as any).thumbnailPath || filePaths[0],
     };

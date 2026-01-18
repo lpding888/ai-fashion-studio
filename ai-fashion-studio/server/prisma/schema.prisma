@@ -50,6 +50,7 @@ model User {
   tasks                Task[]
   creditTransactions   CreditTransaction[]
   billingEvents        BillingEvent[]
+  promptSnippets       PromptSnippet[]
   inviteCodesCreated   InviteCode[] @relation("InviteCreatedBy")
   inviteCodesUsed      InviteCode[] @relation("InviteUsedBy")
 
@@ -169,4 +170,19 @@ model PanelUser {
   @@unique([email])
   @@index([createdAt(sort: Desc)])
   @@map("panel_users")
+}
+
+model PromptSnippet {
+  id        String   @id @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  name      String?
+  text      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([updatedAt(sort: Desc)])
+  @@map("prompt_snippets")
 }

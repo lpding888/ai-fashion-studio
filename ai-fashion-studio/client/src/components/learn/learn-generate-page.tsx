@@ -2,33 +2,39 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { UploadCloud, Wand2, Loader2, Images, Sparkles, X, UserRound } from "lucide-react";
+import { UploadCloud, Wand2, Loader2, X, UserRound } from "lucide-react";
 
 import api from "@/lib/api";
-import { createDirectTask, directMessageTask, directRegenerateTask, learnPose, learnStyle } from "@/lib/api";
+import {
+  createDirectTask,
+  createPromptSnippet,
+  deletePromptSnippet,
+  directMessageTask,
+  directRegenerateTask,
+  learnPose,
+  learnStyle,
+  listPromptSnippets,
+} from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { requestCreditsRefresh, useCredits } from "@/hooks/use-credits";
 
 import { useStylePresetStore, type StylePreset } from "@/store/style-preset-store";
-import { usePosePresetStore, type PosePreset } from "@/store/pose-preset-store";
+import { usePosePresetStore } from "@/store/pose-preset-store";
 import { FacePresetSelector } from "@/components/face-preset-selector";
 import { useFacePresetStore } from "@/store/face-preset-store";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import { ImageLightbox, type LightboxItem } from "@/components/image-lightbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-import { PresetCard } from "@/components/learn/preset-card";
 import { QueueSidebar } from "@/components/learn/queue-sidebar";
+import { AssetLibrary } from "@/components/learn/asset-library";
+import { AdvancedSettings } from "@/components/learn/advanced-settings";
 import { toImgSrc } from "@/components/learn/learn-utils";
-import type { QueueItem, SavedPrompt, TaskApi } from "@/components/learn/types";
+import type { PromptSnippet, QueueItem, TaskApi } from "@/components/learn/types";
 import { cn } from "@/lib/utils";
 
 const MAX_GARMENT_IMAGES = 6;
@@ -38,16 +44,6 @@ const MAX_FACE_SELECT = 3;
 const POLL_INTERVAL_MS = 1500;
 
 const STORAGE_QUEUE_KEY = "afs:learn:queue:v1";
-const STORAGE_SAVED_PROMPTS_KEY = "afs:learn:saved-prompts:v1";
-
-function cryptoRandomId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    // eslint-disable-next-line no-bitwise
-    return `${Date.now()}-${Math.random().toString(16).slice(2)}-${(Math.random() * 1e9) | 0}`;
-  }
-}
 
 function useObjectUrls(files: File[]) {
   const [urls, setUrls] = React.useState<string[]>([]);
@@ -61,6 +57,44 @@ function useObjectUrls(files: File[]) {
   }, [files]);
 
   return urls;
+}
+
+const STYLE_HINT_ACCENTS = [
+  {
+    pill: "bg-violet-100/80 text-violet-700 border-violet-200/60",
+    glow: "shadow-[0_0_18px_rgba(139,92,246,0.45)] ring-violet-300/60",
+  },
+  {
+    pill: "bg-rose-100/80 text-rose-700 border-rose-200/60",
+    glow: "shadow-[0_0_18px_rgba(244,63,94,0.45)] ring-rose-300/60",
+  },
+  {
+    pill: "bg-emerald-100/80 text-emerald-700 border-emerald-200/60",
+    glow: "shadow-[0_0_18px_rgba(16,185,129,0.45)] ring-emerald-300/60",
+  },
+  {
+    pill: "bg-amber-100/80 text-amber-700 border-amber-200/60",
+    glow: "shadow-[0_0_18px_rgba(245,158,11,0.45)] ring-amber-300/60",
+  },
+  {
+    pill: "bg-sky-100/80 text-sky-700 border-sky-200/60",
+    glow: "shadow-[0_0_18px_rgba(56,189,248,0.45)] ring-sky-300/60",
+  },
+] as const;
+
+function buildAutoStylePrompt(stylePresets: StylePreset[], styleId?: string | null) {
+  if (!styleId) return "";
+  const preset = stylePresets.find((x) => x.id === styleId);
+  if (preset?.learnStatus === "FAILED") return "";
+  const name = preset?.name ? String(preset.name).trim() : "";
+  return [
+    "Commercial fashion photography.",
+    "Model wears the uploaded garment(s). Preserve garment cut, seams, logos, patterns, fabric texture, and natural wrinkles.",
+    "Face must match selected face reference (if provided).",
+    "Photorealistic, high detail, clean commercial composition.",
+    "If multiple poses are selected, output ONE contact sheet with one panel per pose (max 4 panels). Same model + same garment across panels.",
+    name ? `Apply the learned style: ${name}.` : "Apply the learned style JSON strictly.",
+  ].join("\n");
 }
 
 export function LearnGeneratePage() {
@@ -94,11 +128,17 @@ export function LearnGeneratePage() {
   const [garmentDragOver, setGarmentDragOver] = React.useState(false);
   const garmentDragCounterRef = React.useRef(0);
 
-  const [prompt, setPrompt] = React.useState<string>("");
-  const [promptTouched, setPromptTouched] = React.useState(false);
-  const lastAutoStyleIdRef = React.useRef<string | null>(null);
-  const [savedPrompts, setSavedPrompts] = React.useState<SavedPrompt[]>([]);
-  const [promptName, setPromptName] = React.useState<string>("");
+  // Dual prompt system: auto-filled style prompt + user custom prompt
+  const [autoStylePrompt, setAutoStylePrompt] = React.useState<string>(""); // Auto-filled from style selection
+  const [autoPromptExpanded, setAutoPromptExpanded] = React.useState(false);
+  const [autoPromptGlow, setAutoPromptGlow] = React.useState(false);
+  const [autoPromptAccentIndex, setAutoPromptAccentIndex] = React.useState(0);
+  const [userPrompt, setUserPrompt] = React.useState<string>(""); // User's custom additions
+  const lastAutoStyleSignatureRef = React.useRef<string | null>(null);
+  const [promptSnippets, setPromptSnippets] = React.useState<PromptSnippet[]>([]);
+  const [promptSnippetsLoading, setPromptSnippetsLoading] = React.useState(false);
+  const [promptSnippetsBusy, setPromptSnippetsBusy] = React.useState<"create" | "delete" | null>(null);
+  const [selectedSnippetId, setSelectedSnippetId] = React.useState<string | null>(null);
 
   const [resolution, setResolution] = React.useState<"1K" | "2K" | "4K">("2K");
   const [aspectRatio, setAspectRatio] = React.useState<"1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9">("3:4");
@@ -111,7 +151,6 @@ export function LearnGeneratePage() {
   const [queue, setQueue] = React.useState<QueueItem[]>([]);
   const [tasksById, setTasksById] = React.useState<Record<string, TaskApi>>({});
   const [workbenchNotice, setWorkbenchNotice] = React.useState<string>("");
-  const [importDragOver, setImportDragOver] = React.useState(false);
 
   const [lightboxOpen, setLightboxOpen] = React.useState(false);
   const [lightboxImages, setLightboxImages] = React.useState<LightboxItem[]>([]);
@@ -120,15 +159,13 @@ export function LearnGeneratePage() {
   const [lightboxRegenerating, setLightboxRegenerating] = React.useState(false);
   const [activeTaskId, setActiveTaskId] = React.useState<string | undefined>(undefined);
   const [chatMessage, setChatMessage] = React.useState<string>("");
-  const [presetDetailOpen, setPresetDetailOpen] = React.useState(false);
-  const [presetDetailKind, setPresetDetailKind] = React.useState<"STYLE" | "POSE" | null>(null);
-  const [presetDetailId, setPresetDetailId] = React.useState<string | null>(null);
-  const [presetDetailName, setPresetDetailName] = React.useState<string>("");
-  const [presetDetailDesc, setPresetDetailDesc] = React.useState<string>("");
-  const [presetDetailBusy, setPresetDetailBusy] = React.useState<"save" | "delete" | "relearn" | null>(null);
-
   // 口径对齐后端：Individual 1 张图=1；4K=4x
   const estimatedCreditsCost = resolution === "4K" ? 4 : 1;
+  const styleAccent = STYLE_HINT_ACCENTS[autoPromptAccentIndex % STYLE_HINT_ACCENTS.length];
+  const activeStyleName =
+    selectedStyleIds.length > 0
+      ? String((stylePresetsAll || []).find((p) => p.id === selectedStyleIds[0])?.name || "").trim()
+      : "";
 
   const styleInputRef = React.useRef<HTMLInputElement>(null);
   const poseInputRef = React.useRef<HTMLInputElement>(null);
@@ -146,17 +183,27 @@ export function LearnGeneratePage() {
     void fetchFacePresets();
   }, [isAuthenticated, fetchStylePresets, fetchPosePresets, fetchFacePresets]);
 
+  const loadPromptSnippets = React.useCallback(async () => {
+    if (!isAuthenticated) return;
+    setPromptSnippetsLoading(true);
+    try {
+      const res = await listPromptSnippets();
+      const items = Array.isArray(res) ? res : (res?.items ?? []);
+      setPromptSnippets(Array.isArray(items) ? items : []);
+    } catch {
+      setPromptSnippets([]);
+    } finally {
+      setPromptSnippetsLoading(false);
+    }
+  }, [isAuthenticated]);
+
+  React.useEffect(() => {
+    if (!isAuthenticated) return;
+    void loadPromptSnippets();
+  }, [isAuthenticated, loadPromptSnippets]);
+
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-
-    try {
-      const raw = localStorage.getItem(STORAGE_SAVED_PROMPTS_KEY);
-      const parsed = raw ? (JSON.parse(raw) as SavedPrompt[]) : [];
-      setSavedPrompts(Array.isArray(parsed) ? parsed : []);
-    } catch {
-      setSavedPrompts([]);
-    }
-
     try {
       const raw = localStorage.getItem(STORAGE_QUEUE_KEY);
       const parsed = raw ? (JSON.parse(raw) as QueueItem[]) : [];
@@ -171,25 +218,28 @@ export function LearnGeneratePage() {
     localStorage.setItem(STORAGE_QUEUE_KEY, JSON.stringify(queue.slice(0, 30)));
   }, [queue]);
 
-  // 点风格卡后，如果用户还没手动编辑提示词，则自动填一个“可直接生成”的基础 prompt（用户可再补充）
   React.useEffect(() => {
-    if (promptTouched) return;
-    if (selectedStyleIds.length === 0) return;
+    if (selectedStyleIds.length === 0) {
+      setAutoStylePrompt("");
+      lastAutoStyleSignatureRef.current = null;
+      return;
+    }
     const id = selectedStyleIds[0];
-    if (lastAutoStyleIdRef.current === id) return;
-    const p = (stylePresetsAll || []).find((x) => x.id === id);
-    const name = p?.name ? String(p.name).trim() : "";
-    const base = [
-      "Commercial fashion photography.",
-      "Model wears the uploaded garment(s). Preserve garment cut, seams, logos, patterns, fabric texture, and natural wrinkles.",
-      "Face must match selected face reference (if provided).",
-      "Photorealistic, high detail, clean commercial composition.",
-      "If multiple poses are selected, output ONE contact sheet with one panel per pose (max 4 panels). Same model + same garment across panels.",
-      name ? `Apply the learned style: ${name}.` : "Apply the learned style JSON strictly.",
-    ].join("\n");
-    setPrompt(base);
-    lastAutoStyleIdRef.current = id;
-  }, [promptTouched, selectedStyleIds, stylePresetsAll]);
+    const preset = (stylePresetsAll || []).find((p) => p.id === id);
+    const signature = `${id}|${preset?.name ?? ""}|${preset?.learnStatus ?? ""}`;
+    if (lastAutoStyleSignatureRef.current === signature) return;
+    const base = buildAutoStylePrompt(stylePresetsAll || [], id);
+    setAutoStylePrompt(base);
+    lastAutoStyleSignatureRef.current = signature;
+    setAutoPromptAccentIndex((prev) => (prev + 1) % STYLE_HINT_ACCENTS.length);
+    setAutoPromptGlow(true);
+  }, [selectedStyleIds, stylePresetsAll]);
+
+  React.useEffect(() => {
+    if (!autoPromptGlow) return;
+    const timer = setTimeout(() => setAutoPromptGlow(false), 1200);
+    return () => clearTimeout(timer);
+  }, [autoPromptGlow]);
 
   const pollOne = React.useCallback(async (taskId: string) => {
     try {
@@ -219,11 +269,7 @@ export function LearnGeneratePage() {
 
   const applyTaskToWorkbench = React.useCallback(
     (task: TaskApi) => {
-      const nextPrompt = String(task?.directPrompt || task?.requirements || "").trim();
-      if (nextPrompt) {
-        setPromptTouched(true);
-        setPrompt(nextPrompt);
-      }
+      const nextPromptRaw = String(task?.directPrompt || task?.requirements || "").trim();
 
       const nextResolution = (task?.resolution || "2K") as "1K" | "2K" | "4K";
       const nextAspect = (task?.aspectRatio || "3:4") as "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
@@ -255,12 +301,20 @@ export function LearnGeneratePage() {
       setSelectedPoseIds(poseIds);
       setSelectedFaceIds(faceIds);
 
+      const autoPromptForTask = buildAutoStylePrompt(stylePresetsAll || [], styleIds[0]);
+      const resolvedUserPrompt =
+        autoPromptForTask && nextPromptRaw.startsWith(autoPromptForTask)
+          ? nextPromptRaw.slice(autoPromptForTask.length).trimStart()
+          : nextPromptRaw;
+      setUserPrompt(resolvedUserPrompt);
+      setSelectedSnippetId(null);
+
       if (missingStyle.length || missingPose.length || missingFace.length) {
         flashNotice(
           `已回填设置；但有预设已不存在：` +
-            `${missingStyle.length ? `风格×${missingStyle.length} ` : ""}` +
-            `${missingPose.length ? `姿势×${missingPose.length} ` : ""}` +
-            `${missingFace.length ? `人脸×${missingFace.length}` : ""}`,
+          `${missingStyle.length ? `风格×${missingStyle.length} ` : ""}` +
+          `${missingPose.length ? `姿势×${missingPose.length} ` : ""}` +
+          `${missingFace.length ? `人脸×${missingFace.length}` : ""}`,
         );
       } else {
         flashNotice("已把该任务的参数回填到工作台（衣服图片仍以当前上传为准）");
@@ -313,8 +367,6 @@ export function LearnGeneratePage() {
     });
   };
 
-  const toggleSelect = (arr: string[], id: string) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id]);
-
   const togglePoseSelect = (id: string) => {
     setSelectedPoseIds((prev) => {
       const exists = prev.includes(id);
@@ -343,9 +395,16 @@ export function LearnGeneratePage() {
     if (!files.length) return;
     setStyleLearning(true);
     try {
-      await learnStyle(files);
-      await fetchStylePresets();
+      const res = await learnStyle(files);
+      const failed = res?.success === false || res?.preset?.learnStatus === "FAILED";
+      if (failed) {
+        flashNotice("风格学习失败：模型返回为空，请打开卡片重新学习");
+      }
+    } catch (e: any) {
+      console.error(e);
+      flashNotice(e?.response?.data?.message || e?.message || "风格学习失败，请稍后重试");
     } finally {
+      await fetchStylePresets();
       setStyleLearning(false);
     }
   };
@@ -354,9 +413,16 @@ export function LearnGeneratePage() {
     if (!file) return;
     setPoseLearning(true);
     try {
-      await learnPose(file);
-      await fetchPosePresets();
+      const res = await learnPose(file);
+      const failed = res?.success === false || res?.preset?.learnStatus === "FAILED";
+      if (failed) {
+        flashNotice("姿势学习失败：模型返回为空，请打开卡片重新学习");
+      }
+    } catch (e: any) {
+      console.error(e);
+      flashNotice(e?.response?.data?.message || e?.message || "姿势学习失败，请稍后重试");
     } finally {
+      await fetchPosePresets();
       setPoseLearning(false);
     }
   };
@@ -404,31 +470,53 @@ export function LearnGeneratePage() {
     });
   };
 
-  const savePrompt = () => {
-    const text = prompt.trim();
-    if (!text) return;
-    const now = Date.now();
-    const name = (promptName.trim() || text.slice(0, 24)).replace(/\s+/g, " ");
-    const item: SavedPrompt = {
-      id: cryptoRandomId(),
-      name: name || `Prompt ${new Date(now).toLocaleDateString("zh-CN")}`,
-      text,
-      createdAt: now,
-    };
-    const next = [item, ...savedPrompts].slice(0, 50);
-    setSavedPrompts(next);
-    setPromptName("");
-    localStorage.setItem(STORAGE_SAVED_PROMPTS_KEY, JSON.stringify(next));
+  const savePromptSnippet = async () => {
+    const text = userPrompt.trim();
+    if (!text) {
+      alert("请先填写用户补充内容");
+      return;
+    }
+    setPromptSnippetsBusy("create");
+    try {
+      const name = text.slice(0, 24).replace(/\s+/g, " ");
+      const created = await createPromptSnippet({
+        text,
+        ...(name ? { name } : {}),
+      });
+      if (created?.id) {
+        setPromptSnippets((prev) => [created, ...prev.filter((p) => p.id !== created.id)].slice(0, 50));
+        setSelectedSnippetId(created.id);
+      } else {
+        await loadPromptSnippets();
+      }
+      flashNotice("已保存到云端模板");
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.response?.data?.message || e?.message || "保存失败");
+    } finally {
+      setPromptSnippetsBusy(null);
+    }
   };
 
-  const deleteSavedPrompt = (id: string) => {
-    const next = savedPrompts.filter((p) => p.id !== id);
-    setSavedPrompts(next);
-    localStorage.setItem(STORAGE_SAVED_PROMPTS_KEY, JSON.stringify(next));
+  const removePromptSnippet = async (id: string) => {
+    if (!id) return;
+    setPromptSnippetsBusy("delete");
+    try {
+      await deletePromptSnippet(id);
+      setPromptSnippets((prev) => prev.filter((p) => p.id !== id));
+      if (selectedSnippetId === id) setSelectedSnippetId(null);
+      flashNotice("已删除模板");
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.response?.data?.message || e?.message || "删除失败");
+    } finally {
+      setPromptSnippetsBusy(null);
+    }
   };
 
   const onGenerate = async () => {
-    if (!prompt.trim()) {
+    const combinedPrompt = [autoStylePrompt, userPrompt].map((text) => text.trim()).filter(Boolean).join("\n");
+    if (!combinedPrompt) {
       alert("请先输入提示词");
       return;
     }
@@ -447,7 +535,7 @@ export function LearnGeneratePage() {
       const temperature = temperatureRaw.trim() ? Number(temperatureRaw) : undefined;
       const res = await createDirectTask({
         garmentImages: garmentFiles,
-        prompt: prompt.trim(),
+        prompt: combinedPrompt,
         resolution,
         aspectRatio,
         stylePresetIds: selectedStyleIds,
@@ -505,26 +593,6 @@ export function LearnGeneratePage() {
     setLightboxOpen(true);
   };
 
-  const openPresetDetails = (kind: "STYLE" | "POSE", preset: StylePreset | PosePreset) => {
-    setPresetDetailKind(kind);
-    setPresetDetailId(preset.id);
-    setPresetDetailName(String(preset.name || "").trim());
-    setPresetDetailDesc(String(preset.description || "").trim());
-    setPresetDetailOpen(true);
-  };
-
-  const closePresetDetails = () => {
-    setPresetDetailOpen(false);
-    setPresetDetailBusy(null);
-  };
-
-  const presetDetail =
-    presetDetailKind === "STYLE"
-      ? (stylePresetsAll || []).find((p) => p.id === presetDetailId)
-      : presetDetailKind === "POSE"
-        ? (posePresetsAll || []).find((p) => p.id === presetDetailId)
-        : undefined;
-
   const onRegenerateInLightbox = async () => {
     if (!lightboxTaskId) return;
     setLightboxRegenerating(true);
@@ -546,9 +614,45 @@ export function LearnGeneratePage() {
     }
   };
 
-  const stylePresets = (stylePresetsAll || []).filter((p) => p.kind !== "POSE");
-  const posePresets = posePresetsAll || [];
-  const selectedFacePresets = (facePresetsAll || []).filter((p) => selectedFaceIds.includes(p.id));
+  // Persistence logic
+  const STORAGE_PREFS_KEY = "afs:learn:prefs:v1";
+
+  // Load prefs on mount
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(STORAGE_PREFS_KEY);
+      if (raw) {
+        const prefs = JSON.parse(raw);
+        if (prefs.resolution) setResolution(prefs.resolution);
+        if (prefs.aspectRatio) setAspectRatio(prefs.aspectRatio);
+        if (prefs.temperature) setTemperatureRaw(prefs.temperature);
+        if (prefs.includeThoughts !== undefined) setIncludeThoughts(prefs.includeThoughts);
+        // 注意：用户补充不自动恢复，仅手动模板可回填
+        // Load selected presets if they still exist in the list (checked inside the render or just trust the ID)
+        if (Array.isArray(prefs.selectedStyleIds)) setSelectedStyleIds(prefs.selectedStyleIds);
+        if (Array.isArray(prefs.selectedPoseIds)) setSelectedPoseIds(prefs.selectedPoseIds);
+      }
+    } catch (e) {
+      console.error("Failed to load prefs", e);
+    }
+  }, []); // Run once on mount
+
+  // Save prefs on change
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const prefs = {
+      resolution,
+      aspectRatio,
+      temperature: temperatureRaw,
+      includeThoughts,
+      selectedStyleIds,
+      selectedPoseIds,
+      // 注意：用户补充不自动保存，仅手动模板可回填
+    };
+    localStorage.setItem(STORAGE_PREFS_KEY, JSON.stringify(prefs));
+  }, [resolution, aspectRatio, temperatureRaw, includeThoughts, selectedStyleIds, selectedPoseIds]);
+
 
   if (!isAuthenticated) {
     return (
@@ -567,467 +671,395 @@ export function LearnGeneratePage() {
   }
 
   return (
-    <div className="container max-w-screen-2xl py-8">
-      <div className="flex items-start justify-between gap-6">
-        <div
-          className="min-w-0 flex-1"
-          onDragOver={(e) => {
-            const types = Array.from(e.dataTransfer.types || []);
-            if (!types.includes("application/x-afs-task-ref")) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "copy";
-          }}
-          onDragEnter={(e) => {
-            const types = Array.from(e.dataTransfer.types || []);
-            if (!types.includes("application/x-afs-task-ref")) return;
-            e.preventDefault();
-            setImportDragOver(true);
-          }}
-          onDragLeave={() => setImportDragOver(false)}
-          onDrop={(e) => {
-            const raw = e.dataTransfer.getData("application/x-afs-task-ref");
-            if (!raw) return;
-            e.preventDefault();
-            setImportDragOver(false);
-            try {
-              const parsed = JSON.parse(raw) as { taskId?: string };
-              const taskId = String(parsed?.taskId || "").trim();
-              if (taskId) void reuseFromTaskId(taskId);
-            } catch {
-              // ignore
-            }
-          }}
-        >
-          <div className="flex items-center justify-between gap-4 mb-6">
-            <div className="space-y-1">
-              <h1 className="text-2xl font-bold">学习与生成</h1>
-              <div className="text-sm text-muted-foreground">风格/姿势学习成卡片，多选后与衣服图 + 提示词一起直出图。</div>
+    // Mobile Drawer logic can be added later, for now focused on the desktop structure as primary.
+    // Using a fixed height container to allow internal scrolling.
+    <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(216,180,254,0.35),_rgba(255,255,255,0)_60%),radial-gradient(circle_at_top_left,_rgba(125,211,252,0.35),_rgba(255,255,255,0)_60%),linear-gradient(135deg,_#f8fafc_0%,_#f3e8ff_50%,_#e0f2fe_100%)]">
+
+      {/* Left Column: Asset Library */}
+      <div className="w-[300px] flex-shrink-0 flex flex-col h-full border-r border-white/40 bg-white/60 backdrop-blur-xl shadow-sm z-10">
+        <AssetLibrary
+          stylePresets={stylePresetsAll || []}
+          posePresets={posePresetsAll || []}
+          facePresets={facePresetsAll || []}
+          selectedStyleIds={selectedStyleIds}
+          setSelectedStyleIds={setSelectedStyleIds}
+          selectedPoseIds={selectedPoseIds}
+          togglePoseSelect={togglePoseSelect}
+          selectedFaceIds={selectedFaceIds}
+          toggleFaceSelect={toggleFaceSelect}
+          onDeleteStyle={deleteStylePreset}
+          onDeletePose={deletePosePreset}
+          onDeleteFace={deleteFacePreset}
+          onUpdateStyle={updateStylePreset}
+          onUpdatePose={updatePosePreset}
+          onUpdateFace={updateFacePreset}
+          onRelearnStyle={(id: string) => (relearnStylePreset as any)(id)}
+          onRelearnPose={(id: string) => (relearnPosePreset as any)(id)}
+        />
+
+        {/* Style/Pose Upload Buttons moved to inside AssetLibrary or kept here? 
+            AssetLibrary has logic for display, but upload logic was in parent. 
+            Let's keep upload logic simple: AssetLibrary can have a "Add" button that triggers the hidden inputs here 
+            OR we pass the refs to AssetLibrary. 
+            For now, let's just put the upload buttons at the bottom of AssetLibrary or similar.
+            Actually, AssetLibrary UI has tabs. Let's add a "Upload" button group at the bottom of the Left Column here.
+        */}
+        <div className="p-3 border-t border-white/40 bg-white/50 backdrop-blur space-y-2">
+          <Button variant="outline" className="w-full justify-start gap-2" onClick={() => styleInputRef.current?.click()} disabled={styleLearning}>
+            {styleLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+            上传风格图学习
+          </Button>
+          <Button variant="outline" className="w-full justify-start gap-2" onClick={() => poseInputRef.current?.click()} disabled={poseLearning}>
+            {poseLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+            上传姿势图学习
+          </Button>
+          <Button variant="outline" className="w-full justify-start gap-2" onClick={() => setFaceDialogOpen(true)}>
+            <UserRound className="w-4 h-4" />
+            管理人脸模特
+          </Button>
+          {/* Hidden Inputs */}
+          <input
+            ref={styleInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files || []).slice(0, MAX_STYLE_LEARN_IMAGES);
+              e.currentTarget.value = "";
+              void onLearnStyle(files);
+            }}
+          />
+          <input
+            ref={poseInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.currentTarget.value = "";
+              if (file) void onLearnPose(file);
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Middle Column: Workbench */}
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-y-auto relative">
+        <div className="flex-1 p-4">
+          <div className="mx-auto w-full max-w-4xl space-y-4 rounded-3xl border border-white/50 bg-white/60 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">创作工作台</h1>
+              <div className="text-sm text-muted-foreground mt-1">
+                拖拽右侧任务复用参数，或直接开始创作。
+              </div>
             </div>
             <div className="flex items-center gap-2">
-              <Badge className="bg-white border border-slate-200 text-slate-700">衣服图 ≤ {MAX_GARMENT_IMAGES}</Badge>
-              <Badge className="bg-white border border-slate-200 text-slate-700">人脸 ≤ 3（不占衣服图名额）</Badge>
+              <Button variant="ghost" size="sm" onClick={() => {
+                setUserPrompt("");
+                setAutoStylePrompt("");
+                setAutoPromptExpanded(false);
+                lastAutoStyleSignatureRef.current = null;
+                setSelectedSnippetId(null);
+                setGarmentFiles([]);
+                setSelectedStyleIds([]);
+                setSelectedPoseIds([]);
+                setSelectedFaceIds([]);
+              }}>清空当前</Button>
             </div>
           </div>
+          {workbenchNotice && (
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/70 px-3 py-1 text-xs text-slate-600 shadow-sm backdrop-blur">
+              {workbenchNotice}
+            </div>
+          )}
 
+          {/* Drag Drop Hint */}
           <div
             className={cn(
-              "mb-6 rounded-2xl border border-dashed p-3 text-xs text-muted-foreground transition-colors",
-              importDragOver ? "border-purple-400 bg-purple-50" : "border-slate-200 bg-white",
+              "rounded-3xl border border-dashed p-4 transition-all duration-200 ease-in-out backdrop-blur",
+              garmentFiles.length > 0
+                ? "border-white/50 bg-white/70 shadow-sm"
+                : "border-white/40 bg-white/50 hover:bg-white/70 hover:border-purple-300/70",
+              garmentDragOver && "border-purple-400 bg-purple-50/80 ring-4 ring-purple-200/60 shadow-[0_0_30px_rgba(168,85,247,0.25)]"
             )}
+            onDragEnter={onGarmentDragEnter}
+            onDragLeave={onGarmentDragLeave}
+            onDragOver={onGarmentDragOver}
+            onDrop={onGarmentDrop}
           >
-            <div className="font-semibold text-slate-700">拖拽复用</div>
-            <div className="mt-1">
-              把右侧队列里的任务卡片拖到这里，自动回填当时的：提示词 + 参数 + 预设选择（衣服图片仍以当前上传为准）。
-            </div>
-            {!!workbenchNotice && <div className="mt-2 text-purple-700">{workbenchNotice}</div>}
-          </div>
+            <div className="flex flex-col items-center justify-center text-center space-y-4">
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Images className="w-4 h-4" /> 风格学习卡片
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                  <input
-                    ref={styleInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      const files = Array.from(e.target.files || []).slice(0, MAX_STYLE_LEARN_IMAGES);
-                      e.currentTarget.value = "";
-                      void onLearnStyle(files);
-                    }}
-                  />
-                  <Button variant="secondary" onClick={() => styleInputRef.current?.click()} disabled={styleLearning} className="gap-2">
-                    {styleLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-                    上传学习（≤{MAX_STYLE_LEARN_IMAGES}）
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {stylePresets.length ? (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    {stylePresets.map((p: StylePreset) => (
-                      <PresetCard
-                        key={p.id}
-                        id={p.id}
-                        name={p.name}
-                        thumbnailPath={p.thumbnailPath || p.imagePaths?.[0]}
-                        kindLabel="STYLE"
-                        selected={selectedStyleIds.includes(p.id)}
-                        onToggle={() => setSelectedStyleIds((prev) => (prev.includes(p.id) ? [] : [p.id]))}
-                        onOpenDetails={() => openPresetDetails("STYLE", p)}
-                        onRetry={async () => {
-                          // 复用已保存图片重新学习，并覆盖更新 promptBlock/analysis
-                          await (relearnStylePreset as any)(p.id);
-                          await fetchStylePresets();
-                        }}
-                        onRename={(next) => updateStylePreset(p.id, { name: next })}
-                        description={p.description}
-                        onDelete={async () => {
-                          await deleteStylePreset(p.id);
-                          setSelectedStyleIds((prev) => prev.filter((x) => x !== p.id));
-                        }}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-sm text-muted-foreground">暂无风格卡片，先上传风格图学习。</div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Sparkles className="w-4 h-4" /> 姿势学习卡片（1图=1卡）
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                  <input
-                    ref={poseInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.currentTarget.value = "";
-                      if (file) void onLearnPose(file);
-                    }}
-                  />
-                  <Button variant="secondary" onClick={() => poseInputRef.current?.click()} disabled={poseLearning} className="gap-2">
-                    {poseLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-                    上传学习
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {posePresets.length ? (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    {posePresets.map((p: PosePreset) => (
-                      <PresetCard
-                        key={p.id}
-                        id={p.id}
-                        name={p.name}
-                        thumbnailPath={p.thumbnailPath || p.imagePaths?.[0]}
-                        kindLabel="POSE"
-                        selected={selectedPoseIds.includes(p.id)}
-                        onToggle={() => togglePoseSelect(p.id)}
-                        onOpenDetails={() => openPresetDetails("POSE", p)}
-                        onRename={(next) => updatePosePreset(p.id, { name: next })}
-                        description={p.description}
-                        onDelete={async () => {
-                          await deletePosePreset(p.id);
-                          setSelectedPoseIds((prev) => prev.filter((x) => x !== p.id));
-                        }}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-sm text-muted-foreground">暂无姿势卡片，先上传姿势图学习。</div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Face: 放到上方卡片区，保持紧凑；“选择/管理”弹窗操作 */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-2">
-                    <UserRound className="w-4 h-4" />
-                    人脸/模特（最多 {MAX_FACE_SELECT} 张）
-                  </span>
-                  <Button variant="secondary" size="sm" className="gap-2" onClick={() => setFaceDialogOpen(true)}>
-                    选择/管理
-                  </Button>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs text-muted-foreground">已选 {selectedFaceIds.length}/{MAX_FACE_SELECT}</div>
-                  {!!selectedFaceIds.length && (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedFaceIds([])}>
-                      清空
-                    </Button>
-                  )}
-                </div>
-
-                {facePresetsAll.length ? (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    {facePresetsAll
-                      .slice()
-                      .sort((a, b) => b.createdAt - a.createdAt)
-                      .map((p) => (
-                        <PresetCard
-                          key={p.id}
-                          id={p.id}
-                          name={p.name}
-                          thumbnailPath={p.thumbnailPath || p.imagePath}
-                          kindLabel="FACE"
-                          selected={selectedFaceIds.includes(p.id)}
-                        onToggle={() => toggleFaceSelect(p.id)}
-                        onRename={(next) => updateFacePreset(p.id, { name: next })}
-                        description={p.description}
-                        onDelete={async () => {
-                          await deleteFacePreset(p.id);
-                          setSelectedFaceIds((prev) => prev.filter((x) => x !== p.id));
-                        }}
-                        />
-                      ))}
-                  </div>
-                ) : (
-                  <div className="text-sm text-muted-foreground">暂无人脸/模特卡片，点右上角“选择/管理”新建。</div>
-                )}
-
-                <div className="text-xs text-muted-foreground">提示：人脸不占衣服 6 张名额；用于保持面部身份一致性。</div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Generate: 下方全宽，作为页面主体 */}
-          <div className="mt-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Wand2 className="w-4 h-4" /> 生成
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div
-                  className={cn(
-                    "space-y-2 rounded-xl border border-dashed p-3 transition-colors",
-                    garmentDragOver ? "border-primary bg-primary/5" : "border-muted",
-                  )}
-                  onDragEnter={onGarmentDragEnter}
-                  onDragLeave={onGarmentDragLeave}
-                  onDragOver={onGarmentDragOver}
-                  onDrop={onGarmentDrop}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm font-semibold">上传衣服图片</div>
-                    <div className="text-xs text-muted-foreground">
-                      {garmentFiles.length}/{MAX_GARMENT_IMAGES}
+              {garmentFiles.length > 0 ? (
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4 w-full">
+                  {garmentUrls.map((u, idx) => (
+                    <div key={`${u}-${idx}`} className="relative aspect-[3/4] group rounded-xl overflow-hidden shadow-sm border bg-white">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={u} alt="garment" className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <Button variant="destructive" size="icon" className="h-8 w-8 rounded-full" onClick={(e) => {
+                          e.stopPropagation();
+                          removeGarmentAt(idx);
+                        }}>
+                          <X className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-
-                  <input
-                    ref={garmentInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      const files = Array.from(e.target.files || []);
-                      e.currentTarget.value = "";
-                      addGarmentFiles(files);
-                    }}
-                  />
-                  <div className="flex items-center gap-2">
-                    <Button variant="secondary" onClick={() => garmentInputRef.current?.click()} className="gap-2">
-                      <UploadCloud className="w-4 h-4" /> 选择图片
-                    </Button>
-                    <Button variant="ghost" onClick={() => setGarmentFiles([])} disabled={!garmentFiles.length} className="text-muted-foreground">
-                      清空
-                    </Button>
-                  </div>
-
-                  {!garmentFiles.length && (
-                    <div className="text-xs text-muted-foreground">
-                      支持拖拽图片到此处上传（最多 {MAX_GARMENT_IMAGES} 张）
-                    </div>
-                  )}
-
-                  {!!garmentFiles.length && (
-                    <div className="flex gap-2 overflow-x-auto pb-1">
-                      {garmentUrls.map((u, idx) => (
-                        <div key={`${u}-${idx}`} className="relative w-20 h-20 flex-shrink-0 rounded-xl overflow-hidden border bg-muted">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={u} alt={`garment-${idx}`} className="w-full h-full object-cover" />
-                          <button
-                            type="button"
-                            className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-6 h-6 flex items-center justify-center"
-                            onClick={() => removeGarmentAt(idx)}
-                            title="移除"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {!!garmentFiles.length && (
-                    <div className="text-xs text-muted-foreground">
-                      总大小：
-                      {(garmentFiles.reduce((sum, f) => sum + (f.size || 0), 0) / (1024 * 1024)).toFixed(2)}MB
-                    </div>
-                  )}
-                </div>
-
-                <Separator />
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm font-semibold">提示词</div>
-                    <div className="text-xs text-muted-foreground">可不选卡片，直接用提示词生成</div>
-                  </div>
-
-                  {savedPrompts.length > 0 && (
-                    <Select
-                      onValueChange={(id) => {
-                        const p = savedPrompts.find((x) => x.id === id);
-                        if (p) {
-                          setPromptTouched(true);
-                          setPrompt(p.text);
-                        }
-                      }}
+                  ))}
+                  {garmentFiles.length < MAX_GARMENT_IMAGES && (
+                    <button
+                      onClick={() => garmentInputRef.current?.click()}
+                      className="flex flex-col items-center justify-center aspect-[3/4] rounded-xl border-2 border-dashed border-slate-200 hover:border-purple-400 hover:bg-purple-50 text-muted-foreground hover:text-purple-600 transition-colors"
                     >
-                      <SelectTrigger>
-                        <SelectValue placeholder="选择已保存提示词" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {savedPrompts.map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      <UploadCloud className="w-6 h-6 mb-2" />
+                      <span className="text-xs font-medium">添加图片</span>
+                    </button>
                   )}
+                </div>
+              ) : (
+                <div className="py-4" onClick={() => garmentInputRef.current?.click()}>
+                  <div className="w-12 h-12 bg-purple-100/50 text-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-2">
+                    <UploadCloud className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-semibold text-slate-900">上传衣服参考图</h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                    拖拽图片到这里，或点击上传。支持 JPG/PNG。<br />
+                    最多 {MAX_GARMENT_IMAGES} 张。
+                  </p>
+                </div>
+              )}
 
-                  <Textarea
-                    value={prompt}
-                    onChange={(e) => {
-                      setPromptTouched(true);
-                      setPrompt(e.target.value);
+              <input
+                ref={garmentInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || []);
+                  e.currentTarget.value = "";
+                  addGarmentFiles(files);
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Prompt Section */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-semibold text-slate-700">提示词组合</label>
+              <div className="flex items-center gap-2">
+                {promptSnippets.length > 0 && (
+                  <Select
+                    value={selectedSnippetId ?? undefined}
+                    onValueChange={(id) => {
+                      const snippet = promptSnippets.find((x) => x.id === id);
+                      setSelectedSnippetId(id);
+                      if (snippet) setUserPrompt(snippet.text);
                     }}
-                    placeholder="例如：白色背景棚拍，模特穿着上传衣服，要求自然褶皱与真实光影，面部清晰..."
-                    className="min-h-[140px]"
-                  />
+                  >
+                    <SelectTrigger className="h-8 w-[160px] text-xs" disabled={promptSnippetsLoading}>
+                      <SelectValue placeholder={promptSnippetsLoading ? "模板加载中..." : "加载补充模板..."} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {promptSnippets.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name || p.text.slice(0, 24)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {selectedSnippetId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs text-muted-foreground"
+                    onClick={() => void removePromptSnippet(selectedSnippetId)}
+                    disabled={promptSnippetsBusy === "delete"}
+                  >
+                    {promptSnippetsBusy === "delete" ? "删除中..." : "删除模板"}
+                  </Button>
+                )}
+              </div>
+            </div>
 
-                  <div className="flex flex-col md:flex-row gap-2">
-                    <Input value={promptName} onChange={(e) => setPromptName(e.target.value)} placeholder="保存名（可选）" />
-                    <div className="flex gap-2">
-                      <Button type="button" variant="secondary" onClick={savePrompt} className="gap-2">
-                        保存提示词
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        onClick={() => {
-                          if (!savedPrompts.length) return;
-                          const last = savedPrompts[0];
-                          if (confirm(`删除最近保存的提示词：${last.name} ?`)) deleteSavedPrompt(last.id);
-                        }}
-                        disabled={!savedPrompts.length}
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-500">风格推荐词（自动）</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setAutoPromptExpanded((prev) => !prev)}
+                  >
+                    {autoPromptExpanded ? "收起" : "展开"}
+                  </Button>
+                </div>
+                {autoPromptExpanded ? (
+                  <div
+                    className={cn(
+                      "rounded-2xl border bg-white/70 p-2 shadow-sm backdrop-blur transition",
+                      autoStylePrompt ? "border-white/50" : "border-slate-200/60",
+                      autoPromptGlow && autoStylePrompt && "ring-2",
+                      autoPromptGlow && autoStylePrompt && styleAccent.glow,
+                    )}
+                  >
+                    <div className="mb-2 flex items-center justify-between">
+                      <span
+                        className={cn(
+                          "inline-flex items-center rounded-full border px-2 py-1 text-[11px]",
+                          autoStylePrompt
+                            ? styleAccent.pill
+                            : "bg-slate-100/70 text-slate-500 border-slate-200/60",
+                        )}
                       >
-                        删除最近
+                        {activeStyleName ? `风格：${activeStyleName}` : "风格推荐词"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setAutoPromptExpanded(false)}
+                      >
+                        收起
                       </Button>
                     </div>
+                    <Textarea
+                      value={autoStylePrompt}
+                      onChange={(e) => setAutoStylePrompt(e.target.value)}
+                      placeholder="风格推荐词会在你选择风格后自动填充"
+                      className="min-h-[120px] text-xs rounded-xl border-slate-200/60 bg-white/80 p-3 focus:border-purple-400 focus:ring-purple-400/20 resize-y"
+                    />
                   </div>
+                ) : (
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-full border px-4 py-2 text-xs transition",
+                      autoStylePrompt
+                        ? styleAccent.pill
+                        : "bg-slate-100/70 text-slate-500 border-slate-200/60",
+                      autoPromptGlow && autoStylePrompt && "ring-2",
+                      autoPromptGlow && autoStylePrompt && styleAccent.glow,
+                    )}
+                    onClick={() => setAutoPromptExpanded(true)}
+                  >
+                    <span className="font-semibold">
+                      {activeStyleName ? `风格推荐词 · ${activeStyleName}` : "风格推荐词"}
+                    </span>
+                    <span className="text-[11px] opacity-70">
+                      {autoStylePrompt ? "点击展开查看/编辑" : "选择风格后自动生成"}
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-500">用户补充（手动，可保存）</span>
+                  {!promptSnippets.length && promptSnippetsLoading && (
+                    <span className="text-xs text-muted-foreground">模板加载中...</span>
+                  )}
                 </div>
-
-                <Separator />
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold text-muted-foreground">输出尺寸（1K/2K/4K）</div>
-                    <Select value={resolution} onValueChange={(v) => setResolution(v as any)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1K">1K</SelectItem>
-                        <SelectItem value="2K">2K</SelectItem>
-                        <SelectItem value="4K">4K</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold text-muted-foreground">画面比例</div>
-                    <Select value={aspectRatio} onValueChange={(v) => setAspectRatio(v as any)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1:1">1:1</SelectItem>
-                        <SelectItem value="4:3">4:3</SelectItem>
-                        <SelectItem value="3:4">3:4</SelectItem>
-                        <SelectItem value="16:9">16:9</SelectItem>
-                        <SelectItem value="9:16">9:16</SelectItem>
-                        <SelectItem value="21:9">21:9</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold text-muted-foreground">Seed（可选）</div>
-                    <Input value={seedRaw} onChange={(e) => setSeedRaw(e.target.value)} placeholder="整数，例如 123" />
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold text-muted-foreground">Temperature（可选）</div>
-                    <Input value={temperatureRaw} onChange={(e) => setTemperatureRaw(e.target.value)} placeholder="0~2，例如 0.8" />
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3 rounded-xl border p-3 md:col-span-2">
-                    <div className="space-y-0.5">
-                      <div className="text-sm font-semibold">includeThoughts（实验）</div>
-                      <div className="text-xs text-muted-foreground">仅生图阶段启用；服务端会强制输出 IMAGE，并在无图时自动关闭 thinking 重试。</div>
-                    </div>
-                    <Switch checked={includeThoughts} onCheckedChange={setIncludeThoughts} />
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm font-semibold">对话指令（可选）</div>
-                    <div className="text-xs text-muted-foreground">
-                      当前任务：{activeTaskId ? activeTaskId.slice(0, 8) : "未选择"}
-                    </div>
-                  </div>
+                <div className="relative">
                   <Textarea
-                    value={chatMessage}
-                    onChange={(e) => setChatMessage(e.target.value)}
-                    placeholder="例如：把背景更暖一些、镜头更近、提高对比度、脸更清晰、保持衣服细节不变..."
-                    className="min-h-[90px]"
+                    value={userPrompt}
+                    onChange={(e) => {
+                      setUserPrompt(e.target.value);
+                      if (selectedSnippetId) setSelectedSnippetId(null);
+                    }}
+                    placeholder="补充你想要的细节：动作、场景、镜头语言、光影氛围..."
+                    className="min-h-[140px] text-sm p-3 rounded-2xl border-white/50 bg-white/70 shadow-sm backdrop-blur focus:border-purple-400 focus:ring-purple-400/20 resize-y"
                   />
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs text-muted-foreground">
-                      提示：打开右侧任务大图后点“重新生成”，若此处有内容会走对话流程；留空则按任务原始提示词重绘。
-                    </div>
-                    <Button variant="ghost" onClick={() => setChatMessage("")} disabled={!chatMessage.trim()}>
-                      清空
+                  <div className="absolute bottom-3 right-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-muted-foreground"
+                      onClick={() => void savePromptSnippet()}
+                      disabled={promptSnippetsBusy === "create"}
+                    >
+                      {promptSnippetsBusy === "create" ? "保存中..." : "保存补充"}
                     </Button>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
 
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>预计消耗：{estimatedCreditsCost} 积分</span>
-                  <span>余额：{creditsLoaded ? balance : "..."}</span>
-                </div>
-                {creditsLoaded && balance < estimatedCreditsCost && (
-                  <div className="text-xs text-rose-600">积分不足，无法生成；请先充值。</div>
-                )}
+          {/* Advanced Settings */}
+          <AdvancedSettings
+            resolution={resolution}
+            setResolution={setResolution as any}
+            aspectRatio={aspectRatio}
+            setAspectRatio={setAspectRatio as any}
+            seed={seedRaw}
+            setSeed={setSeedRaw}
+            temperature={temperatureRaw}
+            setTemperature={setTemperatureRaw}
+            includeThoughts={includeThoughts}
+            setIncludeThoughts={setIncludeThoughts}
+          />
 
-                <Button
-                  onClick={onGenerate}
-                  disabled={creating || (creditsLoaded && balance < estimatedCreditsCost)}
-                  className="w-full gap-2"
-                >
-                  {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                  生成（直出图）
-                </Button>
-              </CardContent>
-            </Card>
+          {/* Generate Button Area - Sticky Bottom or just normal */}
+          <div className="pt-2 sticky bottom-0 bg-gradient-to-t from-white/80 via-white/40 to-transparent pb-4 z-10">
+            <div className="flex items-center justify-between mb-2 px-1">
+              <div className="text-xs text-muted-foreground">
+                预计消耗: <span className="font-medium text-slate-900">{estimatedCreditsCost}</span> 积分
+                <span className="mx-2">|</span>
+                余额: {creditsLoaded ? balance : "..."}
+              </div>
+              {creditsLoaded && balance < estimatedCreditsCost && (
+                <span className="text-xs text-rose-500 font-medium">积分不足</span>
+              )}
+            </div>
+            <Button
+              size="lg"
+              className="w-full h-11 text-base font-semibold shadow-lg shadow-purple-500/20 bg-gradient-to-r from-orange-500 via-pink-500 to-violet-600 hover:opacity-90 active:scale-[0.98] transition-all"
+              onClick={onGenerate}
+              disabled={creating || (creditsLoaded && balance < estimatedCreditsCost)}
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  正在生成任务...
+                </>
+              ) : (
+                <>
+                  <Wand2 className="w-5 h-5 mr-2" />
+                  立即生成 (Generate)
+                </>
+              )}
+            </Button>
+          </div>
           </div>
         </div>
+      </div>
 
+      {/* Right Column: Queue */}
+      <div
+        className="w-[320px] flex-shrink-0 border-l border-white/40 bg-white/60 backdrop-blur-xl flex flex-col shadow-sm z-10"
+        onDragOver={(e) => {
+          const types = Array.from(e.dataTransfer.types || []);
+          if (!types.includes("application/x-afs-task-ref")) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(e) => {
+          const raw = e.dataTransfer.getData("application/x-afs-task-ref");
+          if (!raw) return;
+          e.preventDefault();
+          try {
+            const parsed = JSON.parse(raw) as { taskId?: string };
+            const taskId = String(parsed?.taskId || "").trim();
+            if (taskId) void reuseFromTaskId(taskId);
+          } catch { }
+        }}
+      >
         <QueueSidebar
           queue={queue}
           tasksById={tasksById}
@@ -1059,123 +1091,6 @@ export function LearnGeneratePage() {
           <div className="max-h-[70vh] overflow-y-auto pr-2">
             <FacePresetSelector selectedIds={selectedFaceIds} onSelect={setSelectedFaceIds} maxSelection={3} />
           </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={presetDetailOpen} onOpenChange={setPresetDetailOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>详情/编辑</DialogTitle>
-          </DialogHeader>
-          {presetDetail ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="rounded-xl border bg-muted overflow-hidden">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={toImgSrc(presetDetail.thumbnailPath || presetDetail.imagePaths?.[0])}
-                  alt={presetDetail.name}
-                  className="w-full h-full object-cover"
-                  loading="lazy"
-                  decoding="async"
-                />
-              </div>
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <div className="text-xs font-semibold text-muted-foreground">名称</div>
-                  <Input value={presetDetailName} onChange={(e) => setPresetDetailName(e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-xs font-semibold text-muted-foreground">备注</div>
-                  <Textarea
-                    value={presetDetailDesc}
-                    onChange={(e) => setPresetDetailDesc(e.target.value)}
-                    placeholder="可记录拍摄要点、风格备注..."
-                    className="min-h-[110px]"
-                  />
-                </div>
-                <div className="flex flex-wrap gap-2 pt-2">
-                  <Button
-                    variant="secondary"
-                    disabled={presetDetailBusy !== null}
-                    onClick={async () => {
-                      if (!presetDetailId || !presetDetailKind) return;
-                      const nextName = presetDetailName.trim();
-                      if (!nextName) {
-                        alert("名称不能为空");
-                        return;
-                      }
-                      setPresetDetailBusy("save");
-                      try {
-                        if (presetDetailKind === "STYLE") {
-                          await updateStylePreset(presetDetailId, {
-                            name: nextName,
-                            description: presetDetailDesc.trim(),
-                          });
-                        } else {
-                          await updatePosePreset(presetDetailId, {
-                            name: nextName,
-                            description: presetDetailDesc.trim(),
-                          });
-                        }
-                        closePresetDetails();
-                      } finally {
-                        setPresetDetailBusy(null);
-                      }
-                    }}
-                  >
-                    保存
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    disabled={presetDetailBusy !== null}
-                    onClick={async () => {
-                      if (!presetDetailId || !presetDetailKind) return;
-                      if (!confirm("重新学习会覆盖该卡片的 AI 分析结果，是否继续？")) return;
-                      setPresetDetailBusy("relearn");
-                      try {
-                        if (presetDetailKind === "STYLE") {
-                          await (relearnStylePreset as any)(presetDetailId);
-                          await fetchStylePresets();
-                        } else {
-                          await (relearnPosePreset as any)(presetDetailId);
-                          await fetchPosePresets();
-                        }
-                      } finally {
-                        setPresetDetailBusy(null);
-                      }
-                    }}
-                  >
-                    重新学习
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    disabled={presetDetailBusy !== null}
-                    onClick={async () => {
-                      if (!presetDetailId || !presetDetailKind) return;
-                      if (!confirm("确定删除该卡片吗？")) return;
-                      setPresetDetailBusy("delete");
-                      try {
-                        if (presetDetailKind === "STYLE") {
-                          await deleteStylePreset(presetDetailId);
-                          setSelectedStyleIds((prev) => prev.filter((x) => x !== presetDetailId));
-                        } else {
-                          await deletePosePreset(presetDetailId);
-                          setSelectedPoseIds((prev) => prev.filter((x) => x !== presetDetailId));
-                        }
-                        closePresetDetails();
-                      } finally {
-                        setPresetDetailBusy(null);
-                      }
-                    }}
-                  >
-                    删除
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">卡片不存在或已删除。</div>
-          )}
         </DialogContent>
       </Dialog>
     </div>

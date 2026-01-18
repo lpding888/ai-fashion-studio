@@ -2,12 +2,9 @@
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Upload, Camera, Loader2, Sparkles, Wand2, Plus as PlusIcon, BrainCircuit, CheckCircle2 } from 'lucide-react';
+import { Upload, Loader2, Plus as PlusIcon, BrainCircuit, CheckCircle2 } from 'lucide-react';
 import { learnStyle } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { Textarea } from '@/components/ui/textarea';
 
 interface StyleAnalyzerProps {
     onAnalysisComplete?: (preset: any, files: File[]) => void;
@@ -78,6 +75,12 @@ export function StyleAnalyzer({ onAnalysisComplete, className, compact = false }
 
         try {
             const result = await learnStyle(selectedImages);
+            const failed = result?.success === false || result?.preset?.learnStatus === 'FAILED';
+            if (failed) {
+                setError('风格学习失败（模型返回为空），请重试');
+                setLearnedPreset(null);
+                return;
+            }
             setLearnedPreset(result.preset);
             if (onAnalysisComplete) {
                 onAnalysisComplete(result.preset, selectedImages);

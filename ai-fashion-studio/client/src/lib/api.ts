@@ -134,6 +134,23 @@ export const directMessageTask = async (taskId: string, message: string) => {
     return response.data;
 };
 
+export const listPromptSnippets = async () => {
+    const response = await api.get('/prompt-snippets');
+    return response.data;
+};
+
+export const createPromptSnippet = async (payload: { text: string; name?: string }) => {
+    const response = await api.post('/prompt-snippets', payload, {
+        headers: { 'Content-Type': 'application/json' },
+    });
+    return response.data;
+};
+
+export const deletePromptSnippet = async (id: string) => {
+    const response = await api.delete(`/prompt-snippets/${id}`);
+    return response.data;
+};
+
 export const createStylePreset = async (data: {
     name: string;
     description?: string;

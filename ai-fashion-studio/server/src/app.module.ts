@@ -23,6 +23,7 @@ import { WorkflowPromptModule } from './workflow-prompt/workflow-prompt.module';
 import { AdminLogModule } from './admin-log/admin-log.module';
 import { DirectPromptModule } from './direct-prompt/direct-prompt.module';
 import { AdminAnalyticsModule } from './admin-analytics/admin-analytics.module';
+import { PromptSnippetModule } from './prompt-snippet/prompt-snippet.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { AdminAnalyticsModule } from './admin-analytics/admin-analytics.module';
     DirectPromptModule,
     AdminLogModule,
     AdminAnalyticsModule,
+    PromptSnippetModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

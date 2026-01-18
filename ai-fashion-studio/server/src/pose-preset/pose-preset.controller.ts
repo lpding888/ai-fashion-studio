@@ -51,6 +51,20 @@ export class PosePresetController {
     fs.ensureDirSync(POSE_PRESETS_DIR);
   }
 
+  private isEmptyAnalysis(analysis: any): boolean {
+    const hasMeaningfulValue = (value: any): boolean => {
+      if (value === null || value === undefined) return false;
+      if (typeof value === 'string') return value.trim().length > 0;
+      if (typeof value === 'number' || typeof value === 'boolean') return true;
+      if (Array.isArray(value)) return value.some((item) => hasMeaningfulValue(item));
+      if (typeof value === 'object') {
+        return Object.values(value).some((item) => hasMeaningfulValue(item));
+      }
+      return false;
+    };
+    return !hasMeaningfulValue(analysis);
+  }
+
   private requireAdmin(user: UserModel) {
     if (!user || user.role !== 'ADMIN') {
       throw new ForbiddenException('需要管理员权限');
@@ -124,6 +138,24 @@ export class PosePresetController {
         'Failed to learn pose: ' + (error?.message || error),
       );
     }
+    if (this.isEmptyAnalysis(analysis)) {
+      const preset = {
+        id: presetId,
+        userId: user?.id,
+        kind: 'POSE' as const,
+        name: '姿势学习失败',
+        description: '模型返回为空，请点击重新学习',
+        imagePaths: [imageUrlOrPath],
+        thumbnailPath: imageUrlOrPath,
+        tags: ['AI Learned', 'Pose', 'Failed'],
+        createdAt: Date.now(),
+        learnStatus: 'FAILED',
+        learnError: '模型返回为空',
+      };
+      await this.db.saveStylePreset(preset as any);
+      this.logger.warn(`⚠️ Pose learning returned empty analysis: ${presetId}`);
+      return { success: false, preset, reason: 'EMPTY_ANALYSIS' };
+    }
 
     const name =
       String(analysis?.name || '').trim() ||
@@ -142,6 +174,7 @@ export class PosePresetController {
       tags: ['AI Learned', 'Pose'],
       promptBlock,
       analysis,
+      learnStatus: 'SUCCESS',
       createdAt: Date.now(),
     };
 
@@ -224,6 +257,14 @@ export class PosePresetController {
         'Failed to relearn pose: ' + (error?.message || error),
       );
     }
+    if (this.isEmptyAnalysis(analysis)) {
+      const next = await this.db.updateStylePreset(id, {
+        learnStatus: 'FAILED',
+        learnError: '模型返回为空',
+      } as any);
+      if (!next) throw new BadRequestException('Preset not found');
+      return { success: false, preset: next, reason: 'EMPTY_ANALYSIS' };
+    }
 
     const name =
       String(analysis?.name || '').trim()
@@ -237,6 +278,8 @@ export class PosePresetController {
       description,
       promptBlock,
       analysis,
+      learnStatus: 'SUCCESS',
+      learnError: undefined,
       thumbnailPath: (preset as any).thumbnailPath || imagePaths[0],
     };
 

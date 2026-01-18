@@ -13,6 +13,8 @@ export interface StylePreset {
     tags?: string[];
     styleHint?: string;
     promptBlock?: string;
+    learnStatus?: 'SUCCESS' | 'FAILED';
+    learnError?: string;
     createdAt: number;
 }
 

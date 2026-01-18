@@ -16,13 +16,15 @@ export function PresetCard(props: {
   thumbnailPath?: string;
   selected: boolean;
   kindLabel: string;
+  isFailed?: boolean;
   onToggle: () => void;
-  onRename: (nextName: string) => Promise<void>;
-  onDelete: () => Promise<void>;
+  onRename?: (nextName: string) => Promise<void>;
+  onDelete?: () => Promise<void>;
   onRetry?: () => Promise<void>;
   onOpenDetails?: () => void;
+  compact?: boolean; // Added for AssetLibrary smaller layout
 }) {
-  const { id, name, description, thumbnailPath, selected, kindLabel, onToggle, onRename, onDelete, onRetry, onOpenDetails } = props;
+  const { id, name, description, thumbnailPath, selected, kindLabel, isFailed, onToggle, onRename, onDelete, onRetry, onOpenDetails } = props;
   const [editing, setEditing] = React.useState(false);
   const [draftName, setDraftName] = React.useState(name);
   const [busy, setBusy] = React.useState<"rename" | "delete" | "retry" | null>(null);
@@ -56,7 +58,10 @@ export function PresetCard(props: {
         )}
 
         <div className="absolute top-2 left-2">
-          <Badge className="bg-white/80 text-slate-800 border border-slate-200">{kindLabel}</Badge>
+          <Badge className="bg-white/80 text-slate-800 border border-slate-200">
+            {isFailed && <span className="mr-1 inline-block h-2 w-2 rounded-full bg-rose-500" />}
+            {kindLabel}
+          </Badge>
         </div>
 
         {showInlineActions && (
@@ -119,6 +124,7 @@ export function PresetCard(props: {
               onClick={async (e) => {
                 e.stopPropagation();
                 if (!confirm(`确定删除这个${kindLabel}卡片吗？`)) return;
+                if (!onDelete) return;
                 setBusy("delete");
                 try {
                   await onDelete();
@@ -144,7 +150,7 @@ export function PresetCard(props: {
               className="h-9 w-9"
               onClick={async () => {
                 const next = draftName.trim();
-                if (!next) return;
+                if (!next || !onRename) return;
                 setBusy("rename");
                 try {
                   await onRename(next);
@@ -166,8 +172,12 @@ export function PresetCard(props: {
           </div>
         )}
         <div className="mt-1 flex items-center justify-between gap-2">
-          {!!description && (
-            <div className="text-[11px] text-muted-foreground line-clamp-1">备注：{description}</div>
+          {isFailed ? (
+            <div className="text-[11px] text-rose-500 line-clamp-1">学习失败，请重新学习</div>
+          ) : (
+            !!description && (
+              <div className="text-[11px] text-muted-foreground line-clamp-1">备注：{description}</div>
+            )
           )}
           {!!onOpenDetails && (
             <Button

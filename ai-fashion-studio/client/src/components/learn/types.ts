@@ -36,9 +36,10 @@ export type QueueItem = {
   createdAt: number;
 };
 
-export type SavedPrompt = {
+export type PromptSnippet = {
   id: string;
-  name: string;
+  name?: string;
   text: string;
   createdAt: number;
+  updatedAt: number;
 };
