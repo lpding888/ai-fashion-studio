@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BACKEND_ORIGIN } from '@/lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -25,7 +25,7 @@ type SseEvent = {
   ts: number;
   event: string;
   data: string;
-  parsed?: any;
+  parsed?: unknown;
 };
 
 export default function AdminMcpPage() {
@@ -61,7 +61,7 @@ export default function AdminMcpPage() {
     });
   };
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -74,13 +74,13 @@ export default function AdminMcpPage() {
         throw new Error(data?.message || `HTTP ${res.status}`);
       }
       setStatus(data?.status || null);
-    } catch (e: any) {
-      setError(e?.message || String(e));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
       setStatus(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const disconnect = () => {
     abortRef.current?.abort();
@@ -171,16 +171,16 @@ export default function AdminMcpPage() {
           // ignore: id/retry/other fields
         }
       }
-    } catch (e: any) {
-      if (e?.name === 'AbortError') return;
-      setError(e?.message || String(e));
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === 'AbortError') return;
+      setError(e instanceof Error ? e.message : String(e));
       setConnecting(false);
       setConnected(false);
       setMessagesUrl(null);
     }
   };
 
-  const postMessage = async (payload: any) => {
+  const postMessage = async (payload: unknown) => {
     const token = localStorage.getItem('token');
     if (!token) throw new Error('缺少 token');
     if (!messagesUrl) throw new Error('尚未拿到 messages endpoint（等待 SSE endpoint 事件）');
@@ -228,7 +228,7 @@ export default function AdminMcpPage() {
     await postMessage({ jsonrpc: '2.0', id, method: 'tools/list', params: {} });
   };
 
-  const sendCallTool = async (toolName: string, args: any) => {
+  const sendCallTool = async (toolName: string, args: Record<string, unknown>) => {
     const id = nextId;
     setNextId((v) => v + 1);
     await postMessage({
@@ -241,8 +241,7 @@ export default function AdminMcpPage() {
 
   useEffect(() => {
     void fetchStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchStatus]);
 
   const fmtTs = (ts?: number) => {
     if (!ts) return '-';
@@ -368,8 +367,8 @@ export default function AdminMcpPage() {
                   try {
                     const payload = JSON.parse(sendText || '');
                     await postMessage(payload);
-                  } catch (e: any) {
-                    setError(e?.message || String(e));
+                  } catch (e: unknown) {
+                    setError(e instanceof Error ? e.message : String(e));
                   }
                 })()
               }

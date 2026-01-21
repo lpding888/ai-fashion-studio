@@ -1,14 +1,18 @@
 
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import * as React from 'react';
-import { UploadCloud, X, FileImage, ImagePlus, AlertTriangle } from 'lucide-react';
+import { UploadCloud, X, ImagePlus, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface UploadZoneProps {
     onFilesSelected: (files: File[]) => void;
     selectedFiles: File[];
+    selectedUrls?: string[];
+    onRemoveUrl?: (url: string) => void;
     className?: string;
     maxFiles?: number;
     label?: string;
@@ -17,6 +21,8 @@ interface UploadZoneProps {
 export function UploadZone({
     onFilesSelected,
     selectedFiles,
+    selectedUrls = [],
+    onRemoveUrl,
     className,
     maxFiles = 14,
     label = "服装参考图"
@@ -24,8 +30,9 @@ export function UploadZone({
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const [isDragOver, setIsDragOver] = React.useState(false);
 
-    const isAtLimit = selectedFiles.length >= maxFiles;
-    const remainingSlots = maxFiles - selectedFiles.length;
+    const totalCount = selectedFiles.length + selectedUrls.length;
+    const isAtLimit = totalCount >= maxFiles;
+    const remainingSlots = Math.max(0, maxFiles - totalCount);
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -76,7 +83,7 @@ export function UploadZone({
                     "text-sm font-mono px-2 py-0.5 rounded",
                     isAtLimit ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
                 )}>
-                    {selectedFiles.length}/{maxFiles}
+                    {totalCount}/{maxFiles}
                 </span>
             </div>
 
@@ -135,13 +142,36 @@ export function UploadZone({
             </motion.div>
 
             <AnimatePresence>
-                {selectedFiles.length > 0 && (
+                {totalCount > 0 && (
                     <motion.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
                         className="grid grid-cols-3 md:grid-cols-4 gap-4"
                     >
+                        {selectedUrls.map((url, i) => (
+                            <motion.div
+                                key={`${url}-${i}`}
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.5 }}
+                                className="relative group border border-slate-200 rounded-lg overflow-hidden h-24 flex items-center justify-center bg-slate-50 shadow-sm"
+                            >
+                                <img src={url} alt="asset" className="h-full w-full object-cover" />
+
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onRemoveUrl?.(url);
+                                        }}
+                                        className="bg-red-500 text-white p-1.5 rounded-full hover:bg-red-600 transition-colors"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </motion.div>
+                        ))}
                         {selectedFiles.map((file, i) => (
                             <motion.div
                                 key={`${file.name}-${i}`}

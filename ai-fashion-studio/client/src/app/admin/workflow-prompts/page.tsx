@@ -32,6 +32,16 @@ type ActiveRef = {
   updatedBy: { id: string; username: string };
 };
 
+const getErrorMessage = (err: unknown, fallback: string) => {
+  if (err && typeof err === 'object') {
+    const responseMessage = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+    if (responseMessage) return responseMessage;
+    const message = (err as { message?: string }).message;
+    if (message) return message;
+  }
+  return fallback;
+};
+
 function formatTime(ms?: number) {
   if (!ms) return '-';
   return new Date(ms).toLocaleString('zh-CN');
@@ -56,7 +66,7 @@ export default function WorkflowPromptsPage() {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }, []);
 
-  const loadAll = async () => {
+  const loadAll = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     setSuccessMsg(null);
@@ -78,17 +88,16 @@ export default function WorkflowPromptsPage() {
         setPlannerSystemPrompt(pack.plannerSystemPrompt || '');
         setPainterSystemPrompt(pack.painterSystemPrompt || '');
       }
-    } catch (e: any) {
-      setError(e?.response?.data?.message || e.message || '加载失败');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '加载失败'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [authHeaders]);
 
   React.useEffect(() => {
-    loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void loadAll();
+  }, [loadAll]);
 
   const loadVersionToEditor = async (id: string) => {
     setError(null);
@@ -100,8 +109,8 @@ export default function WorkflowPromptsPage() {
       setPainterSystemPrompt(v.pack.painterSystemPrompt || '');
       setNote(v.note || '');
       setSuccessMsg(`已加载版本：${id.slice(0, 8)}`);
-    } catch (e: any) {
-      setError(e?.response?.data?.message || e.message || '加载版本失败');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '加载版本失败'));
     }
   };
 
@@ -125,8 +134,8 @@ export default function WorkflowPromptsPage() {
       const created: PromptVersionMeta = res.data.version;
       setSuccessMsg(publish ? `已发布新版本：${created.versionId.slice(0, 8)}` : `已保存版本：${created.versionId.slice(0, 8)}`);
       await loadAll();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || e.message || '保存失败');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '保存失败'));
     } finally {
       setLoading(false);
     }
@@ -144,8 +153,8 @@ export default function WorkflowPromptsPage() {
       );
       setSuccessMsg(`已发布版本：${versionId.slice(0, 8)}`);
       await loadAll();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || e.message || '发布失败');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '发布失败'));
     } finally {
       setLoading(false);
     }

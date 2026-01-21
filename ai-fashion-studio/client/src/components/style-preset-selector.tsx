@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import React, { useEffect, useState } from 'react';
 import { useStylePresetStore, StylePreset } from '@/store/style-preset-store';
@@ -6,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, X, Edit2, Check, Loader2, Images, FolderOpen } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import api from '@/lib/api';
 import { StyleAnalyzer } from './style-analyzer';
 
@@ -19,7 +20,7 @@ interface StylePresetSelectorProps {
 }
 
 export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, mode = 'multiple', hideCreateButton = false }: StylePresetSelectorProps) {
-    const { presets, loading, fetchPresets, addPreset, updatePreset, deletePreset } = useStylePresetStore();
+    const { presets, loading, fetchPresets, updatePreset, deletePreset } = useStylePresetStore();
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
 
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -27,7 +28,7 @@ export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, m
 
     useEffect(() => {
         fetchPresets();
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [fetchPresets]);
 
     const handleToggleSelect = (id: string) => {
         if (mode === 'single') {
@@ -53,6 +54,7 @@ export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, m
         try {
             await deletePreset(id);
         } catch (error) {
+            console.error(error);
             alert('删除失败');
         }
     };
@@ -63,7 +65,7 @@ export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, m
         setEditName(preset.name);
     };
 
-    const saveEdit = async (e: React.MouseEvent) => {
+    const saveEdit = async (e: React.SyntheticEvent) => {
         e.stopPropagation();
         if (!editName.trim()) {
             alert('名称不能为空');
@@ -73,13 +75,9 @@ export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, m
             await updatePreset(editingId!, { name: editName });
             setEditingId(null);
         } catch (error) {
+            console.error(error);
             alert('更新失败');
         }
-    };
-
-    const cancelEdit = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        setEditingId(null);
     };
 
     const getImageUrl = (path: string): string => {
@@ -129,7 +127,7 @@ export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, m
                             </DialogHeader>
                             <div className="py-4">
                                 <StyleAnalyzer
-                                    onAnalysisComplete={(preset) => {
+                                    onAnalysisComplete={() => {
                                         setIsAddDialogOpen(false);
                                         fetchPresets(); // Refresh list to show new preset
                                     }}
@@ -236,7 +234,7 @@ export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, m
                                             onChange={(e) => setEditName(e.target.value)}
                                             className="h-7 text-xs bg-black/60 border-indigo-500/50 text-white focus:ring-1 focus:ring-indigo-500 pl-2 pr-1"
                                             autoFocus
-                                            onKeyDown={(e) => e.key === 'Enter' && saveEdit(e as any)}
+                                            onKeyDown={(e) => e.key === 'Enter' && saveEdit(e)}
                                         />
                                         <Button size="icon" variant="ghost" onClick={saveEdit} className="h-7 w-7 bg-indigo-600 hover:bg-indigo-500 text-white shrink-0 rounded-md">
                                             <Check className="w-3 h-3" />

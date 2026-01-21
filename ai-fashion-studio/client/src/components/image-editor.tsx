@@ -7,7 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Eraser, Loader2, Redo2, Sparkles, Trash2, Undo2 } from 'lucide-react';
 import api, { BACKEND_ORIGIN } from '@/lib/api';
-import { uploadFileToCos } from '@/lib/cos';
+import { uploadFileToCosWithMeta, type CosUploadResult } from '@/lib/cos';
+import { registerUserAssets } from '@/lib/user-assets';
 
 interface ImageEditorProps {
     open: boolean;
@@ -65,32 +66,7 @@ export function ImageEditor({ open, onClose, taskId, mode = 'shot', shotId, imag
         ctx.drawImage(overlay, 0, 0);
     }, [image]);
 
-    React.useEffect(() => {
-        if (open && imageUrl) {
-            // 每次打开都重置选区与历史，避免“上一张图的 mask”污染
-            strokesRef.current = [];
-            redoRef.current = [];
-            activeStrokeRef.current = null;
-            activePointerIdRef.current = null;
-            bumpHistoryVersion((v) => v + 1);
-
-            setTool('paint');
-            setExpandPx(0);
-            setFeatherPx(0);
-            setPrompt('');
-            setReferenceFiles([]);
-
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.src = toImgSrc(imageUrl);
-            img.onload = () => {
-                setImage(img);
-                initCanvas(img);
-            };
-        }
-    }, [open, imageUrl, toImgSrc]);
-
-    const initCanvas = (img: HTMLImageElement) => {
+    const initCanvas = React.useCallback((img: HTMLImageElement) => {
         const canvas = canvasRef.current;
         const maskCanvas = maskCanvasRef.current;
         if (!canvas || !maskCanvas) return;
@@ -115,7 +91,32 @@ export function ImageEditor({ open, onClose, taskId, mode = 'shot', shotId, imag
             maskCtx.fillStyle = 'black';
             maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
         }
-    };
+    }, [ensureOverlayCanvas]);
+
+    React.useEffect(() => {
+        if (open && imageUrl) {
+            // 每次打开都重置选区与历史，避免“上一张图的 mask”污染
+            strokesRef.current = [];
+            redoRef.current = [];
+            activeStrokeRef.current = null;
+            activePointerIdRef.current = null;
+            bumpHistoryVersion((v) => v + 1);
+
+            setTool('paint');
+            setExpandPx(0);
+            setFeatherPx(0);
+            setPrompt('');
+            setReferenceFiles([]);
+
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = toImgSrc(imageUrl);
+            img.onload = () => {
+                setImage(img);
+                initCanvas(img);
+            };
+        }
+    }, [open, imageUrl, initCanvas, toImgSrc]);
 
     const getPointFromPointerEvent = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const canvas = canvasRef.current;
@@ -480,11 +481,30 @@ export function ImageEditor({ open, onClose, taskId, mode = 'shot', shotId, imag
             const maskBlob = await buildProcessedMaskBlob();
             const targetKey = mode === 'hero' ? 'hero' : shotId!;
             const maskFile = new File([maskBlob], `mask_${taskId}_${targetKey}_${Date.now()}.png`, { type: 'image/png' });
-            const maskUrl = await uploadFileToCos(maskFile);
+            const uploadResults: CosUploadResult[] = [];
+            const maskResult = await uploadFileToCosWithMeta(maskFile);
+            uploadResults.push(maskResult);
 
-            const referenceUrls = (await Promise.all(referenceFiles.map((f) => uploadFileToCos(f))))
-                .map((v) => (v || '').trim())
+            const referenceResults = await Promise.all(referenceFiles.map((f) => uploadFileToCosWithMeta(f)));
+            uploadResults.push(...referenceResults);
+
+            const maskUrl = maskResult.url;
+            const referenceUrls = referenceResults
+                .map((v) => (v.url || '').trim())
                 .filter(Boolean);
+
+            try {
+                await registerUserAssets(uploadResults.map((res) => ({
+                    url: res.url,
+                    sha256: res.sha256,
+                    cosKey: res.key,
+                    fileName: res.fileName,
+                    size: res.size,
+                    mimeType: res.mimeType,
+                })));
+            } catch (err) {
+                console.warn('Register user assets failed:', err);
+            }
 
             const endpoint =
                 mode === 'hero'

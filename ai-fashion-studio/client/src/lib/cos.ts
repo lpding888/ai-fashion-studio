@@ -67,8 +67,9 @@ const headObjectExists = async (cos: COS, bucket: string, region: string, key: s
             (err) => {
                 if (!err) return resolve(true);
 
-                const status = (err as any)?.statusCode;
-                const code = (err as any)?.code;
+                const errInfo = err as { statusCode?: number; code?: string };
+                const status = errInfo?.statusCode;
+                const code = errInfo?.code;
                 if (status === 404 || code === 'NoSuchKey' || code === 'NotFound') {
                     return resolve(false);
                 }
@@ -109,17 +110,20 @@ export const getCosInstance = () => {
     return cosInstance;
 };
 
-/**
- * 上传单个文件
- */
-export const uploadFileToCos = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
+export type CosUploadResult = {
+    url: string;
+    sha256: string;
+    key: string;
+    fileName: string;
+    size: number;
+    mimeType: string;
+};
+
+const uploadFileToCosInternal = async (file: File, onProgress?: (progress: number) => void): Promise<CosUploadResult> => {
     const creds = await fetchCosCredentials();
     const cos = getCosInstance();
 
     const sha256 = await sha256HexFromFile(file);
-    const cachedUrl = inMemoryUrlCache.get(sha256);
-    if (cachedUrl) return cachedUrl;
-
     const extByMime: Record<string, string> = {
         'image/jpeg': 'jpg',
         'image/jpg': 'jpg',
@@ -133,6 +137,17 @@ export const uploadFileToCos = async (file: File, onProgress?: (progress: number
     // ✅ 去重缓存：同一用户、同一图片内容（SHA-256）复用同一个 COS Key
     // 这样“用户重复上传同一张图”会变成一次 HEAD（小流量）+ 直接复用 URL
     const key = `${folder}/by-hash/${sha256}.${ext}`;
+    const cachedUrl = inMemoryUrlCache.get(sha256);
+    if (cachedUrl) {
+        return {
+            url: cachedUrl,
+            sha256,
+            key,
+            fileName: file.name,
+            size: file.size,
+            mimeType: file.type,
+        };
+    }
 
     const BUCKET = creds.bucket;
     const REGION = creds.region;
@@ -142,7 +157,14 @@ export const uploadFileToCos = async (file: File, onProgress?: (progress: number
     if (exists) {
         const url = `https://${BUCKET}.cos.${REGION}.myqcloud.com/${key}`;
         inMemoryUrlCache.set(sha256, url);
-        return url;
+        return {
+            url,
+            sha256,
+            key,
+            fileName: file.name,
+            size: file.size,
+            mimeType: file.type,
+        };
     }
 
     return new Promise((resolve, reject) => {
@@ -158,7 +180,7 @@ export const uploadFileToCos = async (file: File, onProgress?: (progress: number
                     onProgress(progressData.percent);
                 }
             }
-        }, function (err, _data) {
+        }, function (err) {
             if (err) {
                 console.error('COS Upload Error:', err);
                 reject(err);
@@ -167,8 +189,30 @@ export const uploadFileToCos = async (file: File, onProgress?: (progress: number
                 // 格式: https://<Bucket>.cos.<Region>.myqcloud.com/<Key>
                 const url = `https://${BUCKET}.cos.${REGION}.myqcloud.com/${key}`;
                 inMemoryUrlCache.set(sha256, url);
-                resolve(url);
+                resolve({
+                    url,
+                    sha256,
+                    key,
+                    fileName: file.name,
+                    size: file.size,
+                    mimeType: file.type,
+                });
             }
         });
     });
+};
+
+/**
+ * 上传单个文件
+ */
+export const uploadFileToCos = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
+    const result = await uploadFileToCosInternal(file, onProgress);
+    return result.url;
+};
+
+export const uploadFileToCosWithMeta = async (
+    file: File,
+    onProgress?: (progress: number) => void
+): Promise<CosUploadResult> => {
+    return uploadFileToCosInternal(file, onProgress);
 };

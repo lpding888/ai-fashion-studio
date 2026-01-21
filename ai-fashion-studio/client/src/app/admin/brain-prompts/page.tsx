@@ -27,9 +27,34 @@ type ActiveRef = {
     updatedBy: { id: string; username: string };
 };
 
+type CompareShot = {
+    shot_id?: string;
+    id?: string;
+    type?: string;
+    prompt_en?: string;
+    prompt?: string;
+};
+
+type ComparePlan = {
+    shots?: CompareShot[];
+};
+
+type CompareResult = {
+    success?: boolean;
+    planA?: ComparePlan;
+    planB?: ComparePlan;
+    metaA?: { versionId?: string };
+    metaB?: { versionId?: string };
+};
+
 function formatTime(ms?: number) {
     if (!ms) return '-';
     return new Date(ms).toLocaleString('zh-CN');
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+    const maybe = error as { response?: { data?: { message?: string } }; message?: string };
+    return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
 }
 
 export default function BrainPromptsPage() {
@@ -49,7 +74,7 @@ export default function BrainPromptsPage() {
     const [versionB, setVersionB] = React.useState('');
 
     const [comparing, setComparing] = React.useState(false);
-    const [compareResult, setCompareResult] = React.useState<any>(null);
+    const [compareResult, setCompareResult] = React.useState<CompareResult | null>(null);
 
     const authHeaders = React.useMemo(() => {
         if (typeof window === 'undefined') return {};
@@ -57,7 +82,7 @@ export default function BrainPromptsPage() {
         return token ? { Authorization: `Bearer ${token}` } : {};
     }, []);
 
-    const loadAll = async () => {
+    const loadAll = React.useCallback(async () => {
         setLoading(true);
         setError(null);
         setSuccessMsg(null);
@@ -79,17 +104,16 @@ export default function BrainPromptsPage() {
                 setVersionA((prev) => prev || activeId);
                 setVersionB((prev) => prev || activeId);
             }
-        } catch (e: any) {
-            setError(e?.response?.data?.message || e.message || '加载失败');
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, '加载失败'));
         } finally {
             setLoading(false);
         }
-    };
+    }, [authHeaders]);
 
     React.useEffect(() => {
-        loadAll();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        void loadAll();
+    }, [loadAll]);
 
     const loadVersionToEditor = async (id: string) => {
         setError(null);
@@ -100,8 +124,8 @@ export default function BrainPromptsPage() {
             setEditorContent(v.content);
             setNote(v.note || '');
             setSuccessMsg(`已加载版本：${id.slice(0, 8)}`);
-        } catch (e: any) {
-            setError(e?.response?.data?.message || e.message || '加载版本失败');
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, '加载版本失败'));
         }
     };
 
@@ -124,8 +148,8 @@ export default function BrainPromptsPage() {
             } else {
                 setVersionB(created.versionId);
             }
-        } catch (e: any) {
-            setError(e?.response?.data?.message || e.message || '保存失败');
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, '保存失败'));
         } finally {
             setLoading(false);
         }
@@ -144,8 +168,8 @@ export default function BrainPromptsPage() {
             setSuccessMsg(`已发布版本：${id.slice(0, 8)}`);
             await loadAll();
             setVersionA(id);
-        } catch (e: any) {
-            setError(e?.response?.data?.message || e.message || '发布失败');
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, '发布失败'));
         } finally {
             setLoading(false);
         }
@@ -176,8 +200,8 @@ export default function BrainPromptsPage() {
             );
             setCompareResult(res.data);
             setSuccessMsg('A/B 对照完成');
-        } catch (e: any) {
-            setError(e?.response?.data?.message || e.message || 'A/B 对照失败');
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, 'A/B 对照失败'));
         } finally {
             setComparing(false);
         }
@@ -186,10 +210,10 @@ export default function BrainPromptsPage() {
     const shotsRows = React.useMemo(() => {
         const planA = compareResult?.planA;
         const planB = compareResult?.planB;
-        const shotsA: any[] = planA?.shots || [];
-        const shotsB: any[] = planB?.shots || [];
+        const shotsA: CompareShot[] = Array.isArray(planA?.shots) ? planA.shots : [];
+        const shotsB: CompareShot[] = Array.isArray(planB?.shots) ? planB.shots : [];
 
-        const indexB = new Map<string, any>();
+        const indexB = new Map<string, CompareShot>();
         for (const s of shotsB) {
             const key = String(s.shot_id ?? s.id ?? s.type ?? '');
             if (key) indexB.set(key, s);
@@ -409,7 +433,7 @@ export default function BrainPromptsPage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {shotsRows.map((r: any) => (
+                                        {shotsRows.map((r) => (
                                             <TableRow key={r.key}>
                                                 <TableCell className="w-[180px]">
                                                     <div className="font-mono text-xs">{r.key}</div>

@@ -26,6 +26,11 @@ type InviteCode = {
     note?: string;
 };
 
+const getErrorMessage = (error: unknown, fallback: string) => {
+    const maybe = error as { response?: { data?: { message?: string } }; message?: string };
+    return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
+};
+
 export default function AdminInviteCodesPage() {
     const [invites, setInvites] = useState<InviteCode[]>([]);
     const [loading, setLoading] = useState(true);
@@ -66,9 +71,9 @@ export default function AdminInviteCodesPage() {
             setLatestCode(res.data?.code || null);
             setNote('');
             await fetchInvites();
-        } catch (e) {
+        } catch (e: unknown) {
             console.error('Failed to create invite code', e);
-            alert((e as any)?.response?.data?.message || (e as any)?.message || '生成邀请码失败');
+            alert(getErrorMessage(e, '生成邀请码失败'));
         } finally {
             setCreating(false);
         }
@@ -88,9 +93,9 @@ export default function AdminInviteCodesPage() {
             setRevokingId(inviteId);
             await api.delete(`/auth/admin/invite-codes/${inviteId}`);
             await fetchInvites();
-        } catch (e) {
+        } catch (e: unknown) {
             console.error('Failed to revoke invite code', e);
-            alert((e as any)?.response?.data?.message || (e as any)?.message || '撤销失败');
+            alert(getErrorMessage(e, '撤销失败'));
         } finally {
             setRevokingId(null);
         }

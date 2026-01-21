@@ -1,7 +1,7 @@
 "use client";
 
 import { RequirementForm } from "@/components/requirement-form";
-import { FadeIn, SlideUp } from "@/components/ui/motion";
+import { SlideUp } from "@/components/ui/motion";
 import { Settings, ArrowRight, Sparkles, Layers, LogIn, User } from 'lucide-react';
 import Link from 'next/link';
 import { TaskHistory } from "@/components/task-history";

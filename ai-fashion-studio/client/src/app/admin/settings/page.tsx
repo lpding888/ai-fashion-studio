@@ -65,9 +65,9 @@ export default function SettingsPage() {
             setSuccess('更新成功（已刷新登录态）');
             setCurrentPassword('');
             setPassword('');
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('更新失败:', err);
-            setError(err?.message || '网络错误');
+            setError(err instanceof Error ? err.message : '网络错误');
         } finally {
             setLoading(false);
         }

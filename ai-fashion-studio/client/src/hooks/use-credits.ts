@@ -13,9 +13,23 @@ export type CreditCostParams = {
     resolution?: '1K' | '2K' | '4K' | string;
 };
 
-const resolutionMultiplier = (resolution: CreditCostParams['resolution']) => (resolution === '4K' ? 4 : 1);
+const resolutionMultiplier = (resolution: CreditCostParams['resolution']) => {
+    if (resolution === '4K') return 4;
+    if (resolution === '2K') return 2;
+    return 1;
+};
 
-// 口径对齐后端：1 张图=1；拼图=2；4K=4x
+const getErrorMessage = (err: unknown, fallback: string) => {
+    if (err && typeof err === 'object') {
+        const responseMessage = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+        if (responseMessage) return responseMessage;
+        const message = (err as { message?: string }).message;
+        if (message) return message;
+    }
+    return fallback;
+};
+
+// 口径对齐后端：1 张图=1；拼图=2；2K=2x；4K=4x
 export const calculateRequiredCredits = (params: CreditCostParams) => {
     const shotCount = Number.isFinite(params.shotCount) ? Math.max(0, Math.floor(params.shotCount)) : 0;
     const layoutMode = (params.layoutMode || 'Individual') as string;
@@ -62,9 +76,9 @@ export function useCredits() {
         try {
             const res = await api.get(`/credits?userId=${user.id}`);
             setCredits(res.data);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('获取积分失败:', err);
-            setError(err?.response?.data?.message || '获取积分失败');
+            setError(getErrorMessage(err, '获取积分失败'));
             // 设置默认值
             setCredits({
                 userId: user.id,
@@ -105,7 +119,7 @@ export function useCredits() {
             });
             await fetchCredits(); // 充值后刷新
             return true;
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('充值失败:', err);
             throw err;
         }

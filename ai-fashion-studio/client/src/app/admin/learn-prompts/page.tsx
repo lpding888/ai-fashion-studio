@@ -11,8 +11,9 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, RefreshCw, Save, CheckCircle2 } from 'lucide-react';
 
-type DirectPromptPack = {
-  directSystemPrompt: string;
+type LearnPromptPack = {
+  styleLearnPrompt: string;
+  poseLearnPrompt: string;
 };
 
 type PromptVersionMeta = {
@@ -23,7 +24,7 @@ type PromptVersionMeta = {
   note?: string;
 };
 
-type PromptVersion = PromptVersionMeta & { pack: DirectPromptPack };
+type PromptVersion = PromptVersionMeta & { pack: LearnPromptPack };
 
 type ActiveRef = {
   versionId: string;
@@ -41,7 +42,7 @@ function getErrorMessage(error: unknown, fallback: string) {
   return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
 }
 
-export default function DirectPromptsPage() {
+export default function LearnPromptsPage() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
@@ -51,7 +52,8 @@ export default function DirectPromptsPage() {
   const [versions, setVersions] = React.useState<PromptVersionMeta[]>([]);
 
   const [note, setNote] = React.useState('');
-  const [directSystemPrompt, setDirectSystemPrompt] = React.useState('');
+  const [styleLearnPrompt, setStyleLearnPrompt] = React.useState('');
+  const [poseLearnPrompt, setPoseLearnPrompt] = React.useState('');
 
   const authHeaders = React.useMemo(() => {
     if (typeof window === 'undefined') return {};
@@ -65,8 +67,8 @@ export default function DirectPromptsPage() {
     setSuccessMsg(null);
     try {
       const [activeRes, versionsRes] = await Promise.all([
-        api.get('/admin/direct-prompts/active', { headers: authHeaders }),
-        api.get('/admin/direct-prompts/versions', { headers: authHeaders }),
+        api.get('/admin/learn-prompts/active', { headers: authHeaders }),
+        api.get('/admin/learn-prompts/versions', { headers: authHeaders }),
       ]);
 
       const activeData = activeRes.data;
@@ -76,9 +78,10 @@ export default function DirectPromptsPage() {
       setActiveVersion(activeData.version ?? null);
       setVersions(versionsData.versions ?? []);
 
-      const pack: DirectPromptPack | undefined = activeData?.version?.pack;
+      const pack: LearnPromptPack | undefined = activeData?.version?.pack;
       if (pack) {
-        setDirectSystemPrompt(pack.directSystemPrompt || '');
+        setStyleLearnPrompt(pack.styleLearnPrompt || '');
+        setPoseLearnPrompt(pack.poseLearnPrompt || '');
         setNote(activeData?.version?.note || '');
       }
     } catch (e: unknown) {
@@ -96,9 +99,10 @@ export default function DirectPromptsPage() {
     setError(null);
     setSuccessMsg(null);
     try {
-      const res = await api.get(`/admin/direct-prompts/versions/${id}`, { headers: authHeaders });
+      const res = await api.get(`/admin/learn-prompts/versions/${id}`, { headers: authHeaders });
       const v: PromptVersion = res.data.version;
-      setDirectSystemPrompt(v.pack.directSystemPrompt || '');
+      setStyleLearnPrompt(v.pack.styleLearnPrompt || '');
+      setPoseLearnPrompt(v.pack.poseLearnPrompt || '');
       setNote(v.note || '');
       setSuccessMsg(`已加载版本：${id.slice(0, 8)}`);
     } catch (e: unknown) {
@@ -112,8 +116,8 @@ export default function DirectPromptsPage() {
     setLoading(true);
     try {
       const res = await api.post(
-        '/admin/direct-prompts/versions',
-        { pack: { directSystemPrompt } as DirectPromptPack, note, publish },
+        '/admin/learn-prompts/versions',
+        { pack: { styleLearnPrompt, poseLearnPrompt } as LearnPromptPack, note, publish },
         { headers: { ...authHeaders, 'Content-Type': 'application/json' } },
       );
       const created: PromptVersionMeta = res.data.version;
@@ -132,7 +136,7 @@ export default function DirectPromptsPage() {
     setLoading(true);
     try {
       await api.post(
-        '/admin/direct-prompts/publish',
+        '/admin/learn-prompts/publish',
         { versionId },
         { headers: { ...authHeaders, 'Content-Type': 'application/json' } },
       );
@@ -149,8 +153,8 @@ export default function DirectPromptsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">直出图系统提示词</h2>
-          <p className="text-muted-foreground">管理 /learn 直出图（Painter）system prompt 的版本与发布</p>
+          <h2 className="text-3xl font-bold tracking-tight">学习提示词</h2>
+          <p className="text-muted-foreground">管理风格学习与动作（姿势）学习的系统提示词版本</p>
         </div>
         <Button variant="outline" onClick={loadAll} disabled={loading} className="gap-2">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -175,7 +179,7 @@ export default function DirectPromptsPage() {
       <Card>
         <CardHeader>
           <CardTitle>当前生效版本</CardTitle>
-          <CardDescription>用于 /learn 直出图生成</CardDescription>
+          <CardDescription>用于风格/姿势学习</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -199,15 +203,24 @@ export default function DirectPromptsPage() {
         <CardContent className="space-y-6">
           <div className="space-y-2">
             <Label>版本备注（可选）</Label>
-            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：强化衣服保真 + 更严格的 JSON 解释" />
+            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：更严格的 JSON 指令" />
           </div>
 
           <div className="space-y-2">
-            <Label>Direct System Prompt（Painter）</Label>
+            <Label>风格学习提示词</Label>
             <Textarea
-              value={directSystemPrompt}
-              onChange={(e) => setDirectSystemPrompt(e.target.value)}
-              className="min-h-[320px] font-mono text-xs"
+              value={styleLearnPrompt}
+              onChange={(e) => setStyleLearnPrompt(e.target.value)}
+              className="min-h-[240px] font-mono text-xs"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>动作/姿势学习提示词</Label>
+            <Textarea
+              value={poseLearnPrompt}
+              onChange={(e) => setPoseLearnPrompt(e.target.value)}
+              className="min-h-[240px] font-mono text-xs"
             />
           </div>
 
@@ -249,7 +262,7 @@ export default function DirectPromptsPage() {
               {versions.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="text-muted-foreground text-center">
-                    暂无版本（首次启动会从 docs/direct-prompts 自动 seed）
+                    暂无版本（首次启动会从 docs/learn-prompts 自动 seed）
                   </TableCell>
                 </TableRow>
               )}

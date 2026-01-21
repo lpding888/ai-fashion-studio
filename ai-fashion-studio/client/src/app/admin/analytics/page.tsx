@@ -66,7 +66,7 @@ type Overview = {
   };
 };
 
-function fmtInt(v: any) {
+function fmtInt(v: unknown) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('zh-CN') : '-';
 }
@@ -159,8 +159,8 @@ export default function AdminAnalyticsPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || `HTTP ${res.status}`);
       setData(json as Overview);
-    } catch (e: any) {
-      setError(e?.message || String(e));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
       setData(null);
     } finally {
       setLoading(false);
@@ -169,7 +169,6 @@ export default function AdminAnalyticsPage() {
 
   useEffect(() => {
     void fetchOverview(days);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
 
   const taskStatusRows = useMemo(() => {

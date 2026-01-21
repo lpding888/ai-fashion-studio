@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { uploadFileToCos } from '@/lib/cos';
+import { uploadFileToCosWithMeta } from '@/lib/cos';
+import { registerUserAssets } from '@/lib/user-assets';
 
 interface UseCosUploadReturn {
     isUploading: boolean;
@@ -25,7 +26,7 @@ export function useCosUpload(): UseCosUploadReturn {
             const uploadPromises = files.map(async (file) => {
                 // 这里简化处理，不追踪每个文件的详细进度，只追踪完成数量
                 // 如果需要更精确的进度条，需要维护一个进度数组
-                return uploadFileToCos(file);
+                return uploadFileToCosWithMeta(file);
             });
 
             // 监听进度 - 这种方式比较粗略，每完成一个文件更新一次
@@ -40,7 +41,20 @@ export function useCosUpload(): UseCosUploadReturn {
                 return res;
             }));
 
-            const urls = await Promise.all(trackedPromises);
+            const results = await Promise.all(trackedPromises);
+            const urls = results.map((res) => res.url);
+            try {
+                await registerUserAssets(results.map((res) => ({
+                    url: res.url,
+                    sha256: res.sha256,
+                    cosKey: res.key,
+                    fileName: res.fileName,
+                    size: res.size,
+                    mimeType: res.mimeType,
+                })));
+            } catch (err) {
+                console.warn('Register user assets failed:', err);
+            }
             return urls;
 
         } catch (err) {

@@ -6,7 +6,7 @@ import { UploadCloud, Loader2, UserRound } from "lucide-react";
 
 import api from "@/lib/api";
 import {
-  createDirectTask,
+  createDirectTaskFromUrls,
   createPromptSnippet,
   deletePromptSnippet,
   directMessageTask,
@@ -16,7 +16,9 @@ import {
   listPromptSnippets,
 } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
-import { requestCreditsRefresh, useCredits } from "@/hooks/use-credits";
+import { calculateRequiredCredits, requestCreditsRefresh, useCredits } from "@/hooks/use-credits";
+import { uploadFileToCosWithMeta, type CosUploadResult } from "@/lib/cos";
+import { registerUserAssets } from "@/lib/user-assets";
 
 import { useStylePresetStore, type StylePreset } from "@/store/style-preset-store";
 import { usePosePresetStore } from "@/store/pose-preset-store";
@@ -35,6 +37,7 @@ import { toImgSrc } from "@/components/learn/learn-utils";
 import { GlassPanel } from "@/components/learn/glass-panel";
 import { FluidBackground } from "@/components/learn/layout/fluid-background";
 import { CreationStage } from "@/components/learn/creation-stage";
+import { UserAssetLibraryDialog } from "@/components/user-asset-library-dialog";
 import type { PromptSnippet, QueueItem, TaskApi } from "@/components/learn/types";
 import { cn } from "@/lib/utils";
 
@@ -43,8 +46,11 @@ const MAX_STYLE_LEARN_IMAGES = 5;
 const MAX_POSE_SELECT = 4;
 const MAX_FACE_SELECT = 3;
 const POLL_INTERVAL_MS = 1500;
+const GRID_PROMPT_LINE = "If multiple poses are selected, output ONE contact sheet with one panel per pose (max 4 panels). Same model + same garment across panels.";
+const SINGLE_PROMPT_LINE = "只能有一个人、一个姿势。不要拼图/拼接/多宫格/多分屏。";
 
 const STORAGE_QUEUE_KEY = "afs:learn:queue:v1";
+type BackgroundVariant = "default" | "warm" | "cool" | "cyber" | "mint" | "sunset";
 
 function useObjectUrls(files: File[]) {
   const [urls, setUrls] = React.useState<string[]>([]);
@@ -60,7 +66,7 @@ function useObjectUrls(files: File[]) {
   return urls;
 }
 
-function buildAutoStylePrompt(stylePresets: StylePreset[], styleId?: string | null) {
+function buildAutoStylePrompt(stylePresets: StylePreset[], styleId?: string | null, layoutMode: "Individual" | "Grid" = "Individual") {
   if (!styleId) return "";
   const preset = stylePresets.find((x) => x.id === styleId);
   if (preset?.learnStatus === "FAILED") return "";
@@ -70,9 +76,68 @@ function buildAutoStylePrompt(stylePresets: StylePreset[], styleId?: string | nu
     "Model wears the uploaded garment(s). Preserve garment cut, seams, logos, patterns, fabric texture, and natural wrinkles.",
     "Face must match selected face reference (if provided).",
     "Photorealistic, high detail, clean commercial composition.",
-    "If multiple poses are selected, output ONE contact sheet with one panel per pose (max 4 panels). Same model + same garment across panels.",
+    layoutMode === "Grid" ? GRID_PROMPT_LINE : null,
     name ? `Apply the learned style: ${name}.` : "Apply the learned style JSON strictly.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
+}
+
+const AUTO_STYLE_PROMPT_LINES = [
+  "Commercial fashion photography.",
+  "Model wears the uploaded garment(s). Preserve garment cut, seams, logos, patterns, fabric texture, and natural wrinkles.",
+  "Face must match selected face reference (if provided).",
+  "Photorealistic, high detail, clean commercial composition.",
+  GRID_PROMPT_LINE,
+];
+const AUTO_STYLE_PROMPT_PREFIX = "Apply the learned style:";
+const AUTO_STYLE_PROMPT_JSON_LINE = "Apply the learned style JSON strictly.";
+
+function appendModeHint(text: string, layoutMode: "Individual" | "Grid") {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  const hint = layoutMode === "Grid" ? GRID_PROMPT_LINE : SINGLE_PROMPT_LINE;
+  if (trimmed.includes(hint)) return trimmed;
+  return `${trimmed}\n${hint}`;
+}
+
+function normalizePromptLine(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function stripAutoStylePrompt(raw: string) {
+  const lines = String(raw || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) return "";
+
+  const autoLineSet = new Set(AUTO_STYLE_PROMPT_LINES.map(normalizePromptLine));
+  const stylePrefix = normalizePromptLine(AUTO_STYLE_PROMPT_PREFIX);
+  const jsonLine = normalizePromptLine(AUTO_STYLE_PROMPT_JSON_LINE);
+
+  const userLines = lines.filter((line) => {
+    const normalized = normalizePromptLine(line);
+    if (!normalized) return false;
+    if (autoLineSet.has(normalized)) return false;
+    if (normalized === jsonLine) return false;
+    if (normalized.startsWith(stylePrefix)) return false;
+    return true;
+  });
+
+  return userLines.join("\n").trim();
+}
+
+function hashString(input: string) {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  const maybe = error as { response?: { data?: { message?: string } }; message?: string };
+  return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
 }
 
 export function LearnGeneratePage() {
@@ -103,6 +168,8 @@ export function LearnGeneratePage() {
 
   const [garmentFiles, setGarmentFiles] = React.useState<File[]>([]);
   const garmentUrls = useObjectUrls(garmentFiles);
+  const [garmentAssetUrls, setGarmentAssetUrls] = React.useState<string[]>([]);
+  const [assetDialogOpen, setAssetDialogOpen] = React.useState(false);
   // Dual prompt system: auto-filled style prompt + user custom prompt
   const [autoStylePrompt, setAutoStylePrompt] = React.useState<string>(""); // Auto-filled from style selection
   const [userPrompt, setUserPrompt] = React.useState<string>(""); // User's custom additions
@@ -115,14 +182,20 @@ export function LearnGeneratePage() {
 
   const [resolution, setResolution] = React.useState<"1K" | "2K" | "4K">("2K");
   const [aspectRatio, setAspectRatio] = React.useState<"1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9">("3:4");
+  const [layoutMode, setLayoutMode] = React.useState<"Individual" | "Grid">("Individual");
+  const [shotCount, setShotCount] = React.useState<number>(1);
   const [includeThoughts, setIncludeThoughts] = React.useState(false);
   const [seedRaw, setSeedRaw] = React.useState<string>("");
+  const [seedAuto, setSeedAuto] = React.useState(true);
   const [temperatureRaw, setTemperatureRaw] = React.useState<string>("");
 
   const [creating, setCreating] = React.useState(false);
 
   const [queue, setQueue] = React.useState<QueueItem[]>([]);
   const [tasksById, setTasksById] = React.useState<Record<string, TaskApi>>({});
+  const [queueRetryingTaskId, setQueueRetryingTaskId] = React.useState<string | null>(null);
+  const [showLeftPanel, setShowLeftPanel] = React.useState(false);
+  const [showRightPanel, setShowRightPanel] = React.useState(false);
   const [workbenchNotice, setWorkbenchNotice] = React.useState<string>("");
 
   const [lightboxOpen, setLightboxOpen] = React.useState(false);
@@ -130,15 +203,29 @@ export function LearnGeneratePage() {
   const [lightboxInitialIndex, setLightboxInitialIndex] = React.useState(0);
   const [lightboxTaskId, setLightboxTaskId] = React.useState<string | undefined>(undefined);
   const [lightboxRegenerating, setLightboxRegenerating] = React.useState(false);
-  const [activeTaskId, setActiveTaskId] = React.useState<string | undefined>(undefined);
   const [chatMessage, setChatMessage] = React.useState<string>("");
 
   // New Interactive States for Redesign
   const [isFocused, setIsFocused] = React.useState(false);
-  const [backgroundVariant, setBackgroundVariant] = React.useState<"default" | "warm" | "cool" | "cyber">("default");
+  const [backgroundVariant, setBackgroundVariant] = React.useState<BackgroundVariant>("default");
+  const isOverlayOpen = showLeftPanel || showRightPanel;
 
-  // 口径对齐后端：Individual 1 张图=1；4K=4x
-  const estimatedCreditsCost = resolution === "4K" ? 4 : 1;
+  // 口径对齐后端：1K=1，2K=2，4K=4
+  const estimatedCreditsCost = calculateRequiredCredits({
+    shotCount,
+    layoutMode,
+    resolution,
+  });
+  const canClearWorkbench = !!(
+    garmentFiles.length ||
+    garmentAssetUrls.length ||
+    selectedStyleIds.length ||
+    selectedPoseIds.length ||
+    selectedFaceIds.length ||
+    userPrompt.trim() ||
+    selectedSnippetId ||
+    snippetRemark.trim()
+  );
   const activeStyleName =
     selectedStyleIds.length > 0
       ? String((stylePresetsAll || []).find((p) => p.id === selectedStyleIds[0])?.name || "").trim()
@@ -173,6 +260,24 @@ export function LearnGeneratePage() {
     }
   }, [isAuthenticated]);
 
+  const uploadGarmentFiles = async (files: File[]) => {
+    if (!files.length) return [];
+    const results: CosUploadResult[] = await Promise.all(files.map((f) => uploadFileToCosWithMeta(f)));
+    try {
+      await registerUserAssets(results.map((res) => ({
+        url: res.url,
+        sha256: res.sha256,
+        cosKey: res.key,
+        fileName: res.fileName,
+        size: res.size,
+        mimeType: res.mimeType,
+      })));
+    } catch (err) {
+      console.warn("Register user assets failed:", err);
+    }
+    return results.map((res) => String(res.url || "").trim()).filter(Boolean);
+  };
+
   React.useEffect(() => {
     if (!isAuthenticated) return;
     void loadPromptSnippets();
@@ -204,21 +309,26 @@ export function LearnGeneratePage() {
     const preset = (stylePresetsAll || []).find((p) => p.id === id);
     const signature = `${id}|${preset?.name ?? ""}|${preset?.learnStatus ?? ""}`;
     if (lastAutoStyleSignatureRef.current === signature) return;
-    const base = buildAutoStylePrompt(stylePresetsAll || [], id);
+    const base = buildAutoStylePrompt(stylePresetsAll || [], id, layoutMode);
     setAutoStylePrompt(base);
     lastAutoStyleSignatureRef.current = signature;
-  }, [selectedStyleIds, stylePresetsAll]);
+  }, [selectedStyleIds, stylePresetsAll, layoutMode]);
 
   React.useEffect(() => {
     if (selectedStyleIds.length > 0) {
       const id = selectedStyleIds[0];
-      const variants = ["default", "warm", "cool", "cyber"] as const;
-      const index = id.charCodeAt(0) % variants.length;
+      const variants: BackgroundVariant[] = ["default", "warm", "cool", "cyber", "mint", "sunset"];
+      const index = hashString(id) % variants.length;
       setBackgroundVariant(variants[index]);
       return;
     }
     setBackgroundVariant("default");
   }, [selectedStyleIds]);
+
+  React.useEffect(() => {
+    if (layoutMode !== "Grid") return;
+    if (shotCount !== 1) setShotCount(1);
+  }, [layoutMode, shotCount]);
 
   const pollOne = React.useCallback(async (taskId: string) => {
     try {
@@ -246,17 +356,37 @@ export function LearnGeneratePage() {
     setTimeout(() => setWorkbenchNotice(""), 2800);
   }, []);
 
+  const clearWorkbench = React.useCallback(() => {
+    setGarmentFiles([]);
+    setGarmentAssetUrls([]);
+    setSelectedStyleIds([]);
+    setSelectedPoseIds([]);
+    setSelectedFaceIds([]);
+    setUserPrompt("");
+    setSelectedSnippetId(null);
+    setSnippetRemark("");
+    flashNotice("已清空工作台");
+  }, [flashNotice]);
+
   const applyTaskToWorkbench = React.useCallback(
     (task: TaskApi) => {
       const nextPromptRaw = String(task?.directPrompt || task?.requirements || "").trim();
 
       const nextResolution = (task?.resolution || "2K") as "1K" | "2K" | "4K";
       const nextAspect = (task?.aspectRatio || "3:4") as "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
+      const nextLayoutMode = (task?.layout_mode || task?.layoutMode || "Individual") as "Individual" | "Grid";
       setResolution(nextResolution);
       setAspectRatio(nextAspect);
+      setLayoutMode(nextLayoutMode);
 
       setIncludeThoughts(!!task?.directIncludeThoughts);
-      setSeedRaw(typeof task?.directSeed === "number" ? String(task.directSeed) : "");
+      if (typeof task?.directSeed === "number" && Number.isFinite(task.directSeed)) {
+        setSeedRaw(String(Math.floor(task.directSeed)));
+        setSeedAuto(false);
+      } else {
+        setSeedRaw("");
+        setSeedAuto(true);
+      }
       setTemperatureRaw(typeof task?.directTemperature === "number" ? String(task.directTemperature) : "");
 
       // 回填 presetIds：按“当时选中的预设ID”策略；若预设被删则忽略并提示
@@ -280,11 +410,11 @@ export function LearnGeneratePage() {
       setSelectedPoseIds(poseIds);
       setSelectedFaceIds(faceIds);
 
-      const autoPromptForTask = buildAutoStylePrompt(stylePresetsAll || [], styleIds[0]);
-      const resolvedUserPrompt =
-        autoPromptForTask && nextPromptRaw.startsWith(autoPromptForTask)
-          ? nextPromptRaw.slice(autoPromptForTask.length).trimStart()
-          : nextPromptRaw;
+      const rawShotCount = typeof task?.shotCount === "number" ? task.shotCount : 1;
+      const nextShotCount = Math.max(1, Math.floor(rawShotCount));
+      setShotCount(nextShotCount);
+
+      const resolvedUserPrompt = stripAutoStylePrompt(nextPromptRaw);
       setUserPrompt(resolvedUserPrompt);
       setSelectedSnippetId(null);
 
@@ -319,6 +449,29 @@ export function LearnGeneratePage() {
       }
     },
     [tasksById, applyTaskToWorkbench, flashNotice],
+  );
+
+  const retryQueueTask = React.useCallback(
+    async (taskId: string) => {
+      if (!taskId) return;
+      if (queueRetryingTaskId) return;
+      setQueueRetryingTaskId(taskId);
+      try {
+        const res = await directRegenerateTask(taskId);
+        const task = res as TaskApi;
+        if (task?.id) {
+          setTasksById((prev) => ({ ...prev, [task.id]: task }));
+        }
+        await pollOne(taskId);
+        flashNotice("已提交重新生成");
+      } catch (e: unknown) {
+        console.error(e);
+        alert(getErrorMessage(e, "重新生成失败"));
+      } finally {
+        setQueueRetryingTaskId((prev) => (prev === taskId ? null : prev));
+      }
+    },
+    [queueRetryingTaskId, pollOne, flashNotice],
   );
 
   React.useEffect(() => {
@@ -379,9 +532,9 @@ export function LearnGeneratePage() {
       if (failed) {
         flashNotice("风格学习失败：模型返回为空，请打开卡片重新学习");
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
-      flashNotice(e?.response?.data?.message || e?.message || "风格学习失败，请稍后重试");
+      flashNotice(getErrorMessage(e, "风格学习失败，请稍后重试"));
     } finally {
       await fetchStylePresets();
       setStyleLearning(false);
@@ -397,9 +550,9 @@ export function LearnGeneratePage() {
       if (failed) {
         flashNotice("姿势学习失败：模型返回为空，请打开卡片重新学习");
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
-      flashNotice(e?.response?.data?.message || e?.message || "姿势学习失败，请稍后重试");
+      flashNotice(getErrorMessage(e, "姿势学习失败，请稍后重试"));
     } finally {
       await fetchPosePresets();
       setPoseLearning(false);
@@ -410,7 +563,7 @@ export function LearnGeneratePage() {
     const images = incoming.filter((f) => f.type.startsWith("image/"));
     if (!images.length) return;
     setGarmentFiles((prev) => {
-      const remaining = Math.max(0, MAX_GARMENT_IMAGES - prev.length);
+      const remaining = Math.max(0, MAX_GARMENT_IMAGES - garmentAssetUrls.length - prev.length);
       if (remaining <= 0) return prev;
       return [...prev, ...images.slice(0, remaining)];
     });
@@ -422,6 +575,19 @@ export function LearnGeneratePage() {
       next.splice(idx, 1);
       return next;
     });
+  };
+
+  const removeGarmentAssetUrl = (url: string) => {
+    setGarmentAssetUrls((prev) => prev.filter((item) => item !== url));
+  };
+
+  const clearGarmentImages = () => {
+    setGarmentFiles([]);
+    setGarmentAssetUrls([]);
+  };
+
+  const openAssetDialog = () => {
+    setAssetDialogOpen(true);
   };
 
   const savePromptSnippet = async (nameOverride?: string) => {
@@ -446,9 +612,9 @@ export function LearnGeneratePage() {
       }
       setSnippetRemark("");
       flashNotice("已保存到云端模板");
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
-      alert(e?.response?.data?.message || e?.message || "保存失败");
+      alert(getErrorMessage(e, "保存失败"));
     } finally {
       setPromptSnippetsBusy(null);
     }
@@ -463,9 +629,9 @@ export function LearnGeneratePage() {
       if (selectedSnippetId === id) setSelectedSnippetId(null);
       setSnippetRemark("");
       flashNotice("已删除模板");
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
-      alert(e?.response?.data?.message || e?.message || "删除失败");
+      alert(getErrorMessage(e, "删除失败"));
     } finally {
       setPromptSnippetsBusy(null);
     }
@@ -477,7 +643,8 @@ export function LearnGeneratePage() {
       alert("请先输入提示词");
       return;
     }
-    if (!garmentFiles.length) {
+    const finalPrompt = appendModeHint(combinedPrompt, layoutMode);
+    if (!garmentFiles.length && !garmentAssetUrls.length) {
       alert("请先上传至少 1 张衣服图片");
       return;
     }
@@ -488,13 +655,33 @@ export function LearnGeneratePage() {
 
     setCreating(true);
     try {
-      const seed = seedRaw.trim() ? Number(seedRaw) : undefined;
+      let seed: number | undefined;
+      if (seedAuto) {
+        const generated = Math.floor(Math.random() * 1_000_000_000);
+        seed = generated;
+        setSeedRaw(String(generated));
+        setSeedAuto(true);
+      } else {
+        const parsed = Number(seedRaw.trim());
+        seed = Number.isFinite(parsed) ? Math.abs(Math.floor(parsed)) : undefined;
+      }
+      const effectiveShotCount = layoutMode === "Grid" ? 1 : shotCount;
       const temperature = temperatureRaw.trim() ? Number(temperatureRaw) : undefined;
-      const res = await createDirectTask({
-        garmentImages: garmentFiles,
-        prompt: combinedPrompt,
+      const uploadedUrls = await uploadGarmentFiles(garmentFiles);
+      const mergedGarmentUrls = Array.from(
+        new Set(
+          [...garmentAssetUrls, ...uploadedUrls]
+            .map((v) => String(v || "").trim())
+            .filter(Boolean)
+        )
+      );
+      const res = await createDirectTaskFromUrls({
+        garmentUrls: mergedGarmentUrls,
+        prompt: finalPrompt,
+        shotCount: effectiveShotCount,
         resolution,
         aspectRatio,
+        layoutMode,
         stylePresetIds: selectedStyleIds,
         posePresetIds: selectedPoseIds,
         facePresetIds: selectedFaceIds,
@@ -508,11 +695,10 @@ export function LearnGeneratePage() {
       if (taskId) {
         addToQueue(taskId, createdAt);
         await pollOne(taskId);
-        setActiveTaskId(taskId);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
-      alert(e?.response?.data?.message || e?.message || "生成失败");
+      alert(getErrorMessage(e, "生成失败"));
     } finally {
       setCreating(false);
     }
@@ -521,6 +707,26 @@ export function LearnGeneratePage() {
   const openTaskLightbox = (taskId: string) => {
     const task = tasksById[taskId];
     if (!task) return;
+
+    const directImages = task.directPrompt
+      ? (Array.isArray(task.resultImages) ? task.resultImages : [])
+        .map((src) => String(src || "").trim())
+        .filter(Boolean)
+      : [];
+
+    if (task.directPrompt && directImages.length > 1) {
+      const images: LightboxItem[] = directImages.map((src, idx) => ({
+        id: `${taskId}:${idx + 1}`,
+        url: toImgSrc(src),
+        prompt: task.directPrompt,
+      }));
+
+      setLightboxTaskId(taskId);
+      setLightboxImages(images);
+      setLightboxInitialIndex(0);
+      setLightboxOpen(true);
+      return;
+    }
 
     const s0 = task?.shots?.[0];
     const versions = Array.isArray(s0?.versions) ? s0!.versions! : [];
@@ -544,7 +750,6 @@ export function LearnGeneratePage() {
     const initialIndex = Math.max(0, images.findIndex((it) => it.id === `${taskId}:${current}`));
 
     setLightboxTaskId(taskId);
-    setActiveTaskId(taskId);
     setLightboxImages(images);
     setLightboxInitialIndex(initialIndex);
     setLightboxOpen(true);
@@ -563,9 +768,9 @@ export function LearnGeneratePage() {
       }
       await pollOne(lightboxTaskId);
       openTaskLightbox(lightboxTaskId);
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
-      alert(e?.response?.data?.message || e?.message || "重绘失败");
+      alert(getErrorMessage(e, "重绘失败"));
     } finally {
       setLightboxRegenerating(false);
     }
@@ -583,6 +788,7 @@ export function LearnGeneratePage() {
         const prefs = JSON.parse(raw);
         if (prefs.resolution) setResolution(prefs.resolution);
         if (prefs.aspectRatio) setAspectRatio(prefs.aspectRatio);
+        if (Number.isFinite(prefs.shotCount)) setShotCount(Math.max(1, Math.floor(prefs.shotCount)));
         if (prefs.temperature) setTemperatureRaw(prefs.temperature);
         if (prefs.includeThoughts !== undefined) setIncludeThoughts(prefs.includeThoughts);
         // 注意：用户补充不自动恢复，仅手动模板可回填
@@ -601,6 +807,7 @@ export function LearnGeneratePage() {
     const prefs = {
       resolution,
       aspectRatio,
+      shotCount,
       temperature: temperatureRaw,
       includeThoughts,
       selectedStyleIds,
@@ -608,7 +815,7 @@ export function LearnGeneratePage() {
       // 注意：用户补充不自动保存，仅手动模板可回填
     };
     localStorage.setItem(STORAGE_PREFS_KEY, JSON.stringify(prefs));
-  }, [resolution, aspectRatio, temperatureRaw, includeThoughts, selectedStyleIds, selectedPoseIds]);
+  }, [resolution, aspectRatio, shotCount, temperatureRaw, includeThoughts, selectedStyleIds, selectedPoseIds]);
 
 
   if (!isAuthenticated) {
@@ -630,26 +837,146 @@ export function LearnGeneratePage() {
   const activeFace = selectedFaceIds.length > 0
     ? (facePresetsAll || []).find(p => p.id === selectedFaceIds[0])
     : null;
+  const assetDialogMaxSelection = Math.max(0, MAX_GARMENT_IMAGES - garmentFiles.length);
+  const assetPanelContent = (
+    <>
+      <AssetLibrary
+        stylePresets={stylePresetsAll || []}
+        posePresets={posePresetsAll || []}
+        facePresets={facePresetsAll || []}
+        selectedStyleIds={selectedStyleIds}
+        setSelectedStyleIds={setSelectedStyleIds}
+        selectedPoseIds={selectedPoseIds}
+        togglePoseSelect={togglePoseSelect}
+        selectedFaceIds={selectedFaceIds}
+        toggleFaceSelect={toggleFaceSelect}
+        onDeleteStyle={deleteStylePreset}
+        onDeletePose={deletePosePreset}
+        onDeleteFace={deleteFacePreset}
+        onUpdateStyle={updateStylePreset}
+        onUpdatePose={updatePosePreset}
+        onUpdateFace={updateFacePreset}
+        onRelearnStyle={relearnStylePreset}
+        onRelearnPose={relearnPosePreset}
+      />
+      <div className="p-3 border-t border-white/20 bg-white/30 space-y-2 backdrop-blur-sm">
+        <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => styleInputRef.current?.click()} disabled={styleLearning}>
+          {styleLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+          上传风格图学习
+        </Button>
+        <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => poseInputRef.current?.click()} disabled={poseLearning}>
+          {poseLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+          上传姿势图学习
+        </Button>
+        <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => setFaceDialogOpen(true)}>
+          <UserRound className="w-4 h-4" />
+          管理人脸模特
+        </Button>
+      </div>
+    </>
+  );
+  const queuePanel = (
+    <GlassPanel className="flex-1 pointer-events-auto overflow-hidden flex flex-col shadow-2xl" intensity="medium">
+      <QueueSidebar
+        queue={queue}
+        tasksById={tasksById}
+        onOpenTask={openTaskLightbox}
+        onReuseTask={(taskId) => void reuseFromTaskId(taskId)}
+        onRetryTask={(taskId) => void retryQueueTask(taskId)}
+        retryingTaskId={queueRetryingTaskId}
+        onClear={() => {
+          setQueue([]);
+          setTasksById({});
+        }}
+      />
+    </GlassPanel>
+  );
+  const settingsPanel = (
+    <div className="pointer-events-auto">
+      <AdvancedSettings
+        resolution={resolution}
+        setResolution={setResolution}
+        aspectRatio={aspectRatio}
+        setAspectRatio={setAspectRatio}
+        layoutMode={layoutMode}
+        setLayoutMode={setLayoutMode}
+        shotCount={shotCount}
+        setShotCount={setShotCount}
+        seed={seedRaw}
+        setSeed={(value) => {
+          const next = String(value ?? "");
+          setSeedRaw(next);
+          setSeedAuto(next.trim() === "");
+        }}
+        temperature={temperatureRaw}
+        setTemperature={setTemperatureRaw}
+        includeThoughts={includeThoughts}
+        setIncludeThoughts={setIncludeThoughts}
+      />
+    </div>
+  );
 
   return (
-    <div className="relative h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-slate-50">
+    <div
+      className={cn(
+        "relative min-h-[calc(100vh-3.5rem)] w-full bg-slate-50 overflow-x-hidden",
+        isOverlayOpen ? "overflow-hidden" : "overflow-y-auto",
+        "lg:h-[calc(100vh-3.5rem)] lg:overflow-hidden",
+      )}
+    >
       {/* 0. Ambient Background */}
       <FluidBackground variant={backgroundVariant} />
 
+      {/* Mobile Toolbar */}
+      <div className="sticky top-0 z-30 flex items-center justify-between gap-2 px-3 py-2 bg-white/70 backdrop-blur border-b border-white/40 lg:hidden">
+        <div className="text-sm font-semibold text-slate-700">学习与生成</div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={() => {
+              setShowRightPanel(false);
+              setShowLeftPanel(true);
+            }}
+          >
+            素材库
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={() => {
+              setShowLeftPanel(false);
+              setShowRightPanel(true);
+            }}
+          >
+            队列/设置
+          </Button>
+        </div>
+      </div>
+
       {/* 1. Center Stage (Z-Index 10) */}
-      <div className="absolute inset-0 flex items-center justify-center p-4 md:p-8 z-10 pointer-events-none">
+      <div className="relative lg:absolute lg:inset-0 flex items-center justify-center p-4 md:p-8 z-10 pointer-events-none">
         <div
-          className="pointer-events-auto w-full max-w-5xl h-full transition-transform duration-500 ease-out"
+          className="pointer-events-auto w-full max-w-5xl lg:h-full transition-transform duration-500 ease-out"
           onMouseEnter={() => setIsFocused(true)}
           onMouseLeave={() => setIsFocused(false)}
         >
           {/* CreationStage Wrapper to ensure pointer events are correct */}
-          <CreationStage
-            garmentFiles={garmentFiles}
-            garmentUrls={garmentUrls}
-            addGarmentFiles={addGarmentFiles}
-            removeGarmentAt={removeGarmentAt} // Fix: Ensure this prop name matches
-            prompt={userPrompt}
+            <CreationStage
+              garmentFiles={garmentFiles}
+              garmentUrls={garmentUrls}
+              garmentAssetUrls={garmentAssetUrls}
+              addGarmentFiles={addGarmentFiles}
+              removeGarmentAt={removeGarmentAt} // Fix: Ensure this prop name matches
+              removeGarmentAssetUrl={removeGarmentAssetUrl}
+              onClearGarments={clearGarmentImages}
+              onOpenAssetLibrary={openAssetDialog}
+              maxGarmentImages={MAX_GARMENT_IMAGES}
+              prompt={userPrompt}
             setPrompt={(v) => {
               setUserPrompt(v);
               if (selectedSnippetId) setSelectedSnippetId(null);
@@ -687,108 +1014,124 @@ export function LearnGeneratePage() {
             }}
             poseCount={selectedPoseIds.length}
             faceRemark={activeFace?.description || activeFace?.name}
+            onClear={clearWorkbench}
+            clearDisabled={!canClearWorkbench}
           />
         </div>
+      </div>
+
+      {/* Mid Desktop Toggle (Queue/Settings) */}
+      <div className="hidden lg:flex xl:hidden absolute top-6 right-6 z-30">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="h-8 px-3 text-xs"
+          onClick={() => {
+            setShowLeftPanel(false);
+            setShowRightPanel(true);
+          }}
+        >
+          队列/设置
+        </Button>
       </div>
 
       {/* 2. Left Sidebar: Asset Library (Z-Index 20) */}
       <div
         className={cn(
-          "absolute top-4 left-4 bottom-4 w-[300px] z-20 flex flex-col pointer-events-none transition-all duration-500 ease-in-out",
-          isFocused ? "opacity-30 blur-[2px] scale-95 grayscale-[0.5]" : "opacity-100 hover:opacity-100"
+          "hidden lg:flex absolute top-4 left-4 bottom-4 w-[300px] z-20 flex-col pointer-events-none transition-all duration-500 ease-in-out",
+          "opacity-100"
         )}
       >
         <GlassPanel className="flex-1 flex flex-col pointer-events-auto h-full overflow-hidden shadow-2xl" intensity="medium">
-          <AssetLibrary
-            stylePresets={stylePresetsAll || []}
-            posePresets={posePresetsAll || []}
-            facePresets={facePresetsAll || []}
-            selectedStyleIds={selectedStyleIds}
-            setSelectedStyleIds={setSelectedStyleIds}
-            selectedPoseIds={selectedPoseIds}
-            togglePoseSelect={togglePoseSelect}
-            selectedFaceIds={selectedFaceIds}
-            toggleFaceSelect={toggleFaceSelect}
-            onDeleteStyle={deleteStylePreset}
-            onDeletePose={deletePosePreset}
-            onDeleteFace={deleteFacePreset}
-            onUpdateStyle={updateStylePreset}
-            onUpdatePose={updatePosePreset}
-            onUpdateFace={updateFacePreset}
-            onRelearnStyle={(id: string) => (relearnStylePreset as any)(id)}
-            onRelearnPose={(id: string) => (relearnPosePreset as any)(id)}
-          />
-          {/* Upload Actions */}
-          <div className="p-3 border-t border-white/20 bg-white/30 space-y-2 backdrop-blur-sm">
-            <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => styleInputRef.current?.click()} disabled={styleLearning}>
-              {styleLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-              上传风格图学习
-            </Button>
-            <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => poseInputRef.current?.click()} disabled={poseLearning}>
-              {poseLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-              上传姿势图学习
-            </Button>
-            <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => setFaceDialogOpen(true)}>
-              <UserRound className="w-4 h-4" />
-              管理人脸模特
-            </Button>
-          </div>
+          {assetPanelContent}
         </GlassPanel>
-
-        {/* Hidden Inputs */}
-        <input ref={styleInputRef} type="file" accept="image/*" multiple className="hidden"
-          onChange={(e) => {
-            const files = Array.from(e.target.files || []).slice(0, MAX_STYLE_LEARN_IMAGES);
-            e.currentTarget.value = "";
-            void onLearnStyle(files);
-          }}
-        />
-        <input ref={poseInputRef} type="file" accept="image/*" className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.currentTarget.value = "";
-            if (file) void onLearnPose(file);
-          }}
-        />
       </div>
 
       {/* 3. Right Sidebar: Queue & Settings (Z-Index 20) */}
       <div
         className={cn(
-          "absolute top-4 right-4 bottom-4 w-[320px] z-20 pointer-events-none flex flex-col gap-4 transition-all duration-500 ease-in-out",
-          isFocused ? "opacity-30 blur-[2px] scale-95 grayscale-[0.5]" : "opacity-100 hover:opacity-100"
+          "hidden xl:flex absolute top-4 right-4 bottom-4 w-[320px] z-20 pointer-events-none flex-col gap-4 transition-all duration-500 ease-in-out",
+          "opacity-100"
         )}
       >
         {/* Queue Panel */}
-        <GlassPanel className="flex-1 pointer-events-auto overflow-hidden flex flex-col shadow-2xl" intensity="medium">
-          <QueueSidebar
-            queue={queue}
-            tasksById={tasksById}
-            onOpenTask={openTaskLightbox}
-            onReuseTask={(taskId) => void reuseFromTaskId(taskId)}
-            onClear={() => {
-              setQueue([]);
-              setTasksById({});
-            }}
-          />
-        </GlassPanel>
+        {queuePanel}
 
         {/* Advanced Settings (Floating Panel) */}
-        <div className="pointer-events-auto">
-          <AdvancedSettings
-            resolution={resolution}
-            setResolution={setResolution as any}
-            aspectRatio={aspectRatio}
-            setAspectRatio={setAspectRatio as any}
-            seed={seedRaw}
-            setSeed={setSeedRaw}
-            temperature={temperatureRaw}
-            setTemperature={setTemperatureRaw}
-            includeThoughts={includeThoughts}
-            setIncludeThoughts={setIncludeThoughts}
-          />
-        </div>
+        {settingsPanel}
       </div>
+
+      {/* Mobile/Tablet Overlay: Asset Library */}
+      {showLeftPanel && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowLeftPanel(false)}
+          />
+          <div className="relative m-4 w-[320px] max-w-[85vw] h-[calc(100%-2rem)]">
+            <GlassPanel className="flex flex-col pointer-events-auto h-full overflow-hidden shadow-2xl" intensity="medium">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-white/20 bg-white/70">
+                <span className="text-sm font-semibold text-slate-700">素材库</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs"
+                  onClick={() => setShowLeftPanel(false)}
+                >
+                  关闭
+                </Button>
+              </div>
+              {assetPanelContent}
+            </GlassPanel>
+          </div>
+        </div>
+      )}
+
+      {/* Overlay: Queue & Settings */}
+      {showRightPanel && (
+        <div className="fixed inset-0 z-50 flex xl:hidden">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowRightPanel(false)}
+          />
+          <div className="relative ml-auto m-4 w-[360px] max-w-[90vw] h-[calc(100%-2rem)] flex flex-col gap-3">
+            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/70 border border-white/20 shadow-sm backdrop-blur">
+              <span className="text-sm font-semibold text-slate-700">队列/设置</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs"
+                onClick={() => setShowRightPanel(false)}
+              >
+                关闭
+              </Button>
+            </div>
+            <div className="flex-1 min-h-0 flex flex-col gap-4">
+              {queuePanel}
+              {settingsPanel}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden Inputs */}
+      <input ref={styleInputRef} type="file" accept="image/*" multiple className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []).slice(0, MAX_STYLE_LEARN_IMAGES);
+          e.currentTarget.value = "";
+          void onLearnStyle(files);
+        }}
+      />
+      <input ref={poseInputRef} type="file" accept="image/*" className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.currentTarget.value = "";
+          if (file) void onLearnPose(file);
+        }}
+      />
 
       {/* Lightbox & Dialogs */}
       <ImageLightbox
@@ -797,7 +1140,7 @@ export function LearnGeneratePage() {
         open={lightboxOpen}
         onOpenChange={setLightboxOpen}
         watermarkTaskId={lightboxTaskId}
-        onRegenerate={(_id) => void onRegenerateInLightbox()}
+        onRegenerate={() => void onRegenerateInLightbox()}
         isRegenerating={lightboxRegenerating}
         regenerateLabel="重新生成"
       />
@@ -812,6 +1155,14 @@ export function LearnGeneratePage() {
           </div>
         </DialogContent>
       </Dialog>
+      <UserAssetLibraryDialog
+        open={assetDialogOpen}
+        onOpenChange={setAssetDialogOpen}
+        selectedUrls={garmentAssetUrls}
+        onConfirm={setGarmentAssetUrls}
+        maxSelection={assetDialogMaxSelection}
+        title="服装素材库"
+      />
     </div>
   );
 }

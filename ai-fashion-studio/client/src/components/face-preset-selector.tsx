@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useFacePresetStore, FacePreset } from '@/store/face-preset-store';
@@ -20,12 +21,18 @@ interface FacePresetSelectorProps {
     maxSelection?: number;
 }
 
+const getErrorMessage = (error: unknown, fallback: string) => {
+    const maybe = error as { response?: { data?: { message?: string } }; message?: string };
+    return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
+};
+
 export function FacePresetSelector({
     selectedIds,
     onSelect,
     maxSelection = 1
 }: FacePresetSelectorProps) {
     const { presets, loading, fetchPresets, addPreset, deletePreset, updatePreset } = useFacePresetStore();
+    const MAX_FACE_PRESET_FILE_SIZE = 10 * 1024 * 1024;
     const [isUploadOpen, setIsUploadOpen] = useState(false);
     const [previewPreset, setPreviewPreset] = useState<FacePreset | null>(null);
     const [uploading, setUploading] = useState(false);
@@ -50,11 +57,15 @@ export function FacePresetSelector({
     }, [fetchPresets]); // 添加依赖项以消除 ESLint 警告
 
     const handleUpload = async () => {
-        if (!uploadFile || !uploadName) return;
+        const trimmedName = uploadName.trim();
+        if (!uploadFile || !trimmedName) {
+            alert('请先上传图片并填写姓名');
+            return;
+        }
         setUploading(true);
         try {
             await addPreset(uploadFile, {
-                name: uploadName,
+                name: trimmedName,
                 gender: uploadGender,
                 height: uploadHeight,
                 weight: uploadWeight,
@@ -63,8 +74,8 @@ export function FacePresetSelector({
             });
             setIsUploadOpen(false);
             resetForm();
-        } catch (e) {
-            // Error handled in store
+        } catch (e: unknown) {
+            alert(getErrorMessage(e, '上传失败'));
         } finally {
             setUploading(false);
         }
@@ -170,7 +181,36 @@ export function FacePresetSelector({
                                     <p className="text-sm font-medium text-slate-700">{uploadFile ? '点击更换图片' : '上传模特照片'}</p>
                                     <p className="text-xs text-slate-400">支持 JPG, PNG (3:4 比例最佳)</p>
                                 </div>
-                                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                        const file = e.target.files?.[0] || null;
+                                        if (!file) {
+                                            setUploadFile(null);
+                                            return;
+                                        }
+                                        if (!file.type.startsWith('image/')) {
+                                            alert('仅支持图片格式');
+                                            e.currentTarget.value = '';
+                                            return;
+                                        }
+                                        if (file.size > MAX_FACE_PRESET_FILE_SIZE) {
+                                            alert('图片超过 10MB，请压缩后再上传');
+                                            e.currentTarget.value = '';
+                                            return;
+                                        }
+                                        setUploadFile(file);
+                                        setUploadName((prev) => {
+                                            if (prev.trim()) return prev;
+                                            const derived = file.name.replace(/\.[^/.]+$/, '').trim();
+                                            return derived || prev;
+                                        });
+                                        e.currentTarget.value = '';
+                                    }}
+                                />
                             </div>
 
                             {/* Basic Info */}
@@ -236,7 +276,7 @@ export function FacePresetSelector({
                         </div>
                         <DialogFooter>
                             <Button variant="outline" onClick={() => setIsUploadOpen(false)}>取消</Button>
-                            <Button onClick={handleUpload} disabled={!uploadFile || !uploadName || uploading}>
+                            <Button onClick={handleUpload} disabled={uploading}>
                                 {uploading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                 保存
                             </Button>

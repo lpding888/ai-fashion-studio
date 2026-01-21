@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import * as React from 'react';
 import Link from 'next/link';
@@ -6,7 +7,6 @@ import Link from 'next/link';
 import { Loader2, Calendar, Clock, ArrowRight, Image as ImageIcon, CheckCircle2, AlertCircle, Brain, Sparkles } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
 import api, { BACKEND_ORIGIN } from '@/lib/api';
 
@@ -70,7 +70,6 @@ function formatTimeAgo(timestamp: number) {
 export function TaskHistory() {
     const [loading, setLoading] = React.useState(true);
     const [tasks, setTasks] = React.useState<TaskHistoryItem[]>([]);
-    const [error, setError] = React.useState<string | null>(null);
 
     const fetchTasks = async () => {
         try {
@@ -79,7 +78,6 @@ export function TaskHistory() {
             setTasks(res.data?.tasks || []);
         } catch (err) {
             console.error("Failed to fetch tasks", err);
-            setError("无法加载历史记录");
         } finally {
             setLoading(false);
         }

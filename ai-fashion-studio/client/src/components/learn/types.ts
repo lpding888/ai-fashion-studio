@@ -6,6 +6,9 @@ export type TaskApi = {
   createdAt: number;
   // Common fields returned by /tasks/:id (server returns full task model; client only types what we use)
   requirements?: string;
+  shotCount?: number;
+  layout_mode?: "Individual" | "Grid";
+  layoutMode?: "Individual" | "Grid";
   resolution?: "1K" | "2K" | "4K";
   aspectRatio?: "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
   // Direct (learn) workflow snapshot (用于“复用设置”回填)

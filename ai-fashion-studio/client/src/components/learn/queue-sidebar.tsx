@@ -25,9 +25,11 @@ export function QueueSidebar(props: {
   tasksById: Record<string, TaskApi | undefined>;
   onOpenTask: (taskId: string) => void;
   onReuseTask: (taskId: string) => void;
+  onRetryTask: (taskId: string) => void;
+  retryingTaskId?: string | null;
   onClear: () => void;
 }) {
-  const { queue, tasksById, onOpenTask, onReuseTask, onClear } = props;
+  const { queue, tasksById, onOpenTask, onReuseTask, onRetryTask, retryingTaskId, onClear } = props;
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -50,6 +52,8 @@ export function QueueSidebar(props: {
               const progress = computeProgress(status);
               const thumb = t ? pickTaskThumbnail(t) : "";
               const name = t ? taskDisplayName({ id: t.id, directPrompt: t.directPrompt, requirements: t.requirements }) : `Task ${q.taskId.slice(0, 6)}`;
+              const isFailed = status === "FAILED";
+              const isRetrying = isFailed && retryingTaskId === q.taskId;
 
               return (
                 <motion.div
@@ -109,7 +113,7 @@ export function QueueSidebar(props: {
                       </div>
 
                       {!!t && (() => {
-                        const r = computeRenderDurationMs(t as any);
+                        const r = computeRenderDurationMs(t);
                         if (!r) return null;
                         const label = r.kind === "duration" ? "耗时" : "已用";
                         return (
@@ -120,7 +124,22 @@ export function QueueSidebar(props: {
                       })()}
 
                       {!!t && (
-                        <div className="mt-2 flex items-center justify-end">
+                        <div className="mt-2 flex items-center justify-end gap-2">
+                          {isFailed && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRetryTask(q.taskId);
+                              }}
+                              disabled={isRetrying}
+                            >
+                              {isRetrying ? "重试中..." : "重新生成"}
+                            </Button>
+                          )}
                           <Button
                             type="button"
                             variant="secondary"

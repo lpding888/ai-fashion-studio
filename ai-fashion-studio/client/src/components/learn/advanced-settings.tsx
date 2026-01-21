@@ -9,11 +9,28 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 
+const LAYOUT_OPTIONS = ["Individual", "Grid"] as const;
+const RESOLUTION_OPTIONS = ["1K", "2K", "4K"] as const;
+const ASPECT_RATIO_OPTIONS = ["1:1", "3:4", "4:3", "9:16", "16:9", "21:9"] as const;
+
+const isLayoutMode = (value: string): value is (typeof LAYOUT_OPTIONS)[number] =>
+  LAYOUT_OPTIONS.includes(value as (typeof LAYOUT_OPTIONS)[number]);
+
+const isResolution = (value: string): value is (typeof RESOLUTION_OPTIONS)[number] =>
+  RESOLUTION_OPTIONS.includes(value as (typeof RESOLUTION_OPTIONS)[number]);
+
+const isAspectRatio = (value: string): value is (typeof ASPECT_RATIO_OPTIONS)[number] =>
+  ASPECT_RATIO_OPTIONS.includes(value as (typeof ASPECT_RATIO_OPTIONS)[number]);
+
 interface AdvancedSettingsProps {
   resolution: "1K" | "2K" | "4K";
   setResolution: (v: "1K" | "2K" | "4K") => void;
   aspectRatio: "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
   setAspectRatio: (v: "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9") => void;
+  layoutMode: "Individual" | "Grid";
+  setLayoutMode: (v: "Individual" | "Grid") => void;
+  shotCount: number;
+  setShotCount: (v: number) => void;
   seed: string;
   setSeed: (v: string) => void;
   temperature: string;
@@ -27,6 +44,10 @@ export function AdvancedSettings({
   setResolution,
   aspectRatio,
   setAspectRatio,
+  layoutMode,
+  setLayoutMode,
+  shotCount,
+  setShotCount,
   seed,
   setSeed,
   temperature,
@@ -38,11 +59,12 @@ export function AdvancedSettings({
 
   // 简单摘要，显示关键参数
   const summary = React.useMemo(() => {
-    const parts: string[] = [resolution, aspectRatio];
+    const modeLabel = layoutMode === "Grid" ? "拼图" : "单张";
+    const parts: string[] = [modeLabel, `${shotCount}张`, resolution, aspectRatio];
     if (seed) parts.push(`Seed:${seed}`);
     if (includeThoughts) parts.push("Thoughts");
     return parts.join(" | ");
-  }, [resolution, aspectRatio, seed, includeThoughts]);
+  }, [layoutMode, resolution, aspectRatio, seed, includeThoughts, shotCount]);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="w-full space-y-2 border rounded-xl bg-white/50">
@@ -65,14 +87,37 @@ export function AdvancedSettings({
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
           <div className="space-y-1.5">
+            <label className="text-xs font-medium text-slate-600">输出模式</label>
+            <Select
+              value={layoutMode}
+              onValueChange={(v) => {
+                if (isLayoutMode(v)) setLayoutMode(v);
+              }}
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Individual">单张模式（每张独立）</SelectItem>
+                <SelectItem value="Grid">拼图模式（多姿势合成）</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-600">分辨率</label>
-            <Select value={resolution} onValueChange={(v) => setResolution(v as any)}>
+            <Select
+              value={resolution}
+              onValueChange={(v) => {
+                if (isResolution(v)) setResolution(v);
+              }}
+            >
               <SelectTrigger className="h-9">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="1K">1K (标准)</SelectItem>
-                <SelectItem value="2K">2K (高清)</SelectItem>
+                <SelectItem value="2K">2K (高清 - 2倍消耗)</SelectItem>
                 <SelectItem value="4K">4K (超清 - 4倍消耗)</SelectItem>
               </SelectContent>
             </Select>
@@ -80,7 +125,12 @@ export function AdvancedSettings({
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-600">画面比例</label>
-            <Select value={aspectRatio} onValueChange={(v) => setAspectRatio(v as any)}>
+            <Select
+              value={aspectRatio}
+              onValueChange={(v) => {
+                if (isAspectRatio(v)) setAspectRatio(v);
+              }}
+            >
               <SelectTrigger className="h-9">
                 <SelectValue />
               </SelectTrigger>
@@ -91,6 +141,21 @@ export function AdvancedSettings({
                 <SelectItem value="9:16">9:16 (手机全屏)</SelectItem>
                 <SelectItem value="16:9">16:9 (宽屏)</SelectItem>
                 <SelectItem value="21:9">21:9 (电影感)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-slate-600">生成张数</label>
+            <Select value={String(shotCount)} onValueChange={(v) => setShotCount(Number(v))}>
+              <SelectTrigger className="h-9" disabled={layoutMode === "Grid"}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">1 张</SelectItem>
+                <SelectItem value="2">2 张</SelectItem>
+                <SelectItem value="4">4 张</SelectItem>
+                <SelectItem value="6">6 张</SelectItem>
               </SelectContent>
             </Select>
           </div>

@@ -40,10 +40,12 @@ export default function AdminCreditsPage() {
             });
             // 重置部分表单，保留ID方便连续操作？还是清空？还是保留？
             // 个人偏好：不清空ID，方便再次操作，也不清空金额。
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const apiMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+            const fallback = error instanceof Error ? error.message : "未知错误";
             toast({
                 title: "充值失败",
-                description: error?.response?.data?.message || error.message || "未知错误",
+                description: apiMessage || fallback || "未知错误",
                 variant: "destructive"
             });
         } finally {

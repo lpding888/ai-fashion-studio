@@ -104,6 +104,8 @@ export default function AdminLogsPage() {
       info: console.info,
     };
 
+    type ConsoleArgs = Parameters<typeof console.log>;
+
     const pushFrontend = (level: Level, args: unknown[]) => {
       const message = normalizeMessage(args);
       setItems((prev) => {
@@ -115,23 +117,23 @@ export default function AdminLogsPage() {
       });
     };
 
-    console.log = (...args: any[]) => {
+    console.log = (...args: ConsoleArgs) => {
       original.log(...args);
       pushFrontend('log', args);
     };
-    console.warn = (...args: any[]) => {
+    console.warn = (...args: ConsoleArgs) => {
       original.warn(...args);
       pushFrontend('warn', args);
     };
-    console.error = (...args: any[]) => {
+    console.error = (...args: ConsoleArgs) => {
       original.error(...args);
       pushFrontend('error', args);
     };
-    console.debug = (...args: any[]) => {
+    console.debug = (...args: ConsoleArgs) => {
       original.debug(...args);
       pushFrontend('debug', args);
     };
-    console.info = (...args: any[]) => {
+    console.info = (...args: ConsoleArgs) => {
       original.info(...args);
       pushFrontend('verbose', args);
     };
@@ -228,9 +230,10 @@ export default function AdminLogsPage() {
             }
           }
         }
-      } catch (e: any) {
-        if (e?.name === 'AbortError') return;
-        console.error('后端日志流异常', e?.message || e);
+      } catch (e: unknown) {
+        const maybe = e as { name?: string; message?: string };
+        if (maybe?.name === 'AbortError') return;
+        console.error('后端日志流异常', maybe?.message || e);
       }
     };
 
@@ -311,4 +314,3 @@ export default function AdminLogsPage() {
     </div>
   );
 }
-

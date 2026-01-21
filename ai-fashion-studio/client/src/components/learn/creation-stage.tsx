@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import * as React from "react";
 import { UploadCloud, X, Loader2, Sparkles } from "lucide-react";
@@ -13,8 +14,13 @@ import type { PromptSnippet } from "@/components/learn/types";
 interface CreationStageProps {
     garmentFiles: File[];
     garmentUrls: string[];
+    garmentAssetUrls: string[];
     addGarmentFiles: (files: File[]) => void;
     removeGarmentAt: (index: number) => void;
+    removeGarmentAssetUrl: (url: string) => void;
+    onOpenAssetLibrary?: () => void;
+    maxGarmentImages?: number;
+    onClearGarments?: () => void;
 
     prompt: string;
     setPrompt: (v: string) => void;
@@ -44,13 +50,20 @@ interface CreationStageProps {
     onDeleteSnippet?: () => void;
     snippetRemark?: string;
     setSnippetRemark?: (v: string) => void;
+    onClear?: () => void;
+    clearDisabled?: boolean;
 }
 
 export function CreationStage({
     garmentFiles,
     garmentUrls,
+    garmentAssetUrls,
     addGarmentFiles,
     removeGarmentAt,
+    removeGarmentAssetUrl,
+    onOpenAssetLibrary,
+    maxGarmentImages,
+    onClearGarments,
     prompt,
     setPrompt,
     autoStylePrompt,
@@ -74,16 +87,22 @@ export function CreationStage({
     onDeleteSnippet,
     snippetRemark = "",
     setSnippetRemark,
+    onClear,
+    clearDisabled = false,
 }: CreationStageProps) {
     const PROMPT_MIN_HEIGHT = 80;
     const PROMPT_MAX_HEIGHT = 240;
+    const PROMPT_HEIGHT_STORAGE_KEY = "afs:learn:promptHeight:v1";
     const [dragOver, setDragOver] = React.useState(false);
+    const [promptHeight, setPromptHeight] = React.useState<number | null>(null);
     const promptRef = React.useRef<HTMLTextAreaElement>(null);
     const inputRef = React.useRef<HTMLInputElement>(null);
     const folderInputRef = React.useRef<HTMLInputElement>(null);
     const dragCounter = React.useRef(0);
     const [lastInteraction, setLastInteraction] = React.useState(0);
     const resolvedStyleLabel = String(styleLabel || "").trim();
+    const totalGarmentCount = garmentFiles.length + garmentAssetUrls.length;
+    const maxImages = maxGarmentImages ?? 6;
     const hasPromptSnippets = promptSnippets.length > 0;
     const trimmedPrompt = prompt.trim();
     const canSaveSnippet = !!trimmedPrompt && promptSnippetsBusy !== "create";
@@ -94,12 +113,15 @@ export function CreationStage({
         isDirectory: boolean;
     };
     type FileSystemFileEntryLike = FileSystemEntryLike & {
-        file: (success: (file: File) => void, error?: (err: any) => void) => void;
+        file: (success: (file: File) => void, error?: (err: unknown) => void) => void;
     };
     type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
         createReader: () => {
-            readEntries: (success: (entries: FileSystemEntryLike[]) => void, error?: (err: any) => void) => void;
+            readEntries: (success: (entries: FileSystemEntryLike[]) => void, error?: (err: unknown) => void) => void;
         };
+    };
+    type DataTransferItemWithEntry = DataTransferItem & {
+        webkitGetAsEntry?: () => FileSystemEntryLike | null;
     };
 
     const readEntryFiles = React.useCallback(async (entry: FileSystemEntryLike): Promise<File[]> => {
@@ -131,7 +153,7 @@ export function CreationStage({
     const collectDroppedFiles = React.useCallback(async (dataTransfer: DataTransfer): Promise<File[]> => {
         const items = Array.from(dataTransfer.items || []);
         const entries = items
-            .map((item) => (item as any).webkitGetAsEntry?.())
+            .map((item) => (item as DataTransferItemWithEntry).webkitGetAsEntry?.())
             .filter(Boolean) as FileSystemEntryLike[];
         if (entries.length) {
             const nested = await Promise.all(entries.map((entry) => readEntryFiles(entry)));
@@ -143,15 +165,28 @@ export function CreationStage({
     const resizePrompt = React.useCallback(() => {
         const el = promptRef.current;
         if (!el) return;
+        if (promptHeight !== null) {
+            el.style.overflowY = "auto";
+            return;
+        }
         el.style.height = "auto";
         const next = Math.min(Math.max(el.scrollHeight, PROMPT_MIN_HEIGHT), PROMPT_MAX_HEIGHT);
         el.style.height = `${next}px`;
         el.style.overflowY = el.scrollHeight > PROMPT_MAX_HEIGHT ? "auto" : "hidden";
-    }, [PROMPT_MIN_HEIGHT, PROMPT_MAX_HEIGHT]);
+    }, [PROMPT_MIN_HEIGHT, PROMPT_MAX_HEIGHT, promptHeight]);
 
     React.useLayoutEffect(() => {
         resizePrompt();
     }, [prompt, resizePrompt]);
+
+    React.useEffect(() => {
+        if (typeof window === "undefined") return;
+        const raw = window.localStorage.getItem(PROMPT_HEIGHT_STORAGE_KEY);
+        const parsed = raw ? Number(raw) : NaN;
+        if (Number.isFinite(parsed) && parsed >= PROMPT_MIN_HEIGHT) {
+            setPromptHeight(parsed);
+        }
+    }, [PROMPT_HEIGHT_STORAGE_KEY, PROMPT_MIN_HEIGHT]);
 
     React.useEffect(() => {
         const input = folderInputRef.current;
@@ -159,6 +194,22 @@ export function CreationStage({
         input.setAttribute("webkitdirectory", "");
         input.setAttribute("directory", "");
     }, []);
+
+    const persistPromptHeight = React.useCallback(() => {
+        const el = promptRef.current;
+        if (!el) return;
+        const next = Math.max(PROMPT_MIN_HEIGHT, Math.round(el.getBoundingClientRect().height));
+        const autoHeight = Math.min(Math.max(el.scrollHeight, PROMPT_MIN_HEIGHT), PROMPT_MAX_HEIGHT);
+        if (promptHeight === null && Math.abs(next - autoHeight) < 1) {
+            return;
+        }
+        if (promptHeight === next) return;
+        setPromptHeight(next);
+        el.style.overflowY = "auto";
+        if (typeof window !== "undefined") {
+            window.localStorage.setItem(PROMPT_HEIGHT_STORAGE_KEY, String(next));
+        }
+    }, [PROMPT_HEIGHT_STORAGE_KEY, PROMPT_MIN_HEIGHT, PROMPT_MAX_HEIGHT, promptHeight]);
 
     const handleInteraction = React.useCallback(() => {
         const now = Date.now();
@@ -194,7 +245,7 @@ export function CreationStage({
     };
 
     return (
-        <div className="w-full max-w-5xl mx-auto flex flex-col h-full gap-6 pointer-events-auto">
+        <div className="w-full max-w-5xl mx-auto flex flex-col gap-4 sm:gap-6 pointer-events-auto lg:h-full">
             {notice && (
                 <div className="flex justify-center">
                     <div className="inline-flex items-center gap-2 rounded-full border border-white/40 bg-white/70 px-4 py-1 text-xs text-slate-600 shadow-sm backdrop-blur">
@@ -207,7 +258,7 @@ export function CreationStage({
             <div className="flex-1 min-h-0 flex flex-col relative transition-transform duration-300">
                 <GlassPanel
                     className={cn(
-                        "flex-1 relative flex flex-col items-center justify-center p-8 transition-all duration-300 border-2 border-dashed",
+                        "flex-1 relative flex flex-col items-center justify-center p-4 sm:p-6 lg:p-8 transition-all duration-300 border-2 border-dashed",
                         dragOver ? "border-purple-400 bg-purple-50/20 scale-[1.01]" : "border-white/30 hover:border-white/60",
                         garmentFiles.length > 0 ? "border-solid border-white/20" : "",
                         isFocused && !dragOver ? "shadow-[0_0_40px_-10px_rgba(168,85,247,0.3)] border-white/50" : ""
@@ -218,12 +269,37 @@ export function CreationStage({
                     onDragLeave={onDragLeave}
                     onDrop={onDrop}
                 >
-                    {garmentFiles.length > 0 ? (
+                    {totalGarmentCount > 0 && onClearGarments && (
+                        <div className="absolute top-3 right-3 z-10">
+                            <Button
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                className="h-7 px-2 text-[10px]"
+                                onClick={onClearGarments}
+                            >
+                                清空图片
+                            </Button>
+                        </div>
+                    )}
+                    {totalGarmentCount > 0 ? (
                         <div className="w-full h-full grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in text-center">
                             {/* Gallery Grid */}
+                            {garmentAssetUrls.map((url) => (
+                                <div key={`asset-${url}`} className="relative group aspect-[3/4] max-h-[60vh] mx-auto">
+                                    <img src={url} alt="Garment asset" className="w-full h-full object-contain drop-shadow-2xl" />
+                                    <Button
+                                        variant="destructive" size="icon"
+                                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded-full h-8 w-8"
+                                        onClick={() => removeGarmentAssetUrl(url)}
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </Button>
+                                </div>
+                            ))}
                             {garmentUrls.map((url, idx) => (
-                                <div key={url} className="relative group aspect-[3/4] max-h-[60vh] mx-auto">
-                                    <img src={url} alt="Garment" className="w-full h-full object-contain drop-shadow-2xl" />
+                                <div key={`file-${url}`} className="relative group aspect-[3/4] max-h-[60vh] mx-auto">
+                                    <img src={url} alt="Garment file" className="w-full h-full object-contain drop-shadow-2xl" />
                                     <Button
                                         variant="destructive" size="icon"
                                         className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded-full h-8 w-8"
@@ -235,7 +311,7 @@ export function CreationStage({
                             ))}
 
                             {/* Add More Button (if not full) */}
-                            {garmentFiles.length < 6 && (
+                            {totalGarmentCount < maxImages && (
                                 <button
                                     onClick={() => inputRef.current?.click()}
                                     className="flex items-center justify-center aspect-[3/4] max-h-[60vh] rounded-xl border-2 border-dashed border-white/30 text-white/50 hover:bg-white/10 hover:text-white transition-colors"
@@ -259,7 +335,7 @@ export function CreationStage({
                         </div>
                     )}
 
-                    {garmentFiles.length < 6 && (
+                    {totalGarmentCount < maxImages && (
                         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                             <Button
                                 type="button"
@@ -279,6 +355,17 @@ export function CreationStage({
                             >
                                 选择文件夹
                             </Button>
+                            {onOpenAssetLibrary && (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 text-xs bg-white/60"
+                                    onClick={onOpenAssetLibrary}
+                                >
+                                    从素材库选择
+                                </Button>
+                            )}
                         </div>
                     )}
 
@@ -356,8 +443,12 @@ export function CreationStage({
                             setPrompt(e.target.value);
                             requestAnimationFrame(resizePrompt);
                         }}
+                        onMouseUp={persistPromptHeight}
+                        onTouchEnd={persistPromptHeight}
+                        onBlur={persistPromptHeight}
                         placeholder="描述你想要的画面：穿在什么样的模特身上？动作？场景？光影？..."
-                        className="min-h-[80px] bg-transparent border-0 focus-visible:ring-0 resize-none text-base pl-3 pt-3"
+                        className="min-h-[80px] bg-transparent border-0 focus-visible:ring-0 resize-y text-base pl-3 pt-3"
+                        style={promptHeight ? { height: `${promptHeight}px` } : undefined}
                     />
                     <div className="mt-2 space-y-2">
                         <div className="flex items-center justify-between">
@@ -411,6 +502,16 @@ export function CreationStage({
                 </div>
 
                 <div className="flex flex-col items-end gap-1 pb-1 pr-1">
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-3 text-xs text-slate-500 hover:text-slate-700"
+                        onClick={onClear}
+                        disabled={clearDisabled}
+                    >
+                        清空
+                    </Button>
                     <div className="text-[10px] text-muted-foreground mr-1">
                         {estimatedCreditsCost} 积分
                     </div>

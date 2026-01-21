@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, type ComponentProps } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -34,7 +34,26 @@ interface Task {
     creditsSpent?: number;
     createdAt: number;
     resultImages?: string[];
+    scfMetrics?: {
+        count?: number;
+        totalMs?: number;
+        lastMs?: number;
+        lastAt?: number;
+        lastShots?: number;
+        lastSuccess?: boolean;
+    };
 }
+
+type TaskQueryParams = {
+    scope: string;
+    page: number;
+    limit: number;
+    q?: string;
+    userId?: string;
+    status?: string;
+};
+
+type BadgeVariant = ComponentProps<typeof Badge>['variant'];
 
 export default function AdminTasksPage() {
     const searchParams = useSearchParams();
@@ -54,18 +73,10 @@ export default function AdminTasksPage() {
         if (uid) setUserIdFilter(uid);
     }, [searchParams]);
 
-    useEffect(() => {
-        const t = setTimeout(() => {
-            void fetchTasks();
-        }, 200);
-        return () => clearTimeout(t);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, searchQuery, userIdFilter, statusFilter]);
-
-    const fetchTasks = async () => {
+    const fetchTasks = useCallback(async () => {
         try {
             setLoading(true);
-            const params: any = {
+            const params: TaskQueryParams = {
                 scope: 'all',
                 page,
                 limit,
@@ -83,13 +94,20 @@ export default function AdminTasksPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [page, limit, searchQuery, userIdFilter, statusFilter]);
+
+    useEffect(() => {
+        const t = setTimeout(() => {
+            void fetchTasks();
+        }, 200);
+        return () => clearTimeout(t);
+    }, [fetchTasks]);
 
     // 说明：过滤已下沉到后端（避免分页只拿到一小段导致“看起来不全”）
     const filteredTasks = useMemo(() => tasks, [tasks]);
 
-        const getStatusBadge = (status: string) => {
-        const variants: Record<string, { variant: any; label: string }> = {
+    const getStatusBadge = (status: string) => {
+        const variants: Record<string, { variant: BadgeVariant; label: string }> = {
             COMPLETED: { variant: 'default', label: '已完成' },
             RENDERING: { variant: 'secondary', label: '生成中' },
             PLANNING: { variant: 'secondary', label: '规划中' },
@@ -102,6 +120,20 @@ export default function AdminTasksPage() {
         };
         const info = variants[status] || { variant: 'outline', label: status };
         return <Badge variant={info.variant}>{info.label}</Badge>;
+    };
+
+    const formatMs = (value?: number) => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+        const ms = value;
+        if (ms < 1000) return `${Math.round(ms)}ms`;
+        return `${(ms / 1000).toFixed(1)}s`;
+    };
+
+    const formatScfMetrics = (metrics?: Task['scfMetrics']) => {
+        if (!metrics || typeof metrics.lastMs !== 'number') return '-';
+        const last = formatMs(metrics.lastMs);
+        const count = typeof metrics.count === 'number' ? metrics.count : undefined;
+        return count ? `${last} / ${count}` : last;
     };
 
     return (
@@ -163,6 +195,7 @@ export default function AdminTasksPage() {
                                     <TableHead>状态</TableHead>
                                     <TableHead>扣费</TableHead>
                                     <TableHead>镜头数</TableHead>
+                                    <TableHead>SCF耗时</TableHead>
                                     <TableHead>创建时间</TableHead>
                                     <TableHead className="text-right">操作</TableHead>
                                 </TableRow>
@@ -184,6 +217,9 @@ export default function AdminTasksPage() {
                                             {typeof task.creditsSpent === 'number' ? task.creditsSpent : '-'}
                                         </TableCell>
                                         <TableCell>{task.shotCount}</TableCell>
+                                        <TableCell className="text-muted-foreground">
+                                            {formatScfMetrics(task.scfMetrics)}
+                                        </TableCell>
                                         <TableCell className="text-muted-foreground">
                                             {new Date(task.createdAt).toLocaleString('zh-CN')}
                                         </TableCell>

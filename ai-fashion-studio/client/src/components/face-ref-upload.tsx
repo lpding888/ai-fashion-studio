@@ -1,13 +1,16 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import * as React from 'react';
-import { User, X, ImagePlus, AlertTriangle } from 'lucide-react';
+import { X, ImagePlus, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface FaceRefUploadProps {
     onFilesSelected: (files: File[]) => void;
     selectedFiles: File[];
+    selectedUrls?: string[];
+    onRemoveUrl?: (url: string) => void;
     className?: string;
     maxFiles?: number;
 }
@@ -15,14 +18,17 @@ interface FaceRefUploadProps {
 export function FaceRefUpload({
     onFilesSelected,
     selectedFiles,
+    selectedUrls = [],
+    onRemoveUrl,
     className,
     maxFiles = 5
 }: FaceRefUploadProps) {
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const [isDragOver, setIsDragOver] = React.useState(false);
 
-    const isAtLimit = selectedFiles.length >= maxFiles;
-    const remainingSlots = maxFiles - selectedFiles.length;
+    const totalCount = selectedFiles.length + selectedUrls.length;
+    const isAtLimit = totalCount >= maxFiles;
+    const remainingSlots = Math.max(0, maxFiles - totalCount);
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -112,13 +118,40 @@ export function FaceRefUpload({
 
             {/* Selected Files List */}
             <AnimatePresence>
-                {selectedFiles.length > 0 && (
+                {totalCount > 0 && (
                     <motion.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: "auto" }}
                         exit={{ opacity: 0, height: 0 }}
                         className="grid grid-cols-4 gap-2 mt-4"
                     >
+                        {selectedUrls.map((url, idx) => (
+                            <motion.div
+                                key={`${url}-${idx}`}
+                                layout
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0 }}
+                                className="relative aspect-square rounded-lg overflow-hidden group border border-white/10"
+                            >
+                                <img
+                                    src={url}
+                                    alt="asset"
+                                    className="w-full h-full object-cover"
+                                />
+                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onRemoveUrl?.(url);
+                                        }}
+                                        className="p-1.5 bg-red-500/80 text-white rounded-full hover:bg-red-600 transition-colors"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </motion.div>
+                        ))}
                         {selectedFiles.map((file, idx) => (
                             <motion.div
                                 key={`${file.name}-${idx}`}

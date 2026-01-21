@@ -1,7 +1,17 @@
 declare module 'cos-js-sdk-v5' {
+    type CosAuthorizationData = {
+        TmpSecretId?: string;
+        TmpSecretKey?: string;
+        SecurityToken?: string;
+        StartTime?: number;
+        ExpiredTime?: number;
+        ScopeLimit?: boolean;
+        error?: Error;
+    };
+
     interface COSOptions {
-        getAuthorization: (options: any, callback: (data: any) => void) => void;
-        [key: string]: any;
+        getAuthorization: (options: Record<string, unknown>, callback: (data: CosAuthorizationData) => void) => void;
+        [key: string]: unknown;
     }
 
     interface UploadFileOptions {
@@ -11,19 +21,19 @@ declare module 'cos-js-sdk-v5' {
         Body: File | Blob | string;
         SliceSize?: number;
         onProgress?: (progressData: { percent: number }) => void;
-        [key: string]: any;
+        [key: string]: unknown;
     }
 
     interface HeadObjectOptions {
         Bucket: string;
         Region: string;
         Key: string;
-        [key: string]: any;
+        [key: string]: unknown;
     }
 
     export default class COS {
         constructor(options: COSOptions);
-        uploadFile(options: UploadFileOptions, callback: (err: Error | null, data: any) => void): void;
-        headObject(options: HeadObjectOptions, callback: (err: any, data: any) => void): void;
+        uploadFile(options: UploadFileOptions, callback: (err: Error | null, data: Record<string, unknown>) => void): void;
+        headObject(options: HeadObjectOptions, callback: (err: unknown, data: Record<string, unknown>) => void): void;
     }
 }

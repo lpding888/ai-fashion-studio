@@ -19,19 +19,22 @@ import {
 } from '@/components/ui/select';
 import {
     User,
-    Mail,
-    Camera,
     TrendingUp,
     Clock,
-    CheckCircle2,
-    XCircle,
     Settings,
     Upload
 } from 'lucide-react';
 
+type ProfileTask = {
+    id: string;
+    status: string;
+    requirements: string;
+    createdAt: number;
+};
+
 export default function ProfilePage() {
     const { isAdmin } = useAuth();
-    const [tasks, setTasks] = useState<any[]>([]);
+    const [tasks, setTasks] = useState<ProfileTask[]>([]);
     const [loading, setLoading] = useState(true);
     const [profileData, setProfileData] = useState({
         username: '用户',

@@ -240,8 +240,12 @@ export default function AdminUsersPage() {
             setBalanceOpen(false);
             setBalanceUser(null);
             await fetchUsers(page);
-        } catch (e: any) {
-            toast({ title: '设置失败', description: e?.message || '未知错误', variant: 'destructive' });
+        } catch (e: unknown) {
+            toast({
+                title: '设置失败',
+                description: e instanceof Error ? e.message : '未知错误',
+                variant: 'destructive'
+            });
         }
     };
 

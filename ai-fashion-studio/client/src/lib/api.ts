@@ -12,6 +12,13 @@ const api = axios.create({
     baseURL,
 });
 
+const clearAuthToken = () => {
+    if (typeof window === 'undefined') return;
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    document.cookie = 'token=; path=/; max-age=0';
+};
+
 api.interceptors.request.use((config) => {
     if (typeof window === 'undefined') return config;
 
@@ -30,6 +37,16 @@ api.interceptors.request.use((config) => {
 
     return config;
 });
+
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error?.response?.status === 401) {
+            clearAuthToken();
+        }
+        return Promise.reject(error);
+    },
+);
 
 
 export const uploadFile = async (file: File) => {
@@ -66,6 +83,8 @@ export const learnPose = async (file: File) => {
 export const createDirectTask = async (args: {
     garmentImages: File[];
     prompt: string;
+    shotCount?: number;
+    layoutMode?: 'Individual' | 'Grid';
     resolution?: '1K' | '2K' | '4K';
     aspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '21:9';
     stylePresetIds?: string[];
@@ -77,9 +96,11 @@ export const createDirectTask = async (args: {
 }) => {
     const formData = new FormData();
     for (const f of args.garmentImages) {
-        formData.append('garment_images', f);
+    formData.append('garment_images', f);
     }
     formData.append('prompt', args.prompt);
+    if (typeof args.shotCount === 'number') formData.append('shot_count', String(args.shotCount));
+    if (args.layoutMode) formData.append('layout_mode', args.layoutMode);
     if (args.resolution) formData.append('resolution', args.resolution);
     if (args.aspectRatio) formData.append('aspectRatio', args.aspectRatio);
     if (args.stylePresetIds?.length) formData.append('style_preset_ids', args.stylePresetIds.join(','));
@@ -96,6 +117,8 @@ export const createDirectTask = async (args: {
 export const createDirectTaskFromUrls = async (args: {
     garmentUrls: string[];
     prompt: string;
+    shotCount?: number;
+    layoutMode?: 'Individual' | 'Grid';
     resolution?: '1K' | '2K' | '4K';
     aspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '21:9';
     stylePresetIds?: string[];
@@ -108,6 +131,8 @@ export const createDirectTaskFromUrls = async (args: {
     const payload = {
         prompt: args.prompt,
         garmentUrls: args.garmentUrls,
+        ...(typeof args.shotCount === 'number' ? { shotCount: args.shotCount } : {}),
+        ...(args.layoutMode ? { layoutMode: args.layoutMode } : {}),
         ...(args.resolution ? { resolution: args.resolution } : {}),
         ...(args.aspectRatio ? { aspectRatio: args.aspectRatio } : {}),
         ...(args.stylePresetIds ? { stylePresetIds: args.stylePresetIds } : {}),
@@ -156,7 +181,7 @@ export const createStylePreset = async (data: {
     description?: string;
     tags?: string[];
     styleHint?: string;
-    analysis?: any;
+    analysis?: Record<string, unknown>;
     images: File[];
 }) => {
     const formData = new FormData();

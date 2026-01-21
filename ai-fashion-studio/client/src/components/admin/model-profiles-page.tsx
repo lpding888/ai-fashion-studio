@@ -81,15 +81,15 @@ export function ModelProfilesPage() {
     }, []);
 
     const getErrorMessage = (e: unknown) => {
-        if (typeof e === 'object' && e !== null && 'response' in e) {
-            const response = (e as any).response;
+        if (typeof e === 'object' && e !== null) {
+            const response = (e as { response?: { data?: { message?: string } } })?.response;
             const msg = response?.data?.message;
             if (typeof msg === 'string') return msg;
         }
         return e instanceof Error ? e.message : 'Unknown error';
     };
 
-    const loadProfiles = async () => {
+    const loadProfiles = React.useCallback(async () => {
         setLoading(true);
         setError(null);
         setSuccess(null);
@@ -103,12 +103,11 @@ export function ModelProfilesPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [authHeaders]);
 
     React.useEffect(() => {
-        loadProfiles();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        void loadProfiles();
+    }, [loadProfiles]);
 
     const resetDialog = (nextKind?: ModelProfileKind) => {
         setEditing(null);
@@ -146,7 +145,13 @@ export function ModelProfilesPage() {
             if (!model.trim()) throw new Error('模型不能为空');
 
             if (editing) {
-                const body: any = {
+                const body: {
+                    name: string;
+                    gateway: string;
+                    model: string;
+                    disabled: boolean;
+                    apiKey?: string;
+                } = {
                     name: name.trim(),
                     gateway: gateway.trim(),
                     model: model.trim(),

@@ -15,11 +15,12 @@ import { Textarea } from "@/components/ui/textarea";
 // Assuming shared types or simple interfaces for now.
 import type { StylePreset } from "@/store/style-preset-store";
 import type { PosePreset } from "@/store/pose-preset-store";
+import type { FacePreset } from "@/store/face-preset-store";
 
 interface AssetLibraryProps {
     stylePresets: StylePreset[];
     posePresets: PosePreset[];
-    facePresets: any[]; // Using any to avoid circular deps or complex imports for now, refine later
+    facePresets: FacePreset[];
     selectedStyleIds: string[];
     setSelectedStyleIds: React.Dispatch<React.SetStateAction<string[]>>;
     selectedPoseIds: string[];
@@ -31,12 +32,14 @@ interface AssetLibraryProps {
     onDeleteStyle: (id: string) => Promise<void>;
     onDeletePose: (id: string) => Promise<void>;
     onDeleteFace: (id: string) => Promise<void>;
-    onUpdateStyle: (id: string, updates: any) => Promise<void>;
-    onUpdatePose: (id: string, updates: any) => Promise<void>;
-    onUpdateFace: (id: string, updates: any) => Promise<void>;
-    onRelearnStyle: (id: string) => Promise<any>;
-    onRelearnPose: (id: string) => Promise<any>;
+    onUpdateStyle: (id: string, updates: { name?: string; description?: string }) => Promise<void>;
+    onUpdatePose: (id: string, updates: { name?: string; description?: string }) => Promise<void>;
+    onUpdateFace: (id: string, updates: { name?: string; description?: string }) => Promise<void>;
+    onRelearnStyle: (id: string) => Promise<StylePreset>;
+    onRelearnPose: (id: string) => Promise<PosePreset>;
 }
+
+type DetailItem = StylePreset | PosePreset | FacePreset;
 
 export function AssetLibrary({
     stylePresets,
@@ -63,18 +66,26 @@ export function AssetLibrary({
     // Details Dialog State
     const [detailOpen, setDetailOpen] = React.useState(false);
     const [detailKind, setDetailKind] = React.useState<"STYLE" | "POSE" | "FACE" | null>(null);
-    const [detailItem, setDetailItem] = React.useState<any>(null);
+    const [detailItem, setDetailItem] = React.useState<DetailItem | null>(null);
     const [detailName, setDetailName] = React.useState("");
     const [detailDesc, setDetailDesc] = React.useState("");
     const [detailBusy, setDetailBusy] = React.useState<string | null>(null);
 
-    const filterItems = (items: any[]) => {
+    const filterItems = <T extends { id: string; name?: string }>(items: T[]) => {
         if (!searchQuery.trim()) return items;
         const lower = searchQuery.toLowerCase();
         return items.filter(item => item.name?.toLowerCase().includes(lower));
     };
+    const orderBySelection = <T extends { id: string }>(items: T[], selectedIds: string[]) => {
+        if (!selectedIds.length) return items;
+        const itemMap = new Map(items.map((item) => [item.id, item]));
+        const selected = selectedIds.map((id) => itemMap.get(id)).filter(Boolean) as T[];
+        const selectedSet = new Set(selectedIds);
+        const unselected = items.filter((item) => !selectedSet.has(item.id));
+        return [...selected, ...unselected];
+    };
 
-    const openDetails = (kind: "STYLE" | "POSE" | "FACE", item: any) => {
+    const openDetails = (kind: "STYLE" | "POSE" | "FACE", item: DetailItem) => {
         setDetailKind(kind);
         setDetailItem(item);
         setDetailName(item.name || "");
@@ -87,8 +98,12 @@ export function AssetLibrary({
         setDetailBusy(null);
     };
 
+    const isStyleOrPose = detailKind === "STYLE" || detailKind === "POSE";
+    const detailLearnStatus = isStyleOrPose && detailItem && "learnStatus" in detailItem ? detailItem.learnStatus : undefined;
+    const detailLearnError = isStyleOrPose && detailItem && "learnError" in detailItem ? detailItem.learnError : undefined;
+
     return (
-        <div className="flex flex-col h-full bg-transparent">
+        <div className="flex flex-col h-full min-h-0 bg-transparent">
             {/* Header / Search */}
             <div className="p-4 space-y-4 flex-shrink-0">
                 <h2 className="text-lg font-bold text-slate-800">资源库</h2>
@@ -111,11 +126,11 @@ export function AssetLibrary({
             </div>
 
             {/* Scrollable List */}
-            <ScrollArea className="flex-1 px-4 pb-4">
+            <ScrollArea className="flex-1 min-h-0 px-4 pb-4">
                 <div className="space-y-4">
                     {activeTab === "styles" && (
                         <div className="grid grid-cols-2 gap-3 pb-8">
-                            {filterItems(stylePresets).map((p) => (
+                            {orderBySelection(filterItems(stylePresets), selectedStyleIds).map((p) => (
                                 <PresetCard
                                     key={p.id}
                                     id={p.id}
@@ -140,7 +155,7 @@ export function AssetLibrary({
 
                     {activeTab === "poses" && (
                         <div className="grid grid-cols-2 gap-3 pb-8">
-                            {filterItems(posePresets).map((p) => (
+                            {orderBySelection(filterItems(posePresets), selectedPoseIds).map((p) => (
                                 <PresetCard
                                     key={p.id}
                                     id={p.id}
@@ -165,7 +180,7 @@ export function AssetLibrary({
 
                     {activeTab === "faces" && (
                         <div className="grid grid-cols-2 gap-3 pb-8">
-                            {filterItems(facePresets).map((p) => (
+                            {orderBySelection(filterItems(facePresets), selectedFaceIds).map((p) => (
                                 <PresetCard
                                     key={p.id}
                                     id={p.id}
@@ -196,17 +211,17 @@ export function AssetLibrary({
                         <DialogTitle>编辑资源</DialogTitle>
                     </DialogHeader>
                     <div className="space-y-4">
-                        {(detailKind === "STYLE" || detailKind === "POSE") && detailItem?.learnStatus === "FAILED" && (
+                        {isStyleOrPose && detailLearnStatus === "FAILED" && (
                             <div className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600">
                                 <span className="h-2 w-2 rounded-full bg-rose-500" />
-                                {detailItem?.learnError ? `${detailItem.learnError}，请点击“重新学习”` : "学习失败，请点击“重新学习”"}
+                                {detailLearnError ? `${detailLearnError}，请点击“重新学习”` : "学习失败，请点击“重新学习”"}
                             </div>
                         )}
                         {detailItem && (() => {
                             const images =
-                                detailKind === "FACE"
+                                detailKind === "FACE" && "imagePath" in detailItem
                                     ? [detailItem.imagePath].filter(Boolean)
-                                    : Array.isArray(detailItem.imagePaths)
+                                    : "imagePaths" in detailItem && Array.isArray(detailItem.imagePaths)
                                         ? detailItem.imagePaths
                                         : [];
                             if (!images.length) return null;
@@ -235,11 +250,13 @@ export function AssetLibrary({
                         <div className="flex gap-2 justify-end">
                             <Button variant="destructive" size="sm" onClick={async () => {
                                 if (!confirm("确定删除?")) return;
+                                if (!detailItem || !detailKind) return;
                                 setDetailBusy("delete");
                                 try {
-                                    if (detailKind === "STYLE") await onDeleteStyle(detailItem.id);
-                                    else if (detailKind === "POSE") await onDeletePose(detailItem.id);
-                                    else if (detailKind === "FACE") await onDeleteFace(detailItem.id);
+                                    const { id } = detailItem;
+                                    if (detailKind === "STYLE") await onDeleteStyle(id);
+                                    else if (detailKind === "POSE") await onDeletePose(id);
+                                    else if (detailKind === "FACE") await onDeleteFace(id);
                                     closeDetails();
                                 } finally { setDetailBusy(null); }
                             }} disabled={!!detailBusy}>
@@ -249,10 +266,12 @@ export function AssetLibrary({
                             {detailKind !== "FACE" && (
                                 <Button variant="secondary" size="sm" onClick={async () => {
                                     if (!confirm("重新学习?")) return;
+                                    if (!detailItem || !detailKind) return;
                                     setDetailBusy("relearn");
                                     try {
-                                        if (detailKind === "STYLE") await onRelearnStyle(detailItem.id);
-                                        else if (detailKind === "POSE") await onRelearnPose(detailItem.id);
+                                        const { id } = detailItem;
+                                        if (detailKind === "STYLE") await onRelearnStyle(id);
+                                        else if (detailKind === "POSE") await onRelearnPose(id);
                                         closeDetails();
                                     } finally { setDetailBusy(null); }
                                 }} disabled={!!detailBusy}>
@@ -261,12 +280,14 @@ export function AssetLibrary({
                             )}
 
                             <Button onClick={async () => {
+                                if (!detailItem || !detailKind) return;
                                 setDetailBusy("save");
                                 try {
                                     const updates = { name: detailName, description: detailDesc };
-                                    if (detailKind === "STYLE") await onUpdateStyle(detailItem.id, updates);
-                                    else if (detailKind === "POSE") await onUpdatePose(detailItem.id, updates);
-                                    else if (detailKind === "FACE") await onUpdateFace(detailItem.id, updates);
+                                    const { id } = detailItem;
+                                    if (detailKind === "STYLE") await onUpdateStyle(id, updates);
+                                    else if (detailKind === "POSE") await onUpdatePose(id, updates);
+                                    else if (detailKind === "FACE") await onUpdateFace(id, updates);
                                     closeDetails();
                                 } finally { setDetailBusy(null); }
                             }} disabled={!!detailBusy}>

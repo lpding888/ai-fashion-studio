@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from './ui/card';
-import { Loader2, ArrowRight, Wand2, AlertTriangle, Sparkles, MapPin, Palette, Crop, Shirt, FolderOpen, Upload, Save, Footprints, Watch, Briefcase, User, Layers, BrainCircuit, ChevronDown } from 'lucide-react';
+import { Loader2, ArrowRight, Wand2, AlertTriangle, Sparkles, MapPin, Palette, Crop, Shirt, FolderOpen, Upload, Save, Footprints, Watch, Briefcase, User, Layers, BrainCircuit, ChevronDown, type LucideIcon } from 'lucide-react';
 import { UploadZone } from './upload-zone';
 import { FaceRefUpload } from './face-ref-upload';
 import { FacePresetSelector } from './face-preset-selector';
@@ -25,8 +25,39 @@ import { useFacePresetStore } from '@/store/face-preset-store';
 import { SavedConfigCards } from './saved-config-cards';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Textarea } from './ui/textarea';
+import { UserAssetLibraryDialog } from './user-asset-library-dialog';
 
 const MAX_TOTAL_IMAGES = 14;
+const LAYOUT_MODE_OPTIONS = [
+    { id: 'Individual', label: '单图模式', desc: 'Indiv' },
+    { id: 'Grid', label: '拼图模式', desc: 'Grid' },
+] as const;
+const WORKFLOW_OPTIONS = [
+    { id: 'legacy', label: '标准流程', desc: '传统风格' },
+    { id: 'hero_storyboard', label: '母版流程', desc: '先母版后分镜' },
+] as const;
+const WATERMARK_POSITIONS = [
+    { v: 'top_left', label: '左上' },
+    { v: 'top_right', label: '右上' },
+    { v: 'bottom_left', label: '左下' },
+    { v: 'bottom_right', label: '右下' },
+    { v: 'center', label: '居中' },
+] as const;
+const WATERMARK_SIZES = [
+    { v: 'small', label: '小' },
+    { v: 'medium', label: '中' },
+    { v: 'large', label: '大' },
+    { v: 'auto', label: '自动' },
+] as const;
+const WATERMARK_COLORS = [
+    { v: 'white', label: '白' },
+    { v: 'black', label: '黑' },
+] as const;
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+    const maybe = error as { response?: { data?: { message?: string } }; message?: string };
+    return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
+};
 
 export function RequirementForm() {
     const router = useRouter();
@@ -57,9 +88,14 @@ export function RequirementForm() {
     const [saveName, setSaveName] = React.useState('');
     const [saveNote, setSaveNote] = React.useState('');
     const [isSavedConfigsCollapsed, setIsSavedConfigsCollapsed] = React.useState(true);
+    const [garmentAssetUrls, setGarmentAssetUrls] = React.useState<string[]>([]);
+    const [faceAssetUrls, setFaceAssetUrls] = React.useState<string[]>([]);
+    const [styleAssetUrls, setStyleAssetUrls] = React.useState<string[]>([]);
+    const [assetDialogOpen, setAssetDialogOpen] = React.useState(false);
+    const [assetDialogKind, setAssetDialogKind] = React.useState<'garment' | 'face' | 'style'>('garment');
 
     // const [loading, setLoading] = React.useState(false); // 使用 hook 的状态
-    const { uploadFiles, isUploading: isUploadingCos, progress: uploadProgress } = useCosUpload();
+    const { uploadFiles, isUploading: isUploadingCos } = useCosUpload();
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const loading = isUploadingCos || isSubmitting;
 
@@ -78,15 +114,77 @@ export function RequirementForm() {
         return sum + (preset?.imagePaths.length || 0);
     }, 0);
 
-    const totalImages = files.length + faceRefs.length + styleRefs.length + facePresetIds.length + stylePresetImageCount;
+    const totalImages = files.length
+        + faceRefs.length
+        + styleRefs.length
+        + facePresetIds.length
+        + stylePresetImageCount
+        + garmentAssetUrls.length
+        + faceAssetUrls.length
+        + styleAssetUrls.length;
     const isOverLimit = totalImages > MAX_TOTAL_IMAGES;
-    const remainingForGarment = Math.max(0, MAX_TOTAL_IMAGES - faceRefs.length - styleRefs.length - facePresetIds.length - stylePresetImageCount);
-    const remainingForFace = Math.max(0, MAX_TOTAL_IMAGES - files.length - styleRefs.length - stylePresetImageCount);
-    const remainingForStyle = Math.max(0, Math.min(3, MAX_TOTAL_IMAGES - files.length - faceRefs.length - facePresetIds.length - stylePresetImageCount));
+    const remainingForGarment = Math.max(
+        0,
+        MAX_TOTAL_IMAGES
+        - faceRefs.length
+        - styleRefs.length
+        - facePresetIds.length
+        - stylePresetImageCount
+        - faceAssetUrls.length
+        - styleAssetUrls.length
+    );
+    const remainingForFace = Math.max(
+        0,
+        MAX_TOTAL_IMAGES
+        - files.length
+        - styleRefs.length
+        - stylePresetImageCount
+        - garmentAssetUrls.length
+        - styleAssetUrls.length
+    );
+    const remainingForStyle = Math.max(
+        0,
+        Math.min(
+            3,
+            MAX_TOTAL_IMAGES
+            - files.length
+            - faceRefs.length
+            - facePresetIds.length
+            - stylePresetImageCount
+            - garmentAssetUrls.length
+            - faceAssetUrls.length
+        )
+    );
+
+    const openAssetDialog = (kind: 'garment' | 'face' | 'style') => {
+        setAssetDialogKind(kind);
+        setAssetDialogOpen(true);
+    };
+
+    const assetDialogSelectedUrls = assetDialogKind === 'garment'
+        ? garmentAssetUrls
+        : assetDialogKind === 'face'
+            ? faceAssetUrls
+            : styleAssetUrls;
+    const assetDialogMaxSelection = assetDialogKind === 'garment'
+        ? remainingForGarment
+        : assetDialogKind === 'face'
+            ? remainingForFace
+            : Math.min(3, remainingForStyle);
+    const assetDialogTitle = assetDialogKind === 'garment'
+        ? '服装素材库'
+        : assetDialogKind === 'face'
+            ? '模特参考素材库'
+            : '风格参考素材库';
+    const handleAssetConfirm = (urls: string[]) => {
+        if (assetDialogKind === 'garment') setGarmentAssetUrls(urls);
+        else if (assetDialogKind === 'face') setFaceAssetUrls(urls);
+        else setStyleAssetUrls(urls);
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (files.length === 0) return;
+        if (files.length + garmentAssetUrls.length === 0) return;
         if (isOverLimit) return;
         if (loading) return;
 
@@ -128,8 +226,7 @@ export function RequirementForm() {
                 if (styleDirection) formData.append('style_direction', styleDirection);
 
                 const res = await api.post('/tasks', formData);
-
-                const task = res.data as any;
+                const task = res.data as { id: string; claimToken?: string };
 
                 if (task?.claimToken) {
                     localStorage.setItem('pending_task_id', task.id);
@@ -153,10 +250,18 @@ export function RequirementForm() {
             const faceRefUrls = allUrls.slice(files.length, files.length + faceRefs.length);
             const styleRefUrls = allUrls.slice(files.length + faceRefs.length);
 
+            const mergeUrls = (left: string[], right: string[]) => {
+                const next = [...left, ...right].map((v) => String(v || '').trim()).filter(Boolean);
+                return Array.from(new Set(next));
+            };
+            const mergedFileUrls = mergeUrls(fileUrls, garmentAssetUrls);
+            const mergedFaceRefUrls = mergeUrls(faceRefUrls, faceAssetUrls);
+            const mergedStyleRefUrls = mergeUrls(styleRefUrls, styleAssetUrls);
+
             const payload = {
-                file_urls: fileUrls,
-                face_ref_urls: faceRefUrls,
-                style_ref_urls: styleRefUrls,
+                file_urls: mergedFileUrls,
+                face_ref_urls: mergedFaceRefUrls,
+                style_ref_urls: mergedStyleRefUrls,
 
                 requirements,
                 shot_count: shotCount,
@@ -180,10 +285,7 @@ export function RequirementForm() {
 
         } catch (error) {
             console.error("Failed to create task", error);
-            const message =
-                (error as any)?.response?.data?.message
-                || (error as any)?.message
-                || '创建任务失败，请检查网络或联系管理员配置模型';
+            const message = getErrorMessage(error, '创建任务失败，请检查网络或联系管理员配置模型');
             toast({
                 title: '创建任务失败',
                 description: message,
@@ -226,9 +328,9 @@ export function RequirementForm() {
             location,
             styleDirection,
             garmentFocus,
-            garmentImageCount: files.length,
-            faceRefCount: faceRefs.length,
-            styleRefCount: styleRefs.length
+            garmentImageCount: files.length + garmentAssetUrls.length,
+            faceRefCount: faceRefs.length + faceAssetUrls.length,
+            styleRefCount: styleRefs.length + styleAssetUrls.length
         });
 
         setIsSaveDialogOpen(false);
@@ -281,6 +383,9 @@ export function RequirementForm() {
 
         setFacePresetIds(validFaceIds);
         setStylePresetIds(validStyleIds);
+        setGarmentAssetUrls([]);
+        setFaceAssetUrls([]);
+        setStyleAssetUrls([]);
 
         if (missingFace.length > 0 || missingStyle.length > 0) {
             toast({
@@ -289,7 +394,7 @@ export function RequirementForm() {
                 variant: 'destructive',
             });
         } else {
-            toast({ title: '已加载配置', description: '注意：图片需要重新上传（服装图/参考图不随配置保存）。' });
+            toast({ title: '已加载配置', description: '注意：图片需要重新选择（上传或从素材库选择，服装图/参考图不随配置保存）。' });
         }
     };
 
@@ -403,13 +508,28 @@ export function RequirementForm() {
 
                     {/* Step 1: Main Garment */}
                     <div className="space-y-4">
-                        <label className="text-base font-bold text-white flex items-center gap-2.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
-                            <span className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-pink-500 text-white flex items-center justify-center text-sm font-bold shadow-lg shadow-orange-500/40">1</span>
-                            上传主推服装 <span className="text-pink-300 font-extrabold">*</span>
-                        </label>
+                        <div className="flex items-center justify-between gap-3">
+                            <label className="text-base font-bold text-white flex items-center gap-2.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
+                                <span className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-pink-500 text-white flex items-center justify-center text-sm font-bold shadow-lg shadow-orange-500/40">1</span>
+                                上传主推服装 <span className="text-pink-300 font-extrabold">*</span>
+                            </label>
+                            {user?.id && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-2"
+                                    onClick={() => openAssetDialog('garment')}
+                                >
+                                    <FolderOpen className="h-4 w-4" />
+                                    从素材库选择
+                                </Button>
+                            )}
+                        </div>
                         <div className="bg-white/5 p-1 rounded-2xl border border-white/10">
                             <UploadZone
                                 selectedFiles={files}
+                                selectedUrls={garmentAssetUrls}
+                                onRemoveUrl={(url) => setGarmentAssetUrls((prev) => prev.filter((item) => item !== url))}
                                 onFilesSelected={setFiles}
                                 maxFiles={remainingForGarment}
                                 label="服装图"
@@ -438,11 +558,26 @@ export function RequirementForm() {
                                     />
                                 }
                                 tab2Content={
-                                    <FaceRefUpload
-                                        selectedFiles={faceRefs}
-                                        onFilesSelected={setFaceRefs}
-                                        maxFiles={remainingForFace}
-                                    />
+                                    <div className="space-y-3">
+                                        {user?.id && (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="gap-2"
+                                                onClick={() => openAssetDialog('face')}
+                                            >
+                                                <FolderOpen className="h-4 w-4" />
+                                                从素材库选择
+                                            </Button>
+                                        )}
+                                        <FaceRefUpload
+                                            selectedFiles={faceRefs}
+                                            selectedUrls={faceAssetUrls}
+                                            onRemoveUrl={(url) => setFaceAssetUrls((prev) => prev.filter((item) => item !== url))}
+                                            onFilesSelected={setFaceRefs}
+                                            maxFiles={remainingForFace}
+                                        />
+                                    </div>
                                 }
                             />
                         </div>
@@ -468,11 +603,26 @@ export function RequirementForm() {
                                     />
                                 }
                                 tab2Content={
-                                    <FaceRefUpload
-                                        selectedFiles={styleRefs}
-                                        onFilesSelected={setStyleRefs}
-                                        maxFiles={Math.min(3, remainingForStyle)}
-                                    />
+                                    <div className="space-y-3">
+                                        {user?.id && (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="gap-2"
+                                                onClick={() => openAssetDialog('style')}
+                                            >
+                                                <FolderOpen className="h-4 w-4" />
+                                                从素材库选择
+                                            </Button>
+                                        )}
+                                        <FaceRefUpload
+                                            selectedFiles={styleRefs}
+                                            selectedUrls={styleAssetUrls}
+                                            onRemoveUrl={(url) => setStyleAssetUrls((prev) => prev.filter((item) => item !== url))}
+                                            onFilesSelected={setStyleRefs}
+                                            maxFiles={Math.min(3, remainingForStyle)}
+                                        />
+                                    </div>
                                 }
                                 tab3Content={
                                     <div className="space-y-4">
@@ -482,18 +632,26 @@ export function RequirementForm() {
                                         <StyleAnalyzer
                                             compact
                                             onAnalysisComplete={(preset, files) => {
-                                                const analysis = preset.analysis;
+                                                const analysis = preset.analysis as {
+                                                    vibe?: string;
+                                                    grading?: string;
+                                                    lighting?: string;
+                                                    scene?: string;
+                                                    camera?: string;
+                                                } | undefined;
                                                 // Auto-fill form fields logic
-                                                if (analysis.vibe) setStyleDirection(analysis.vibe);
+                                                if (analysis?.vibe) setStyleDirection(analysis.vibe);
 
-                                                // Construct a detailed photography requirement from analysis
-                                                const newReq = `[Style Reference]: ${analysis.vibe}\n` +
-                                                    `[Lighting]: ${analysis.lighting}\n` +
-                                                    `[Scene]: ${analysis.scene}\n` +
-                                                    `[Color Grading]: ${analysis.grading}\n` +
-                                                    `[Camera]: ${analysis.camera}`;
+                                                if (analysis) {
+                                                    // Construct a detailed photography requirement from analysis
+                                                    const newReq = `[Style Reference]: ${analysis.vibe ?? '-'}\n` +
+                                                        `[Lighting]: ${analysis.lighting ?? '-'}\n` +
+                                                        `[Scene]: ${analysis.scene ?? '-'}\n` +
+                                                        `[Color Grading]: ${analysis.grading ?? '-'}\n` +
+                                                        `[Camera]: ${analysis.camera ?? '-'}`;
 
-                                                setRequirements(prev => prev ? prev + '\n\n' + newReq : newReq);
+                                                    setRequirements(prev => prev ? prev + '\n\n' + newReq : newReq);
+                                                }
 
                                                 // Add files to styleRefs if there is space
                                                 if (files && files.length > 0) {
@@ -609,16 +767,13 @@ export function RequirementForm() {
                                         <FolderOpen className="w-3.5 h-3.5 text-green-300" /> 输出模式
                                     </label>
                                     <div className="flex bg-black/20 p-1.5 rounded-xl ring-1 ring-white/10 relative z-0 backdrop-blur-md">
-                                        {[
-                                            { id: 'Individual', label: '单图模式', desc: 'Indiv' },
-                                            { id: 'Grid', label: '拼图模式', desc: 'Grid' }
-                                        ].map((mode) => {
+                                        {LAYOUT_MODE_OPTIONS.map((mode) => {
                                             const isSelected = layoutMode === mode.id;
                                             return (
                                                 <button
                                                     key={mode.id}
                                                     type="button"
-                                                    onClick={() => setLayoutMode(mode.id as any)}
+                                                    onClick={() => setLayoutMode(mode.id)}
                                                     className={`relative flex-1 py-2.5 text-xs font-bold rounded-lg transition-all z-10 ${isSelected ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}
                                                 >
                                                     {isSelected && (
@@ -674,16 +829,13 @@ export function RequirementForm() {
                                         <Layers className="w-3.5 h-3.5 text-cyan-300" /> 工作流
                                     </label>
                                     <div className="flex bg-black/20 p-1.5 rounded-xl ring-1 ring-white/10 relative z-0 backdrop-blur-md">
-                                        {[
-                                            { id: 'legacy', label: '先规划后出图', desc: 'Plan → Render' },
-                                            { id: 'hero_storyboard', label: '先出母版后分镜', desc: 'Hero → Storyboard' },
-                                        ].map((mode) => {
+                                        {WORKFLOW_OPTIONS.map((mode) => {
                                             const isSelected = workflow === mode.id;
                                             return (
                                                 <button
                                                     key={mode.id}
                                                     type="button"
-                                                    onClick={() => setWorkflow(mode.id as any)}
+                                                    onClick={() => setWorkflow(mode.id)}
                                                     className={`relative flex-1 py-2.5 text-xs font-bold rounded-lg transition-all z-10 ${isSelected ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}
                                                 >
                                                     {isSelected && (
@@ -780,19 +932,13 @@ export function RequirementForm() {
                                                 <div className="space-y-2">
                                                     <div className="text-[11px] font-bold text-white/70">位置</div>
                                                     <div className="grid grid-cols-5 gap-2">
-                                                        {[
-                                                            { v: 'top_left', label: '左上' },
-                                                            { v: 'top_right', label: '右上' },
-                                                            { v: 'bottom_left', label: '左下' },
-                                                            { v: 'bottom_right', label: '右下' },
-                                                            { v: 'center', label: '居中' },
-                                                        ].map((p) => {
-                                                            const active = watermarkPosition === (p.v as any);
+                                                        {WATERMARK_POSITIONS.map((p) => {
+                                                            const active = watermarkPosition === p.v;
                                                             return (
                                                                 <button
                                                                     key={p.v}
                                                                     type="button"
-                                                                    onClick={() => setWatermarkPosition(p.v as any)}
+                                                                    onClick={() => setWatermarkPosition(p.v)}
                                                                     className={`h-9 rounded-xl text-[11px] font-bold transition-all ring-1
                                                                         ${active ? 'bg-cyan-500/25 text-white ring-cyan-400/40 shadow-[0_0_18px_rgba(34,211,238,0.18)]' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
                                                                 >
@@ -806,18 +952,13 @@ export function RequirementForm() {
                                                 <div className="space-y-2">
                                                     <div className="text-[11px] font-bold text-white/70">字号</div>
                                                     <div className="grid grid-cols-4 gap-2">
-                                                        {[
-                                                            { v: 'small', label: '小' },
-                                                            { v: 'medium', label: '中' },
-                                                            { v: 'large', label: '大' },
-                                                            { v: 'auto', label: '自动' },
-                                                        ].map((s) => {
-                                                            const active = watermarkSize === (s.v as any);
+                                                        {WATERMARK_SIZES.map((s) => {
+                                                            const active = watermarkSize === s.v;
                                                             return (
                                                                 <button
                                                                     key={s.v}
                                                                     type="button"
-                                                                    onClick={() => setWatermarkSize(s.v as any)}
+                                                                    onClick={() => setWatermarkSize(s.v)}
                                                                     className={`h-9 rounded-xl text-[11px] font-bold transition-all ring-1
                                                                         ${active ? 'bg-indigo-500/25 text-white ring-indigo-400/40 shadow-[0_0_18px_rgba(99,102,241,0.18)]' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
                                                                 >
@@ -831,16 +972,13 @@ export function RequirementForm() {
                                                 <div className="space-y-2">
                                                     <div className="text-[11px] font-bold text-white/70">颜色</div>
                                                     <div className="grid grid-cols-2 gap-2">
-                                                        {[
-                                                            { v: 'white', label: '白' },
-                                                            { v: 'black', label: '黑' },
-                                                        ].map((c) => {
-                                                            const active = watermarkColor === (c.v as any);
+                                                        {WATERMARK_COLORS.map((c) => {
+                                                            const active = watermarkColor === c.v;
                                                             return (
                                                                 <button
                                                                     key={c.v}
                                                                     type="button"
-                                                                    onClick={() => setWatermarkColor(c.v as any)}
+                                                                    onClick={() => setWatermarkColor(c.v)}
                                                                     className={`h-9 rounded-xl text-[11px] font-bold transition-all ring-1
                                                                         ${active ? 'bg-white/15 text-white ring-white/30 shadow-[0_0_18px_rgba(255,255,255,0.12)]' : 'bg-black/20 text-slate-300 ring-white/10 hover:bg-white/10 hover:ring-white/20'}`}
                                                                 >
@@ -982,7 +1120,7 @@ export function RequirementForm() {
                     <Button
                         className="w-full h-14 text-lg font-bold bg-gradient-to-r from-orange-500 via-rose-500 to-pink-500 text-white hover:scale-[1.01] hover:shadow-[0_0_30px_rgba(251,113,133,0.4)] rounded-2xl transition-all disabled:opacity-50 disabled:translate-y-0"
                         onClick={handleSubmit}
-                        disabled={files.length === 0 || loading || isOverLimit}
+                        disabled={files.length + garmentAssetUrls.length === 0 || loading || isOverLimit}
                     >
                         {loading ? (
                             <>
@@ -1034,6 +1172,14 @@ export function RequirementForm() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+            <UserAssetLibraryDialog
+                open={assetDialogOpen}
+                onOpenChange={setAssetDialogOpen}
+                selectedUrls={assetDialogSelectedUrls}
+                onConfirm={handleAssetConfirm}
+                maxSelection={assetDialogMaxSelection}
+                title={assetDialogTitle}
+            />
         </motion.div>
     );
 }
@@ -1049,7 +1195,7 @@ function SelectionTabs({
     tab3Content // New prop
 }: {
     label: string;
-    icon: any;
+    icon: LucideIcon;
     count: number;
     countLabel?: string;
     tab1Content: React.ReactNode;

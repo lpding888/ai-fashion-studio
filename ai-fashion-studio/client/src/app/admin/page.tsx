@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Users, Settings, BarChart3, Palette, ListChecks } from 'lucide-react';
@@ -9,21 +9,51 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
 import { BACKEND_ORIGIN } from '@/lib/api';
 
+type AdminUser = {
+    nickname?: string;
+    username?: string;
+    role?: string;
+    status?: string;
+    totalTasks?: number;
+};
+
+type AuthMeResponse = {
+    user?: AdminUser;
+};
+
+type AdminUsersResponse = {
+    users?: AdminUser[];
+};
+
 export default function AdminDashboard() {
     const [stats, setStats] = useState({
         totalUsers: 0,
         totalTasks: 0,
         activeUsers: 0
     });
-    const [currentUser, setCurrentUser] = useState<any>(null);
+    const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
     const router = useRouter();
     const { logout } = useAuth();
 
-    useEffect(() => {
-        checkAuth();
+    const loadStats = useCallback(async (token: string) => {
+        try {
+            const res = await fetch(`${BACKEND_ORIGIN}/api/auth/admin/users`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = (await res.json()) as AdminUsersResponse;
+            const users = Array.isArray(data?.users) ? data.users : [];
+
+            setStats({
+                totalUsers: users.length,
+                totalTasks: users.reduce((sum, u) => sum + (u.totalTasks || 0), 0),
+                activeUsers: users.filter((u) => u.status === 'ACTIVE').length
+            });
+        } catch (err: unknown) {
+            console.error(err);
+        }
     }, []);
 
-    const checkAuth = async () => {
+    const checkAuth = useCallback(async () => {
         const token = localStorage.getItem('token');
         if (!token) {
             router.push('/admin/login');
@@ -40,38 +70,25 @@ export default function AdminDashboard() {
                 return;
             }
 
-            const data = await res.json();
+            const data = (await res.json()) as AuthMeResponse;
 
-            if (data.user.role !== 'ADMIN') {
+            if (data.user?.role !== 'ADMIN') {
                 alert('需要管理员权限');
                 router.push('/');
                 return;
             }
 
-            setCurrentUser(data.user);
-            loadStats(token);
-        } catch (err) {
+            setCurrentUser(data.user ?? null);
+            void loadStats(token);
+        } catch (err: unknown) {
             console.error(err);
             router.push('/admin/login');
         }
-    };
+    }, [loadStats, router]);
 
-    const loadStats = async (token: string) => {
-        try {
-            const res = await fetch(`${BACKEND_ORIGIN}/api/auth/admin/users`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await res.json();
-
-            setStats({
-                totalUsers: data.users.length,
-                totalTasks: data.users.reduce((sum: number, u: any) => sum + (u.totalTasks || 0), 0),
-                activeUsers: data.users.filter((u: any) => u.status === 'ACTIVE').length
-            });
-        } catch (err) {
-            console.error(err);
-        }
-    };
+    useEffect(() => {
+        void checkAuth();
+    }, [checkAuth]);
 
     const handleLogout = () => {
         logout();

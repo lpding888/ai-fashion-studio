@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { X, Download, ChevronLeft, ChevronRight, RefreshCcw, Loader2 } from 'lucide-react';
+import { X, Download, ChevronLeft, ChevronRight, RefreshCcw, Loader2, Images } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { downloadImageWithOptionalTaskWatermark } from '@/lib/watermark';
 
@@ -22,6 +22,8 @@ interface ImageLightboxProps {
     isRegenerating?: boolean;
     watermarkTaskId?: string;
     regenerateLabel?: string;
+    onUseForBatch?: () => void;
+    useForBatchLabel?: string;
 }
 
 export function ImageLightbox({
@@ -32,7 +34,9 @@ export function ImageLightbox({
     onRegenerate,
     isRegenerating = false,
     watermarkTaskId,
-    regenerateLabel
+    regenerateLabel,
+    onUseForBatch,
+    useForBatchLabel
 }: ImageLightboxProps) {
     const [currentIndex, setCurrentIndex] = useState(initialIndex);
 
@@ -154,6 +158,18 @@ export function ImageLightbox({
                             <Download className="h-4 w-4 mr-2" />
                             下载
                         </Button>
+
+                        {onUseForBatch && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-white hover:bg-white/20"
+                                onClick={onUseForBatch}
+                            >
+                                <Images className="h-4 w-4 mr-2" />
+                                {useForBatchLabel || '用此数据批量生成'}
+                            </Button>
+                        )}
 
                         {onRegenerate && (
                             <Button

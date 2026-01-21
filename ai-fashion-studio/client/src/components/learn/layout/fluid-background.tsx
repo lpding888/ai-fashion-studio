@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 interface FluidBackgroundProps {
     className?: string;
-    variant?: "default" | "warm" | "cool" | "cyber";
+    variant?: "default" | "warm" | "cool" | "cyber" | "mint" | "sunset";
 }
 
 export function FluidBackground({ className, variant = "default" }: FluidBackgroundProps) {
@@ -28,6 +28,18 @@ export function FluidBackground({ className, variant = "default" }: FluidBackgro
                     b1: "bg-fuchsia-400/40",
                     b2: "bg-violet-500/40",
                     b3: "bg-blue-500/40"
+                };
+            case "mint":
+                return {
+                    b1: "bg-emerald-300/40",
+                    b2: "bg-teal-300/40",
+                    b3: "bg-sky-300/40"
+                };
+            case "sunset":
+                return {
+                    b1: "bg-rose-300/40",
+                    b2: "bg-orange-300/40",
+                    b3: "bg-amber-300/40"
                 };
             default: // "default" - Warm/Soft logic from original
                 return {

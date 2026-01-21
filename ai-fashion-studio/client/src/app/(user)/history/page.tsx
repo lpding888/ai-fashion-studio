@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @next/next/no-img-element */
+
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Card, CardContent } from '@/components/ui/card';
@@ -24,12 +26,13 @@ import {
     Clock,
     CheckCircle2,
     XCircle,
-    Loader2
+    Loader2,
+    type LucideIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '@/lib/api';
 import { BACKEND_ORIGIN } from '@/lib/api';
-import { withTencentCi } from '@/lib/image-ci';
+import { withTencentCi, smartWithTencentCi } from '@/lib/image-ci';
 import { useAuth } from '@/hooks/use-auth';
 
 interface Task {
@@ -39,7 +42,7 @@ interface Task {
     shotCount: number;
     createdAt: number;
     resultImages?: string[];
-    brainPlan?: any;
+    brainPlan?: Record<string, unknown>;
     heroImageUrl?: string;
     gridImageUrl?: string;
     heroShots?: Array<{
@@ -138,7 +141,7 @@ export default function HistoryPage() {
     }).sort((a, b) => b.createdAt - a.createdAt);
 
     const getStatusInfo = (status: string) => {
-        const statusMap: Record<string, { color: string; label: string; icon: any }> = {
+        const statusMap: Record<string, { color: string; label: string; icon: LucideIcon }> = {
             COMPLETED: { color: 'bg-green-500', label: '已完成', icon: CheckCircle2 },
             RENDERING: { color: 'bg-blue-500', label: '生成中', icon: Loader2 },
             PLANNING: { color: 'bg-yellow-500', label: '规划中', icon: Clock },
@@ -190,7 +193,7 @@ export default function HistoryPage() {
 
     const toImgSrc = (pathOrUrl: string, ci?: { maxWidth: number; maxHeight: number }) => {
         const raw = pathOrUrl.startsWith('http') ? pathOrUrl : `${BACKEND_ORIGIN}/${String(pathOrUrl).replace(/^\/+/, '')}`;
-        return ci ? withTencentCi(raw, ci) : raw;
+        return ci ? smartWithTencentCi(raw, ci) : raw;
     };
 
     return (

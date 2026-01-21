@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+/* eslint-disable @next/next/no-img-element */
+
+import { useCallback, useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StyleAnalyzer } from '@/components/style-analyzer';
@@ -20,6 +22,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 
+type StyleAnalysis = {
+    vibe?: string;
+    grading?: string;
+};
+
 interface StylePreset {
     id: string;
     name: string;
@@ -29,13 +36,12 @@ interface StylePreset {
     tags?: string[];
     styleHint?: string;
     createdAt: number;
-    analysis?: any;
+    analysis?: StyleAnalysis;
 }
 
 export default function AdminStylesPage() {
     const { toast } = useToast();
     const [presets, setPresets] = useState<StylePreset[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
     const [isCreating, setIsCreating] = useState(false);
 
     // Edit State
@@ -45,25 +51,22 @@ export default function AdminStylesPage() {
     const [editTags, setEditTags] = useState('');
     const [editHint, setEditHint] = useState('');
 
-    useEffect(() => {
-        loadPresets();
-    }, []);
-
-    const loadPresets = async () => {
+    const loadPresets = useCallback(async () => {
         try {
-            setIsLoading(true);
             const res = await api.get('/style-presets');
             setPresets(res.data);
-        } catch (error) {
+        } catch {
             toast({
                 title: "加载失败",
                 description: "无法获取风格预设列表",
                 variant: "destructive"
             });
-        } finally {
-            setIsLoading(false);
         }
-    };
+    }, [toast]);
+
+    useEffect(() => {
+        void loadPresets();
+    }, [loadPresets]);
 
     // Deletion
     const handleDelete = async (id: string) => {
@@ -72,7 +75,7 @@ export default function AdminStylesPage() {
             await api.delete(`/style-presets/${id}`);
             setPresets(presets.filter(p => p.id !== id));
             toast({ title: "删除成功" });
-        } catch (e) {
+        } catch {
             toast({ title: "删除失败", variant: "destructive" });
         }
     }
@@ -117,8 +120,8 @@ export default function AdminStylesPage() {
             toast({ title: "更新成功" });
             setEditingPreset(null);
             loadPresets();
-        } catch (e) {
-            console.error(e);
+        } catch (err) {
+            console.error(err);
             toast({ title: "更新失败", description: "请检查网络或参数", variant: "destructive" });
         }
     };
@@ -150,7 +153,7 @@ export default function AdminStylesPage() {
                     <CardContent>
                         <div className="max-w-xl mx-auto py-4">
                             <StyleAnalyzer
-                                onAnalysisComplete={(preset, files) => {
+                                onAnalysisComplete={(preset) => {
                                     toast({
                                         title: "风格习得成功",
                                         description: `已收录风格: "${preset.name}"`,

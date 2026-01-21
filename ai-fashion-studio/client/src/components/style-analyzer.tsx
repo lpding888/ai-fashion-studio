@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -7,15 +8,24 @@ import { learnStyle } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface StyleAnalyzerProps {
-    onAnalysisComplete?: (preset: any, files: File[]) => void;
+    onAnalysisComplete?: (preset: LearnedPreset, files: File[]) => void;
     className?: string;
     compact?: boolean;
 }
 
+type LearnedPreset = {
+    name?: string;
+    description?: string;
+    analysis?: {
+        vibe?: string;
+        grading?: string;
+    };
+};
+
 export function StyleAnalyzer({ onAnalysisComplete, className, compact = false }: StyleAnalyzerProps) {
     const [isLearning, setIsLearning] = useState(false);
     const [selectedImages, setSelectedImages] = useState<File[]>([]);
-    const [learnedPreset, setLearnedPreset] = useState<any | null>(null);
+    const [learnedPreset, setLearnedPreset] = useState<LearnedPreset | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const addImages = (newFiles: File[]) => {
@@ -85,9 +95,9 @@ export function StyleAnalyzer({ onAnalysisComplete, className, compact = false }
             if (onAnalysisComplete) {
                 onAnalysisComplete(result.preset, selectedImages);
             }
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Learning failed', err);
-            setError(err.message || '风格学习失败，请稍后重试');
+            setError(err instanceof Error ? err.message : '风格学习失败，请稍后重试');
         } finally {
             setIsLearning(false);
         }
@@ -215,10 +225,10 @@ export function StyleAnalyzer({ onAnalysisComplete, className, compact = false }
 
                                 <div className="flex flex-wrap gap-1 justify-center">
                                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-emerald-200 border border-white/10">
-                                        {learnedPreset.analysis.vibe}
+                                        {learnedPreset.analysis?.vibe || '-'}
                                     </span>
                                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-blue-200 border border-white/10">
-                                        {learnedPreset.analysis.grading}
+                                        {learnedPreset.analysis?.grading || '-'}
                                     </span>
                                 </div>
                             </div>

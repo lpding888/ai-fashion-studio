@@ -49,8 +49,8 @@ export default function LoginPage() {
             } else {
                 router.push('/');
             }
-        } catch (err: any) {
-            setError(err.message || '登录失败，请检查账号密码');
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : '登录失败，请检查账号密码');
         } finally {
             setLoading(false);
         }

@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -18,6 +19,21 @@ import { ImageLightbox } from '@/components/image-lightbox';
 import { useToast } from '@/components/ui/use-toast';
 import { requestCreditsRefresh } from '@/hooks/use-credits';
 
+const BUSY_STATUSES = new Set([
+    'PLANNING',
+    'RENDERING',
+    'HERO_RENDERING',
+    'STORYBOARD_PLANNING',
+    'SHOTS_RENDERING',
+]);
+
+const CANCEL_LABEL_STATUSES = new Set([
+    ...BUSY_STATUSES,
+    'QUEUED',
+    'PENDING',
+    'AWAITING_APPROVAL',
+    'AWAITING_HERO_APPROVAL',
+]);
 
 // --- Types ---
 interface Shot {
@@ -33,6 +49,90 @@ interface Shot {
     status: 'PENDING' | 'RENDERED' | 'FAILED';
 }
 
+type BrainMeta = {
+    garment_summary?: string;
+    must_keep_details?: string[];
+    text_transcription_maybe?: string[];
+    scene_text?: string;
+    indoor_or_outdoor_final?: string;
+    scene_from_user_input?: string;
+    model_consistency_notes?: string;
+    zeiss_camera_language?: string;
+    risk_notes?: string[];
+};
+
+type BrainFrame = {
+    id?: string;
+    goal?: string;
+    prompt_gen_zh?: string;
+    prompt_gen_en?: string;
+    camera?: { focal_length_hint?: string };
+    composition?: { framing?: string };
+    lighting_setup?: { scene_light?: string };
+};
+
+type BrainUiParams = {
+    location?: string;
+    style_tuning?: string;
+    user_requirements?: string;
+};
+
+type CollageModeNote = {
+    enabled?: boolean;
+    layout?: string;
+    note?: string;
+};
+
+type StoryboardCameraChoice = {
+    system?: string;
+    model?: string;
+    f_stop?: string;
+    fStop?: string;
+    [key: string]: unknown;
+};
+
+type StoryboardProductLight = {
+    key?: string;
+    rim?: string;
+    fill?: string;
+    [key: string]: unknown;
+};
+
+type StoryboardLightingPlan = {
+    scene_light?: string;
+    sceneLight?: string;
+    product_light?: StoryboardProductLight;
+    productLight?: StoryboardProductLight;
+    [key: string]: unknown;
+};
+
+type StoryboardPlanShot = {
+    scene_subarea?: string;
+    sceneSubarea?: string;
+    action_pose?: string;
+    actionPose?: string;
+    shot_type?: string;
+    shotType?: string;
+    goal?: string;
+    physical_logic?: string;
+    physicalLogic?: string;
+    composition_notes?: string;
+    compositionNotes?: string;
+    exec_instruction_text?: string;
+    execInstructionText?: string;
+    occlusion_guard?: string[];
+    occlusionGuard?: string[];
+    ref_requirements?: string[];
+    refRequirements?: string[];
+    universal_requirements?: string[];
+    universalRequirements?: string[];
+    lighting_plan?: StoryboardLightingPlan;
+    lightingPlan?: StoryboardLightingPlan;
+    camera_choice?: StoryboardCameraChoice;
+    cameraChoice?: StoryboardCameraChoice;
+    [key: string]: unknown;
+};
+
 interface BrainPlan {
     visual_analysis?: {
         vibe?: string;
@@ -45,14 +145,34 @@ interface BrainPlan {
         shoes?: string;
         accessories?: string;
     };
-    shots: Shot[];
+    shots?: Shot[];
     thinkingProcess?: string;
     // v3.0+ fields
-    meta?: any;
-    frames?: any[];
-    ui_params?: any;
-    [key: string]: any; // 允许任意额外字段
+    meta?: BrainMeta;
+    frames?: BrainFrame[];
+    ui_params?: BrainUiParams;
+    collage_mode_note?: CollageModeNote;
+    [key: string]: unknown; // 允许任意额外字段
 }
+
+type HeroAttempt = {
+    createdAt: number;
+    outputImageUrl?: string;
+    outputShootLog?: string;
+    error?: string;
+};
+
+type HeroHistoryItem = {
+    createdAt: number;
+    outputImageUrl?: string;
+    outputShootLog?: string;
+    promptText?: string;
+    error?: string;
+};
+
+type ShotVariant = HeroAttempt & {
+    __synthetic?: boolean;
+};
 
 interface TaskData {
     id: string;
@@ -78,13 +198,7 @@ interface TaskData {
     heroShootLog?: string;
     heroApprovedAt?: number;
     heroSelectedAttemptCreatedAt?: number;
-    heroHistory?: Array<{
-        createdAt: number;
-        outputImageUrl?: string;
-        outputShootLog?: string;
-        promptText?: string;
-        error?: string;
-    }>;
+    heroHistory?: HeroHistoryItem[];
     storyboardCards?: Array<{
         index: number;
         action: string;
@@ -96,8 +210,8 @@ interface TaskData {
         continuity: string;
     }>;
     storyboardPlan?: {
-        shots?: any[];
-        [key: string]: any;
+        shots?: StoryboardPlanShot[];
+        [key: string]: unknown;
     };
     storyboardPlannedAt?: number;
     heroShots?: Array<{
@@ -108,12 +222,7 @@ interface TaskData {
         error?: string;
         createdAt: number;
         selectedAttemptCreatedAt?: number;
-        attempts?: Array<{
-            createdAt: number;
-            outputImageUrl?: string;
-            outputShootLog?: string;
-            error?: string;
-        }>;
+        attempts?: HeroAttempt[];
     }>;
     gridImageUrl?: string;
     gridShootLog?: string;
@@ -165,18 +274,38 @@ function isProbablyBase64Blob(value: string): boolean {
     return true;
 }
 
+type ApiErrorShape = {
+    response?: {
+        status?: number;
+        data?: {
+            message?: string;
+        };
+    };
+};
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+    const maybe = error as ApiErrorShape;
+    return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
+}
+
+function getApiErrorStatus(error: unknown) {
+    const maybe = error as ApiErrorShape;
+    return maybe?.response?.status;
+}
+
 /**
  * 智能适配器：自动识别 Brain Plan 版本并规范化为统一格式
  * 支持 v2.0 (visual_analysis/styling_plan) 和 v3.0 (meta/frames) 等多种版本
  */
-function normalizeBrainPlan(plan: any): {
+function normalizeBrainPlan(plan: unknown): {
     version: 'v2' | 'v3' | 'unknown';
     summary: string;
     details: Array<{ label: string; value: string; important?: boolean }>;
     shots: Shot[];
     thinkingProcess?: string;
-    rawMeta?: any; // 保留原始 meta 供调试
+    rawMeta?: BrainMeta; // 保留原始 meta 供调试
 } {
+    const rawPlan = (plan || {}) as BrainPlan;
     if (!plan) {
         return {
             version: 'unknown',
@@ -187,14 +316,14 @@ function normalizeBrainPlan(plan: any): {
     }
 
     // 检测版本
-    const hasV2Fields = plan.visual_analysis || plan.styling_plan;
-    const hasV3Fields = plan.meta || plan.frames;
+    const hasV2Fields = rawPlan.visual_analysis || rawPlan.styling_plan;
+    const hasV3Fields = rawPlan.meta || rawPlan.frames;
 
     if (hasV3Fields) {
         // ===== v3.0 格式：完整提取 =====
-        const meta = plan.meta || {};
-        const frames = plan.frames || [];
-        const uiParams = plan.ui_params || {};
+        const meta: BrainMeta = rawPlan.meta || {};
+        const frames: BrainFrame[] = rawPlan.frames || [];
+        const uiParams: BrainUiParams = rawPlan.ui_params || {};
 
         const details: Array<{ label: string; value: string; important?: boolean }> = [];
 
@@ -286,15 +415,15 @@ function normalizeBrainPlan(plan: any): {
         }
 
         // 10. 拼图模式提示
-        if (plan.collage_mode_note?.enabled) {
+        if (rawPlan.collage_mode_note?.enabled) {
             details.push({
                 label: '🎨 拼图模式',
-                value: `${plan.collage_mode_note.layout} - ${plan.collage_mode_note.note || '多帧合并'}`
+                value: `${rawPlan.collage_mode_note.layout} - ${rawPlan.collage_mode_note.note || '多帧合并'}`
             });
         }
 
         // 转换 frames 为 shots 格式
-        const shots: Shot[] = frames.map((frame: any, idx: number) => ({
+        const shots: Shot[] = frames.map((frame, idx) => ({
             id: frame.id || `frame_${idx + 1}`,
             shot_id: frame.id,
             type: frame.goal || `Frame ${idx + 1}`,
@@ -309,8 +438,8 @@ function normalizeBrainPlan(plan: any): {
             version: 'v3',
             summary: meta.garment_summary || 'AI 智能分析中...',
             details,
-            shots: shots.length > 0 ? shots : (plan.shots || []),
-            thinkingProcess: plan.thinkingProcess,
+            shots: shots.length > 0 ? shots : (rawPlan.shots || []),
+            thinkingProcess: rawPlan.thinkingProcess,
             rawMeta: meta, // 保留原始数据供调试
         };
     }
@@ -319,16 +448,16 @@ function normalizeBrainPlan(plan: any): {
         // ===== v2.0 格式：保持兼容 =====
         const details: Array<{ label: string; value: string; important?: boolean }> = [];
 
-        if (plan.visual_analysis?.vibe) {
-            details.push({ label: '🎨 视觉风格', value: plan.visual_analysis.vibe });
+        if (rawPlan.visual_analysis?.vibe) {
+            details.push({ label: '🎨 视觉风格', value: rawPlan.visual_analysis.vibe });
         }
 
-        if (plan.styling_plan) {
+        if (rawPlan.styling_plan) {
             const styling = [];
-            if (plan.styling_plan.upper) styling.push(`上装: ${plan.styling_plan.upper}`);
-            if (plan.styling_plan.lower) styling.push(`下装: ${plan.styling_plan.lower}`);
-            if (plan.styling_plan.shoes) styling.push(`鞋履: ${plan.styling_plan.shoes}`);
-            if (plan.styling_plan.accessories) styling.push(`配饰: ${plan.styling_plan.accessories}`);
+            if (rawPlan.styling_plan.upper) styling.push(`上装: ${rawPlan.styling_plan.upper}`);
+            if (rawPlan.styling_plan.lower) styling.push(`下装: ${rawPlan.styling_plan.lower}`);
+            if (rawPlan.styling_plan.shoes) styling.push(`鞋履: ${rawPlan.styling_plan.shoes}`);
+            if (rawPlan.styling_plan.accessories) styling.push(`配饰: ${rawPlan.styling_plan.accessories}`);
             if (styling.length > 0) {
                 details.push({ label: '👔 穿搭方案', value: styling.join('\n') });
             }
@@ -336,10 +465,10 @@ function normalizeBrainPlan(plan: any): {
 
         return {
             version: 'v2',
-            summary: plan.visual_analysis?.vibe || 'AI 正在分析风格...',
+            summary: rawPlan.visual_analysis?.vibe || 'AI 正在分析风格...',
             details,
-            shots: plan.shots || [],
-            thinkingProcess: plan.thinkingProcess,
+            shots: rawPlan.shots || [],
+            thinkingProcess: rawPlan.thinkingProcess,
         };
     }
 
@@ -348,8 +477,8 @@ function normalizeBrainPlan(plan: any): {
         version: 'unknown',
         summary: 'AI 分析结果',
         details: [],
-        shots: plan.shots || plan.frames || [],
-        thinkingProcess: plan.thinkingProcess,
+        shots: rawPlan.shots || [],
+        thinkingProcess: rawPlan.thinkingProcess,
     };
 }
 
@@ -362,18 +491,20 @@ function StatusHeader({
     onDelete,
     isRetrying = false,
     isDeleting = false
-}: {
-    status: TaskData['status'],
-    onRetry?: () => void,
-    onDelete?: () => void,
-    isRetrying?: boolean,
-    isDeleting?: boolean
-}) {
-    const isBusy = ['PLANNING', 'RENDERING', 'HERO_RENDERING', 'STORYBOARD_PLANNING', 'SHOTS_RENDERING'].includes(status);
-    const config = {
-        DRAFT: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "草稿待开始" },
-        PENDING: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "等待处理..." },
-        PLANNING: { color: "bg-blue-100 text-blue-700", icon: Brain, text: "镜头规划中..." },
+  }: {
+      status: TaskData['status'],
+      onRetry?: () => void,
+      onDelete?: () => void,
+      isRetrying?: boolean,
+      isDeleting?: boolean
+  }) {
+      const isBusy = BUSY_STATUSES.has(status);
+      const canRetry = status === 'FAILED' || status === 'COMPLETED';
+      const deleteLabel = CANCEL_LABEL_STATUSES.has(status) ? '取消任务' : '删除任务';
+      const config = {
+          DRAFT: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "草稿待开始" },
+          PENDING: { color: "bg-slate-100 text-slate-600", icon: Clock, text: "等待处理..." },
+          PLANNING: { color: "bg-blue-100 text-blue-700", icon: Brain, text: "镜头规划中..." },
         AWAITING_APPROVAL: { color: "bg-amber-100 text-amber-700", icon: AlertCircle, text: "待确认镜头计划" },
         RENDERING: { color: "bg-purple-100 text-purple-700", icon: Sparkles, text: "出图中..." },
         COMPLETED: { color: "bg-green-100 text-green-700", icon: Check, text: "创作完成" },
@@ -401,34 +532,36 @@ function StatusHeader({
                     {config.text}
                 </div>
 
-                {(status === 'FAILED' || status === 'COMPLETED') && (
-                    <div className="flex gap-2">
-                        <Button
-                            onClick={onRetry}
-                            disabled={isRetrying || isDeleting}
-                            variant="outline"
-                            size="sm"
-                            className="bg-white border-slate-200 hover:bg-slate-50 text-slate-700 h-9"
-                        >
-                            {isRetrying ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCcw className="w-4 h-4 mr-2" />}
-                            {status === 'FAILED' ? '重新执行' : '不满意?重新生成'}
-                        </Button>
-                        <Button
-                            onClick={onDelete}
-                            disabled={isRetrying || isDeleting}
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-500 hover:bg-red-50 hover:text-red-600 h-9"
-                        >
-                            {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
-                            删除任务
-                        </Button>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-}
+                  {onDelete && (
+                      <div className="flex gap-2">
+                          {canRetry && (
+                              <Button
+                                  onClick={onRetry}
+                                  disabled={isRetrying || isDeleting}
+                                  variant="outline"
+                                  size="sm"
+                                  className="bg-white border-slate-200 hover:bg-slate-50 text-slate-700 h-9"
+                              >
+                                  {isRetrying ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCcw className="w-4 h-4 mr-2" />}
+                                  {status === 'FAILED' ? '重新执行' : '不满意?重新生成'}
+                              </Button>
+                          )}
+                          <Button
+                              onClick={onDelete}
+                              disabled={isRetrying || isDeleting}
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-500 hover:bg-red-50 hover:text-red-600 h-9"
+                          >
+                              {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                              {deleteLabel}
+                          </Button>
+                      </div>
+                  )}
+              </div>
+          </div>
+      );
+  }
 
 // 1.5 Workflow Guide Bar（统一节奏/阶段/下一步）
 type WorkflowStep = {
@@ -887,7 +1020,19 @@ const ApprovalInterface = React.forwardRef<ApprovalInterfaceHandle, {
 });
 
 // 5. Results Grid with Retry functionality
-function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; taskId: string; onRetry: () => void; layoutMode?: string }) {
+function ResultsGrid({
+    shots,
+    taskId,
+    onRetry,
+    layoutMode,
+    onUseForBatch,
+}: {
+    shots: Shot[];
+    taskId: string;
+    onRetry: () => void;
+    layoutMode?: string;
+    onUseForBatch?: () => void;
+}) {
     const [retrying, setRetrying] = React.useState(false);
     const [retryingShotId, setRetryingShotId] = React.useState<string | null>(null);
     const [editorOpen, setEditorOpen] = React.useState(false);
@@ -1267,6 +1412,8 @@ function ResultsGrid({ shots, taskId, onRetry, layoutMode }: { shots: Shot[]; ta
                 onRegenerate={handleRetryShot}
                 isRegenerating={!!retryingShotId} // Global regenerating state or check specific id inside logic if needed, but passing generic here is simpler for now or we check inside
                 watermarkTaskId={taskId}
+                onUseForBatch={onUseForBatch}
+                useForBatchLabel="用此数据批量生成"
             />
         </div>
     );
@@ -1325,24 +1472,25 @@ export default function TaskResultPage() {
     const fetchTask = React.useCallback(async () => {
         try {
             const res = await api.get(`/tasks/${params.id}`);
-            setTask(res.data);
+            const data = res.data as TaskData & { billingEvents?: unknown[]; billingError?: string };
+            setTask(data);
 
             // 积分可能在后台预扣/结算（B 策略），这里用轻量指纹触发全局刷新
-            const billingEventsLen = Array.isArray((res.data as any)?.billingEvents) ? (res.data as any).billingEvents.length : 0;
-            const billingError = String((res.data as any)?.billingError || '');
-            const fingerprint = `${res.data?.status || ''}|${billingEventsLen}|${billingError}`;
+            const billingEventsLen = Array.isArray(data.billingEvents) ? data.billingEvents.length : 0;
+            const billingError = String(data.billingError || '');
+            const fingerprint = `${data?.status || ''}|${billingEventsLen}|${billingError}`;
             if (fingerprint !== creditsFingerprintRef.current) {
                 creditsFingerprintRef.current = fingerprint;
                 requestCreditsRefresh();
             }
 
-            if (['COMPLETED', 'FAILED'].includes(res.data.status)) {
+            if (['COMPLETED', 'FAILED'].includes(data.status)) {
                 // Done
             }
             setLoading(false);
         } catch (err) {
             console.error(err);
-            const status = (err as any)?.response?.status;
+            const status = getApiErrorStatus(err);
             if (status === 401 || status === 403) {
                 router.push(`/login?next=/tasks/${params.id}`);
                 return;
@@ -1366,7 +1514,7 @@ export default function TaskResultPage() {
             toast({
                 variant: "destructive",
                 title: "开始失败",
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
         } finally {
             setIsStarting(false);
@@ -1430,18 +1578,20 @@ export default function TaskResultPage() {
             toast({
                 variant: "destructive",
                 title: "重试失败",
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
         } finally {
             setIsRetrying(false);
         }
     };
 
-    const handleDeleteTask = async () => {
-        if (!confirm('确定要删除此任务吗？此操作不可撤销！')) return;
-        setIsDeleting(true);
-        try {
-            await api.delete(`/tasks/${params.id}`);
+      const handleDeleteTask = async () => {
+          const status = task?.status;
+          const label = status && CANCEL_LABEL_STATUSES.has(status) ? '取消并删除' : '删除';
+          if (!confirm(`确定要${label}此任务吗？此操作不可撤销！`)) return;
+          setIsDeleting(true);
+          try {
+              await api.delete(`/tasks/${params.id}`);
             toast({
                 title: "任务已删除",
                 description: "您将被重定向到创作中心",
@@ -1474,7 +1624,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '确认Hero失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
             await fetchTask();
         } finally {
@@ -1511,7 +1661,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '重新生成Hero失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
             await fetchTask();
         } finally {
@@ -1545,7 +1695,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '切换版本失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
         } finally {
             setSelectingHeroAttemptCreatedAt(null);
@@ -1565,7 +1715,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '保存失败',
-                description: (error as any)?.response?.data?.message || '无法保存手账，请稍后重试',
+                description: getApiErrorMessage(error, '无法保存手账，请稍后重试'),
             });
         } finally {
             setSavingHeroShootLog(false);
@@ -1585,7 +1735,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '保存失败',
-                description: (error as any)?.response?.data?.message || '无法保存手账，请稍后重试',
+                description: getApiErrorMessage(error, '无法保存手账，请稍后重试'),
             });
         } finally {
             setSavingGridShootLog(false);
@@ -1613,7 +1763,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '保存失败',
-                description: (error as any)?.response?.data?.message || '无法保存手账，请稍后重试',
+                description: getApiErrorMessage(error, '无法保存手账，请稍后重试'),
             });
         } finally {
             setSavingShotShootLog(false);
@@ -1654,7 +1804,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '生成镜头失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
             await fetchTask();
         } finally {
@@ -1681,7 +1831,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '选择版本失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
         } finally {
             setSelectingShotAttemptKey(null);
@@ -1704,7 +1854,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '生成拼图失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
             await fetchTask();
         } finally {
@@ -1737,7 +1887,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '重新生成分镜失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
         } finally {
             setIsReplanningStoryboard(false);
@@ -1761,6 +1911,12 @@ export default function TaskResultPage() {
             });
         }
     }, [params.id, toast]);
+
+    const handleUseForBatch = React.useCallback(() => {
+        const taskId = String(params.id || '').trim();
+        if (!taskId) return;
+        router.push(`/batch?fromTaskId=${encodeURIComponent(taskId)}`);
+    }, [params.id, router]);
 
     const openStoryboardEditor = (index: number) => {
         const shot = (task?.storyboardPlan?.shots || [])?.[index - 1] || {};
@@ -1838,7 +1994,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '保存镜头文字失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
         } finally {
             setSavingStoryboardIndex(null);
@@ -1882,7 +2038,7 @@ export default function TaskResultPage() {
             toast({
                 variant: 'destructive',
                 title: '换镜头失败',
-                description: (error as any)?.response?.data?.message || '操作遇到错误，请稍后再试',
+                description: getApiErrorMessage(error, '操作遇到错误，请稍后再试'),
             });
         } finally {
             setCyclingCameraIndex(null);
@@ -2100,7 +2256,7 @@ export default function TaskResultPage() {
                                         {(() => {
                                             const raw = Array.isArray(task.heroHistory) ? task.heroHistory : [];
                                             const versions = raw
-                                                .filter((h) => !!(h as any)?.outputImageUrl)
+                                                .filter((h) => !!h?.outputImageUrl)
                                                 .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
 
                                             if (versions.length <= 1) return null;
@@ -2121,8 +2277,8 @@ export default function TaskResultPage() {
                                                     )}
                                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                                                         {versions.slice(0, 6).map((v) => {
-                                                            const createdAt = Number((v as any).createdAt) || 0;
-                                                            const url = String((v as any).outputImageUrl || '').trim();
+                                                            const createdAt = Number(v.createdAt) || 0;
+                                                            const url = String(v.outputImageUrl || '').trim();
                                                             if (!createdAt || !url) return null;
 
                                                             const isSelected = (task.heroSelectedAttemptCreatedAt
@@ -2658,26 +2814,26 @@ export default function TaskResultPage() {
                                                     {(() => {
                                                         const shot = task.heroShots?.find((s) => s.index === c.index);
                                                         if (!shot?.imageUrl) return null;
-                                                        const primaryVariant = {
+                                                        const primaryVariant: ShotVariant = {
                                                             createdAt: shot.selectedAttemptCreatedAt || shot.createdAt || Date.now(),
                                                             outputImageUrl: shot.imageUrl,
                                                             outputShootLog: shot.shootLog,
                                                             __synthetic: true,
                                                         };
-                                                        const variantsRaw = [
+                                                        const variantsRaw: ShotVariant[] = [
                                                             primaryVariant,
                                                             ...(shot.attempts || []).filter((a) => !!a.outputImageUrl),
                                                         ];
                                                         const seen = new Set<string>();
                                                         const variants = variantsRaw
                                                             .filter((v) => {
-                                                                const url = (v as any).outputImageUrl;
+                                                                const url = v.outputImageUrl;
                                                                 if (!url || typeof url !== 'string') return false;
                                                                 if (seen.has(url)) return false;
                                                                 seen.add(url);
                                                                 return true;
                                                             })
-                                                            .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
+                                                            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
                                                         return (
                                                             <div className="mt-3 space-y-2">
                                                                 <img
@@ -2755,8 +2911,8 @@ export default function TaskResultPage() {
                                                                         </div>
                                                                         <div className="flex gap-2 overflow-x-auto pb-1">
                                                                             {variants.map((v) => {
-                                                                                const isSelected = shot.selectedAttemptCreatedAt === (v as any).createdAt;
-                                                                                const isSynthetic = !!(v as any).__synthetic;
+                                                                                const isSelected = shot.selectedAttemptCreatedAt === v.createdAt;
+                                                                                const isSynthetic = !!v.__synthetic;
                                                                                 const attemptKey = `${c.index}:${v.createdAt}`;
                                                                                 return (
                                                                                     <div key={v.createdAt} className={`shrink-0 rounded-lg border ${isSelected ? 'border-green-400 bg-green-50' : 'border-slate-200 bg-white'} p-2 w-[140px]`}>
@@ -2792,7 +2948,7 @@ export default function TaskResultPage() {
                                                                                             variant={isSelected ? 'secondary' : 'outline'}
                                                                                             className="mt-2 w-full h-8 text-xs"
                                                                                             disabled={isSynthetic || selectingShotAttemptKey === attemptKey}
-                                                                                            onClick={() => handleSelectShotVariant(c.index, (v as any).createdAt)}
+                                                                                            onClick={() => handleSelectShotVariant(c.index, v.createdAt)}
                                                                                         >
                                                                                             {selectingShotAttemptKey === attemptKey ? (
                                                                                                 <span className="flex items-center gap-2">
@@ -2860,6 +3016,7 @@ export default function TaskResultPage() {
                         taskId={task.id}
                         onRetry={fetchTask}
                         layoutMode={task.layout_mode}
+                        onUseForBatch={handleUseForBatch}
                     />
                 )}
 
