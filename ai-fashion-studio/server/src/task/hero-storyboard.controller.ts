@@ -1,4 +1,12 @@
-import { BadRequestException, Body, Controller, HttpException, Param, Patch, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  HttpException,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { HeroStoryboardService } from './hero-storyboard.service';
 import { z } from 'zod';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -43,7 +51,9 @@ const UpdateStoryboardShotBodySchema = z
       .strict(),
   })
   .strict()
-  .refine((v) => Object.keys(v.patch || {}).length > 0, { message: 'patch 不能为空' });
+  .refine((v) => Object.keys(v.patch || {}).length > 0, {
+    message: 'patch 不能为空',
+  });
 
 const UpdateShootLogBodySchema = z
   .object({
@@ -53,7 +63,10 @@ const UpdateShootLogBodySchema = z
 
 const EditHeroBodySchema = z
   .object({
-    maskImage: z.string().url('maskImage 必须是可访问的 URL').min(1, 'maskImage 不能为空'),
+    maskImage: z
+      .string()
+      .url('maskImage 必须是可访问的 URL')
+      .min(1, 'maskImage 不能为空'),
     referenceImages: z.array(z.string().url()).max(12).optional(),
     prompt: z.string().trim().min(1, 'prompt 不能为空'),
     editMode: z.string().trim().min(1).optional(),
@@ -62,7 +75,10 @@ const EditHeroBodySchema = z
 
 const SelectHeroVariantBodySchema = z
   .object({
-    attemptCreatedAt: z.coerce.number().int().positive('attemptCreatedAt 参数无效'),
+    attemptCreatedAt: z.coerce
+      .number()
+      .int()
+      .positive('attemptCreatedAt 参数无效'),
   })
   .strict();
 
@@ -71,19 +87,30 @@ export class HeroStoryboardController {
   constructor(
     private readonly heroStoryboard: HeroStoryboardService,
     private readonly taskAccess: TaskAccessService,
-  ) { }
+  ) {}
+
+  private resolveErrorMessage(err: unknown, fallback: string): string {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'string') return err;
+    return fallback;
+  }
 
   /**
    * 人工确认 Hero，并生成分镜动作卡（Phase 2）
    */
   @Post(':id/hero/confirm')
-  async confirmHero(@CurrentUser() user: UserModel, @Param('id') taskId: string) {
+  async confirmHero(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+  ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
       return await this.heroStoryboard.confirmHero(taskId);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '确认Hero失败');
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '确认Hero失败'),
+      );
     }
   }
 
@@ -91,13 +118,18 @@ export class HeroStoryboardController {
    * 重新生成 Hero 母版（不需要重建任务）
    */
   @Post(':id/hero/regenerate')
-  async regenerateHero(@CurrentUser() user: UserModel, @Param('id') taskId: string) {
+  async regenerateHero(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+  ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
       return await this.heroStoryboard.regenerateHero(taskId);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '重新生成Hero失败');
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '重新生成Hero失败'),
+      );
     }
   }
 
@@ -108,14 +140,20 @@ export class HeroStoryboardController {
   async updateHeroShootLog(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
-    @Body(new ZodValidationPipe(UpdateShootLogBodySchema)) body: z.infer<typeof UpdateShootLogBodySchema>,
+    @Body(new ZodValidationPipe(UpdateShootLogBodySchema))
+    body: z.infer<typeof UpdateShootLogBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
-      return await this.heroStoryboard.updateHeroShootLog(taskId, body.shootLogText);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '保存手账失败');
+      return await this.heroStoryboard.updateHeroShootLog(
+        taskId,
+        body.shootLogText,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '保存手账失败'),
+      );
     }
   }
 
@@ -126,14 +164,17 @@ export class HeroStoryboardController {
   async editHero(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
-    @Body(new ZodValidationPipe(EditHeroBodySchema)) body: z.infer<typeof EditHeroBodySchema>,
+    @Body(new ZodValidationPipe(EditHeroBodySchema))
+    body: z.infer<typeof EditHeroBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
       return await this.heroStoryboard.editHero(taskId, body);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '编辑母版失败');
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '编辑母版失败'),
+      );
     }
   }
 
@@ -144,14 +185,20 @@ export class HeroStoryboardController {
   async selectHeroVariant(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
-    @Body(new ZodValidationPipe(SelectHeroVariantBodySchema)) body: z.infer<typeof SelectHeroVariantBodySchema>,
+    @Body(new ZodValidationPipe(SelectHeroVariantBodySchema))
+    body: z.infer<typeof SelectHeroVariantBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
-      return await this.heroStoryboard.selectHeroVariant(taskId, body.attemptCreatedAt);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '选择母版版本失败');
+      return await this.heroStoryboard.selectHeroVariant(
+        taskId,
+        body.attemptCreatedAt,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '选择母版版本失败'),
+      );
     }
   }
 
@@ -171,9 +218,11 @@ export class HeroStoryboardController {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
       return await this.heroStoryboard.renderShot(taskId, parsed);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '生成镜头失败');
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '生成镜头失败'),
+      );
     }
   }
 
@@ -198,10 +247,16 @@ export class HeroStoryboardController {
 
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
-      return await this.heroStoryboard.selectShotVariant(taskId, parsedIndex, attemptCreatedAt);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '选择镜头版本失败');
+      return await this.heroStoryboard.selectShotVariant(
+        taskId,
+        parsedIndex,
+        attemptCreatedAt,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '选择镜头版本失败'),
+      );
     }
   }
 
@@ -209,13 +264,18 @@ export class HeroStoryboardController {
    * 四镜头拼图生成（Phase 3）
    */
   @Post(':id/storyboard/render-grid')
-  async renderGrid(@CurrentUser() user: UserModel, @Param('id') taskId: string) {
+  async renderGrid(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+  ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
       return await this.heroStoryboard.renderGrid(taskId);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '生成拼图失败');
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '生成拼图失败'),
+      );
     }
   }
 
@@ -226,14 +286,20 @@ export class HeroStoryboardController {
   async updateGridShootLog(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
-    @Body(new ZodValidationPipe(UpdateShootLogBodySchema)) body: z.infer<typeof UpdateShootLogBodySchema>,
+    @Body(new ZodValidationPipe(UpdateShootLogBodySchema))
+    body: z.infer<typeof UpdateShootLogBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
-      return await this.heroStoryboard.updateGridShootLog(taskId, body.shootLogText);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '保存拼图手账失败');
+      return await this.heroStoryboard.updateGridShootLog(
+        taskId,
+        body.shootLogText,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '保存拼图手账失败'),
+      );
     }
   }
 
@@ -241,13 +307,18 @@ export class HeroStoryboardController {
    * 重新生成分镜规划（重新抽卡），不需要重做 Hero
    */
   @Post(':id/storyboard/replan')
-  async replanStoryboard(@CurrentUser() user: UserModel, @Param('id') taskId: string) {
+  async replanStoryboard(
+    @CurrentUser() user: UserModel,
+    @Param('id') taskId: string,
+  ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
       return await this.heroStoryboard.replanStoryboard(taskId);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '重新生成分镜失败');
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '重新生成分镜失败'),
+      );
     }
   }
 
@@ -267,19 +338,26 @@ export class HeroStoryboardController {
     }
 
     await this.taskAccess.requireWritableTask(taskId, user);
-    let parsedBody: z.infer<typeof UpdateStoryboardShotBodySchema>;
-    try {
-      parsedBody = UpdateStoryboardShotBodySchema.parse(body);
-    } catch (e: any) {
-      const msg = e?.errors?.[0]?.message || '请求体格式错误';
-      throw new BadRequestException(msg);
+    const parsedResult = UpdateStoryboardShotBodySchema.safeParse(body);
+    if (!parsedResult.success) {
+      throw new BadRequestException(
+        this.resolveErrorMessage(parsedResult.error, '请求体格式错误'),
+      );
     }
+    const parsedBody: z.infer<typeof UpdateStoryboardShotBodySchema> =
+      parsedResult.data;
 
     try {
-      return await this.heroStoryboard.updateStoryboardShot(taskId, parsedIndex, parsedBody.patch);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '保存镜头文字失败');
+      return await this.heroStoryboard.updateStoryboardShot(
+        taskId,
+        parsedIndex,
+        parsedBody.patch,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '保存镜头文字失败'),
+      );
     }
   }
 
@@ -291,7 +369,8 @@ export class HeroStoryboardController {
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
     @Param('index') index: string,
-    @Body(new ZodValidationPipe(UpdateShootLogBodySchema)) body: z.infer<typeof UpdateShootLogBodySchema>,
+    @Body(new ZodValidationPipe(UpdateShootLogBodySchema))
+    body: z.infer<typeof UpdateShootLogBodySchema>,
   ) {
     const parsedIndex = Number(index);
     if (!Number.isFinite(parsedIndex) || parsedIndex <= 0) {
@@ -300,10 +379,16 @@ export class HeroStoryboardController {
 
     await this.taskAccess.requireWritableTask(taskId, user);
     try {
-      return await this.heroStoryboard.updateShotShootLog(taskId, parsedIndex, body.shootLogText);
-    } catch (e: any) {
-      if (e instanceof HttpException) throw e;
-      throw new BadRequestException(e.message || '保存镜头手账失败');
+      return await this.heroStoryboard.updateShotShootLog(
+        taskId,
+        parsedIndex,
+        body.shootLogText,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        this.resolveErrorMessage(err, '保存镜头手账失败'),
+      );
     }
   }
 }

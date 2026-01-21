@@ -16,10 +16,40 @@ import { HeroStoryboardController } from './hero-storyboard.controller';
 import { HeroStoryboardService } from './hero-storyboard.service';
 import { TaskAccessService } from './task-access.service';
 import { TaskBillingService } from './task-billing.service';
+import { TaskCommonService } from './task-common.service';
+import { DirectTaskService } from './direct-task.service';
+import { TaskCrudService } from './task-crud.service';
+import { LegacyTaskService } from './legacy-task.service';
+import { TaskRenderingOrchestratorService } from './task-rendering-orchestrator.service';
 
 @Module({
-  imports: [DbModule, BrainModule, PainterModule, ModelProfileModule, CosModule, CreditModule, WorkflowPromptModule, DirectPromptModule],
-  controllers: [TaskController, FixController, ExportController, HeroStoryboardController],
-  providers: [TaskService, FixService, HeroStoryboardService, TaskAccessService, TaskBillingService],
+  imports: [
+    DbModule,
+    BrainModule,
+    PainterModule,
+    ModelProfileModule,
+    CosModule,
+    CreditModule,
+    WorkflowPromptModule,
+    DirectPromptModule,
+  ],
+  controllers: [
+    TaskController,
+    FixController,
+    ExportController,
+    HeroStoryboardController,
+  ],
+  providers: [
+    TaskService,
+    TaskCrudService,
+    TaskCommonService,
+    DirectTaskService,
+    LegacyTaskService,
+    TaskRenderingOrchestratorService,
+    FixService,
+    HeroStoryboardService,
+    TaskAccessService,
+    TaskBillingService,
+  ],
 })
-export class TaskModule { }
+export class TaskModule {}

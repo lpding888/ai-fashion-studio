@@ -4,7 +4,7 @@ import { DbService } from '../db/db.service';
 
 @Injectable()
 export class TaskAccessService {
-  constructor(private readonly db: DbService) { }
+  constructor(private readonly db: DbService) {}
 
   async requireReadableTask(taskId: string, user: UserModel) {
     const task = await this.db.getTask(taskId);
@@ -29,4 +29,3 @@ export class TaskAccessService {
     return this.requireReadableTask(taskId, user);
   }
 }
-

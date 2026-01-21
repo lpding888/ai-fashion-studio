@@ -4,11 +4,69 @@ import * as path from 'path';
 import { BrainService } from '../brain/brain.service';
 import { CosService } from '../cos/cos.service';
 import { DbService } from '../db/db.service';
-import type { HeroShotOutput, HeroWorkspaceSnapshot, PainterSession, PainterSessionMessage, TaskModel } from '../db/models';
+import type {
+  HeroShotOutput,
+  HeroWorkspaceSnapshot,
+  PainterSession,
+  PainterSessionMessage,
+  TaskModel,
+} from '../db/models';
 import { ModelConfigResolverService } from '../model-profile/model-config-resolver.service';
 import { PainterService } from '../painter/painter.service';
 import { WorkflowPromptService } from '../workflow-prompt/workflow-prompt.service';
 import { TaskBillingService } from './task-billing.service';
+
+type StoryboardCameraChoice = {
+  system?: string;
+  model?: string;
+  f_stop?: string;
+};
+
+type StoryboardProductLight = {
+  key?: string;
+  rim?: string;
+  fill?: string;
+};
+
+type StoryboardLightingPlan = {
+  scene_light?: string;
+  sceneLight?: string;
+  product_light?: StoryboardProductLight;
+  productLight?: StoryboardProductLight;
+};
+
+type StoryboardPlanShot = Record<string, unknown> & {
+  shot_id?: string;
+  id?: string;
+  type?: string;
+  prompt_en?: string;
+  prompt?: string;
+  action_pose?: string;
+  actionPose?: string;
+  shot_type?: string;
+  shotType?: string;
+  goal?: string;
+  physical_logic?: string;
+  camera_choice?: StoryboardCameraChoice;
+  cameraChoice?: StoryboardCameraChoice;
+  lighting_plan?: StoryboardLightingPlan;
+  lightingPlan?: StoryboardLightingPlan;
+  occlusion_guard?: string[] | string;
+  occlusionGuard?: string[] | string;
+};
+
+type StoryboardPlan = Record<string, unknown> & {
+  shots: StoryboardPlanShot[];
+  resolved_params?: { shot_count?: number };
+};
+
+type StoryboardHistoryEntry = NonNullable<
+  TaskModel['storyboardHistory']
+>[number] &
+  Record<string, unknown>;
+
+type HeroHistoryEntry = NonNullable<TaskModel['heroHistory']>[number];
+type GridHistoryEntry = NonNullable<TaskModel['gridHistory']>[number];
 
 @Injectable()
 export class HeroStoryboardService {
@@ -37,37 +95,116 @@ export class HeroStoryboardService {
   private sanitizeUserShootLogText(input: unknown): string {
     const raw = typeof input === 'string' ? input : '';
     const normalized = raw.replace(/\r\n/g, '\n').trim();
-    return normalized.length > 20000 ? `${normalized.slice(0, 20000)}…` : normalized;
+    return normalized.length > 20000
+      ? `${normalized.slice(0, 20000)}…`
+      : normalized;
   }
 
-  private getLatestSuccessfulHeroAttemptCreatedAt(task: TaskModel): number | null {
+  private resolveErrorMessage(err: unknown, fallback: string) {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'string') return err;
+    return fallback;
+  }
+
+  private toRecord(input: unknown): Record<string, unknown> {
+    if (!input || typeof input !== 'object') return {};
+    return input as Record<string, unknown>;
+  }
+
+  private toStoryboardShot(input: unknown): StoryboardPlanShot {
+    return this.toRecord(input) as StoryboardPlanShot;
+  }
+
+  private normalizeStoryboardPlan(input: unknown): StoryboardPlan {
+    const record = this.toRecord(input);
+    const rawShots = Array.isArray(record.shots) ? record.shots : [];
+    const shots = rawShots.map((shot) => this.toStoryboardShot(shot));
+    const resolvedRecord = this.toRecord(record.resolved_params);
+    const resolvedParams =
+      typeof resolvedRecord.shot_count === 'number' &&
+      Number.isFinite(resolvedRecord.shot_count)
+        ? { shot_count: resolvedRecord.shot_count }
+        : Object.keys(resolvedRecord).length > 0
+          ? (resolvedRecord as { shot_count?: number })
+          : undefined;
+
+    return {
+      ...record,
+      shots,
+      ...(resolvedParams ? { resolved_params: resolvedParams } : {}),
+    } as StoryboardPlan;
+  }
+
+  private normalizeHeroHistory(
+    history: TaskModel['heroHistory'] | undefined,
+  ): HeroHistoryEntry[] {
+    return Array.isArray(history) ? history : [];
+  }
+
+  private normalizeStoryboardHistory(
+    history: TaskModel['storyboardHistory'] | undefined,
+  ): StoryboardHistoryEntry[] {
+    return Array.isArray(history) ? history : [];
+  }
+
+  private normalizeGridHistory(
+    history: TaskModel['gridHistory'] | undefined,
+  ): GridHistoryEntry[] {
+    return Array.isArray(history) ? history : [];
+  }
+
+  private getLatestSuccessfulHeroAttemptCreatedAt(
+    task: TaskModel,
+  ): number | null {
     const history = Array.isArray(task.heroHistory) ? task.heroHistory : [];
     const latest = history
-      .filter((h: any) => Number(h?.createdAt) > 0 && typeof h?.outputImageUrl === 'string' && String(h.outputImageUrl).trim())
-      .sort((a: any, b: any) => Number(b.createdAt) - Number(a.createdAt))[0];
+      .filter((h) => {
+        const record = this.toRecord(h);
+        const createdAt = Number(record.createdAt);
+        const outputImageUrl =
+          typeof record.outputImageUrl === 'string'
+            ? record.outputImageUrl
+            : '';
+        return createdAt > 0 && outputImageUrl.trim();
+      })
+      .sort((a, b) => {
+        const aCreatedAt = Number(this.toRecord(a).createdAt);
+        const bCreatedAt = Number(this.toRecord(b).createdAt);
+        return bCreatedAt - aCreatedAt;
+      })[0];
     const createdAt = Number(latest?.createdAt) || 0;
     return createdAt > 0 ? createdAt : null;
   }
 
   private getActiveHeroAttemptCreatedAt(task: TaskModel): number | null {
-    const selected = Number((task as any).heroSelectedAttemptCreatedAt) || 0;
+    const selected = Number(task.heroSelectedAttemptCreatedAt || 0);
     if (selected > 0) return selected;
     return this.getLatestSuccessfulHeroAttemptCreatedAt(task);
   }
 
-  private buildHeroWorkspaceSnapshot(taskView: TaskModel, attemptCreatedAt: number): HeroWorkspaceSnapshot {
+  private buildHeroWorkspaceSnapshot(
+    taskView: TaskModel,
+    attemptCreatedAt: number,
+  ): HeroWorkspaceSnapshot {
     return {
       attemptCreatedAt,
       updatedAt: Date.now(),
       heroImageUrl: String(taskView.heroImageUrl || '').trim(),
       heroShootLog: (taskView.heroShootLog || '').trim() || undefined,
-      heroApprovedAt: Number(taskView.heroApprovedAt || 0) > 0 ? taskView.heroApprovedAt : undefined,
+      heroApprovedAt:
+        Number(taskView.heroApprovedAt || 0) > 0
+          ? taskView.heroApprovedAt
+          : undefined,
       storyboardPlan: taskView.storyboardPlan,
       storyboardCards: taskView.storyboardCards,
       storyboardPlannedAt: taskView.storyboardPlannedAt,
       storyboardThinkingProcess: taskView.storyboardThinkingProcess,
-      storyboardHistory: Array.isArray(taskView.storyboardHistory) ? taskView.storyboardHistory : undefined,
-      heroShots: Array.isArray(taskView.heroShots) ? taskView.heroShots : undefined,
+      storyboardHistory: Array.isArray(taskView.storyboardHistory)
+        ? taskView.storyboardHistory
+        : undefined,
+      heroShots: Array.isArray(taskView.heroShots)
+        ? taskView.heroShots
+        : undefined,
       gridImageUrl: taskView.gridImageUrl,
       gridShootLog: taskView.gridShootLog,
       gridStatus: taskView.gridStatus,
@@ -80,23 +217,37 @@ export class HeroStoryboardService {
     next: HeroWorkspaceSnapshot,
   ): HeroWorkspaceSnapshot[] {
     const arr = Array.isArray(existing) ? existing.slice() : [];
-    const idx = arr.findIndex((w) => Number(w?.attemptCreatedAt) === Number(next.attemptCreatedAt));
+    const idx = arr.findIndex(
+      (w) => Number(w?.attemptCreatedAt) === Number(next.attemptCreatedAt),
+    );
     if (idx >= 0) {
-      arr[idx] = { ...arr[idx], ...next, attemptCreatedAt: next.attemptCreatedAt };
+      arr[idx] = {
+        ...arr[idx],
+        ...next,
+        attemptCreatedAt: next.attemptCreatedAt,
+      };
     } else {
       arr.push(next);
     }
     // 最近的放前面，便于前端展示
-    return arr.sort((a, b) => Number(b.attemptCreatedAt) - Number(a.attemptCreatedAt));
+    return arr.sort(
+      (a, b) => Number(b.attemptCreatedAt) - Number(a.attemptCreatedAt),
+    );
   }
 
-  private computeStableStatusFromWorkspace(snapshot: HeroWorkspaceSnapshot): TaskModel['status'] {
+  private computeStableStatusFromWorkspace(
+    snapshot: HeroWorkspaceSnapshot,
+  ): TaskModel['status'] {
     if (!snapshot.heroImageUrl) return 'HERO_RENDERING';
     if (!snapshot.storyboardPlan) return 'AWAITING_HERO_APPROVAL';
 
-    const hasPendingShots = (snapshot.heroShots || []).some((s) => s.status === 'PENDING');
+    const hasPendingShots = (snapshot.heroShots || []).some(
+      (s) => s.status === 'PENDING',
+    );
     const hasPendingGrid = snapshot.gridStatus === 'PENDING';
-    return (hasPendingShots || hasPendingGrid) ? 'SHOTS_RENDERING' : 'STORYBOARD_READY';
+    return hasPendingShots || hasPendingGrid
+      ? 'SHOTS_RENDERING'
+      : 'STORYBOARD_READY';
   }
 
   private async resolvePainterSystemInstruction(task: TaskModel): Promise<{
@@ -104,29 +255,55 @@ export class HeroStoryboardService {
     versionId?: string;
     sha256?: string;
   }> {
-    const pinnedText = String(task.painterSession?.systemPromptText || '').trim();
-    const pinnedVersionId = String(task.painterSession?.systemPromptVersionId || '').trim();
-    const pinnedSha = String(task.painterSession?.systemPromptSha256 || '').trim();
+    const pinnedText = String(
+      task.painterSession?.systemPromptText || '',
+    ).trim();
+    const pinnedVersionId = String(
+      task.painterSession?.systemPromptVersionId || '',
+    ).trim();
+    const pinnedSha = String(
+      task.painterSession?.systemPromptSha256 || '',
+    ).trim();
 
     if (pinnedText) {
-      return { systemInstruction: pinnedText, versionId: pinnedVersionId || undefined, sha256: pinnedSha || undefined };
+      return {
+        systemInstruction: pinnedText,
+        versionId: pinnedVersionId || undefined,
+        sha256: pinnedSha || undefined,
+      };
     }
 
     if (pinnedVersionId) {
       const v = await this.workflowPrompts.getVersion(pinnedVersionId);
       const prompt = v?.pack?.painterSystemPrompt?.trim();
       if (prompt) {
-        return { systemInstruction: prompt, versionId: v.versionId, sha256: v.sha256 };
+        return {
+          systemInstruction: prompt,
+          versionId: v.versionId,
+          sha256: v.sha256,
+        };
       }
     }
 
     const { version } = await this.workflowPrompts.getActive();
     const prompt = version?.pack?.painterSystemPrompt?.trim();
-    if (!prompt) throw new Error('workflow prompts 未发布：缺少 painterSystemPrompt');
-    return { systemInstruction: prompt, versionId: version?.versionId, sha256: version?.sha256 };
+    if (!prompt)
+      throw new Error('workflow prompts 未发布：缺少 painterSystemPrompt');
+    return {
+      systemInstruction: prompt,
+      versionId: version?.versionId,
+      sha256: version?.sha256,
+    };
   }
 
-  private ensurePainterSession(task: TaskModel, systemMeta: { systemInstruction: string; versionId?: string; sha256?: string }): PainterSession {
+  private ensurePainterSession(
+    task: TaskModel,
+    systemMeta: {
+      systemInstruction: string;
+      versionId?: string;
+      sha256?: string;
+    },
+  ): PainterSession {
     const existing = task.painterSession;
     if (existing && Array.isArray(existing.messages)) {
       // 固定 system prompt：如果已存在，就不跟随 active prompts 变化（避免漂移）
@@ -143,22 +320,31 @@ export class HeroStoryboardService {
     };
   }
 
-  private appendSessionTurn(session: PainterSession, userText: string, modelText: string) {
+  private appendSessionTurn(
+    session: PainterSession,
+    userText: string,
+    modelText: string,
+  ) {
     const now = Date.now();
     const u = String(userText || '').trim();
     const m = String(modelText || '').trim();
-    const next: PainterSessionMessage[] = Array.isArray(session.messages) ? session.messages.slice() : [];
+    const next: PainterSessionMessage[] = Array.isArray(session.messages)
+      ? session.messages.slice()
+      : [];
     if (u) next.push({ role: 'user', text: u, createdAt: now });
     if (m) next.push({ role: 'model', text: m, createdAt: now });
     session.messages = next;
     session.updatedAt = now;
   }
 
-  private buildSessionHistoryForRequest(session: PainterSession | undefined, options?: { maxChars?: number; maxMessages?: number }) {
+  private buildSessionHistoryForRequest(
+    session: PainterSession | undefined,
+    options?: { maxChars?: number; maxMessages?: number },
+  ) {
     const maxChars = Math.max(500, Number(options?.maxChars ?? 6000));
     const maxMessages = Math.max(2, Number(options?.maxMessages ?? 20));
 
-    const messages = Array.isArray(session?.messages) ? session!.messages : [];
+    const messages = Array.isArray(session?.messages) ? session.messages : [];
     if (messages.length === 0) return [];
 
     // 从尾部回溯截断：保证“会话保持”但不让 prompt 无限膨胀导致模型只回 TEXT/直接 stop。
@@ -183,45 +369,70 @@ export class HeroStoryboardService {
   private clonePainterSession(session: PainterSession): PainterSession {
     return {
       ...session,
-      messages: Array.isArray(session.messages) ? session.messages.map((m) => ({ ...m })) : [],
+      messages: Array.isArray(session.messages)
+        ? session.messages.map((m) => ({ ...m }))
+        : [],
     };
   }
 
-  private buildStoryboardCardsFromPlan(plan: any, shotCount: number) {
-    const safeCount = Number.isFinite(shotCount) && shotCount > 0 ? Math.floor(shotCount) : 4;
-    const shots = Array.isArray(plan?.shots) ? plan.shots.slice(0, safeCount) : [];
+  private buildStoryboardCardsFromPlan(
+    plan: StoryboardPlan | undefined,
+    shotCount: number,
+  ) {
+    const normalizedPlan = this.normalizeStoryboardPlan(plan);
+    const safeCount =
+      Number.isFinite(shotCount) && shotCount > 0 ? Math.floor(shotCount) : 4;
+    const shots = normalizedPlan.shots.slice(0, safeCount);
 
-    return shots.map((s: any, idx: number) => {
-      const cameraChoice = s?.camera_choice || s?.cameraChoice || {};
-      const lightingPlan = s?.lighting_plan || s?.lightingPlan || {};
-      const productLight = lightingPlan?.product_light || lightingPlan?.productLight || {};
+    return shots.map((shot, idx) => {
+      const cameraChoice = this.toRecord(
+        shot.camera_choice ?? shot.cameraChoice,
+      );
+      const lightingPlan = this.toRecord(
+        shot.lighting_plan ?? shot.lightingPlan,
+      );
+      const productLight = this.toRecord(
+        lightingPlan.product_light ?? lightingPlan.productLight,
+      );
 
       const camera = [
-        cameraChoice?.system,
-        cameraChoice?.model,
-        cameraChoice?.f_stop,
-      ].filter(Boolean).join(' ');
+        cameraChoice.system,
+        cameraChoice.model,
+        cameraChoice.f_stop,
+      ]
+        .map((value) => (typeof value === 'string' ? value : ''))
+        .filter((value) => value.length > 0)
+        .join(' ');
 
       const lighting = [
-        lightingPlan?.scene_light ? `scene_light=${lightingPlan.scene_light}` : '',
-        productLight?.key ? `key=${productLight.key}` : '',
-        productLight?.rim ? `rim=${productLight.rim}` : '',
-        productLight?.fill ? `fill=${productLight.fill}` : '',
-      ].filter(Boolean).join(' | ');
+        typeof lightingPlan.scene_light === 'string'
+          ? `scene_light=${lightingPlan.scene_light}`
+          : '',
+        typeof productLight.key === 'string' ? `key=${productLight.key}` : '',
+        typeof productLight.rim === 'string' ? `rim=${productLight.rim}` : '',
+        typeof productLight.fill === 'string'
+          ? `fill=${productLight.fill}`
+          : '',
+      ]
+        .filter((value) => value.length > 0)
+        .join(' | ');
 
-      const occlusion = Array.isArray(s?.occlusion_guard || s?.occlusionGuard)
-        ? (s?.occlusion_guard || s?.occlusionGuard).join(', ')
-        : (s?.occlusion_guard || s?.occlusionGuard || '');
+      const occlusionValue = shot.occlusion_guard ?? shot.occlusionGuard;
+      const occlusion = Array.isArray(occlusionValue)
+        ? occlusionValue.join(', ')
+        : typeof occlusionValue === 'string'
+          ? occlusionValue
+          : '';
 
       return {
         index: idx + 1,
-        action: String(s?.action_pose ?? s?.actionPose ?? ''),
+        action: String(shot.action_pose ?? shot.actionPose ?? ''),
         blocking: '',
         camera,
-        framing: String(s?.shot_type ?? s?.shotType ?? ''),
+        framing: String(shot.shot_type ?? shot.shotType ?? ''),
         lighting,
         occlusionNoGo: String(occlusion || ''),
-        continuity: String(s?.goal ?? s?.physical_logic ?? ''),
+        continuity: String(shot.goal ?? shot.physical_logic ?? ''),
       };
     });
   }
@@ -235,17 +446,27 @@ export class HeroStoryboardService {
 
     // 生成前先校验余额：避免“先出图，后扣费失败”
     if (task.userId) {
-      const estimatedCost = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
-      const creditCheck = await this.billing.hasEnoughCreditsForAmount(task.userId, estimatedCost);
+      const estimatedCost = this.billing.creditsForSuccessfulHeroImage({
+        resolution: task.resolution,
+      });
+      const creditCheck = await this.billing.hasEnoughCreditsForAmount(
+        task.userId,
+        estimatedCost,
+      );
       if (!creditCheck.enough) {
-        throw new Error(`积分不足。需要 ${creditCheck.required} 积分，当前余额 ${creditCheck.balance} 积分`);
+        throw new Error(
+          `积分不足。需要 ${creditCheck.required} 积分，当前余额 ${creditCheck.balance} 积分`,
+        );
       }
     }
 
     const systemMeta = await this.resolvePainterSystemInstruction(task);
     const session = this.ensurePainterSession(task, systemMeta);
 
-    const painterRuntime = await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(task.config);
+    const painterRuntime =
+      await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(
+        task.config,
+      );
 
     const refs = this.limitPainterRefs(task);
     const refImages: string[] = [...refs.all].filter(Boolean);
@@ -263,9 +484,15 @@ export class HeroStoryboardService {
       '',
       '[Assets]',
       `garmentImages=${(task.garmentImagePaths || []).filter(Boolean).join(',')}`,
-      task.faceRefPaths?.length ? `faceRefs=${(task.faceRefPaths || []).filter(Boolean).join(',')}` : '',
-      task.styleRefPaths?.length ? `styleRefs=${(task.styleRefPaths || []).filter(Boolean).join(',')}` : '',
-    ].filter(Boolean).join('\n');
+      task.faceRefPaths?.length
+        ? `faceRefs=${(task.faceRefPaths || []).filter(Boolean).join(',')}`
+        : '',
+      task.styleRefPaths?.length
+        ? `styleRefs=${(task.styleRefPaths || []).filter(Boolean).join(',')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const promptForAudit = [
       '[SystemInstruction]',
@@ -273,23 +500,26 @@ export class HeroStoryboardService {
       '',
       '[UserText]',
       userText,
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     // 审计：先记录本次调用的提示词与参考图（即便失败也能复盘）
     const heroAttemptCreatedAt = Date.now();
+    const heroHistory = this.normalizeHeroHistory(task.heroHistory);
     await this.db.updateTask(taskId, {
       heroHistory: [
-        ...((task.heroHistory || []) as any[]),
+        ...heroHistory,
         {
           createdAt: heroAttemptCreatedAt,
           model: painterRuntime?.painterModel,
           promptVersionId: systemMeta.versionId,
           promptSha256: systemMeta.sha256,
-           promptText: promptForAudit,
-           refImages,
-         },
-       ],
-     });
+          promptText: promptForAudit,
+          refImages,
+        },
+      ],
+    });
 
     let imagePath = '';
     let shootLogText = '';
@@ -299,7 +529,9 @@ export class HeroStoryboardService {
       const reserveKey = `reserve:${billingBaseKey}`;
       const settleKey = `settle:${billingBaseKey}`;
       if (task.userId) {
-        const reserveAmount = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
+        const reserveAmount = this.billing.creditsForSuccessfulHeroImage({
+          resolution: task.resolution,
+        });
         await this.billing.reserveOnce({
           taskId,
           userId: task.userId,
@@ -314,11 +546,23 @@ export class HeroStoryboardService {
         history: this.buildSessionHistoryForRequest(session),
         userText,
         images: [
-          ...refs.garment.map((u, idx) => ({ label: `GARMENT_${idx + 1}`, pathOrUrl: u })),
-          ...refs.face.map((u, idx) => ({ label: `FACE_${idx + 1}`, pathOrUrl: u })),
-          ...refs.style.map((u, idx) => ({ label: `STYLE_${idx + 1}`, pathOrUrl: u })),
+          ...refs.garment.map((u, idx) => ({
+            label: `GARMENT_${idx + 1}`,
+            pathOrUrl: u,
+          })),
+          ...refs.face.map((u, idx) => ({
+            label: `FACE_${idx + 1}`,
+            pathOrUrl: u,
+          })),
+          ...refs.style.map((u, idx) => ({
+            label: `STYLE_${idx + 1}`,
+            pathOrUrl: u,
+          })),
         ],
-        options: { aspectRatio: task.aspectRatio || '3:4', imageSize: task.resolution || '2K' },
+        options: {
+          aspectRatio: task.aspectRatio || '3:4',
+          imageSize: task.resolution || '2K',
+        },
         config: painterRuntime,
         context: { taskId, stage: 'hero' },
       });
@@ -326,17 +570,24 @@ export class HeroStoryboardService {
       shootLogText = r.shootLogText;
       this.appendSessionTurn(session, userText, shootLogText);
 
-      if (!this.cos.isEnabled()) {
+      const isHttpUrl = (value: string) =>
+        value.startsWith('http://') || value.startsWith('https://');
+      if (!this.cos.isEnabled() && !isHttpUrl(imagePath)) {
         throw new Error('COS未配置：Hero 输出图必须上传 COS 才能进入后续流程');
       }
 
-      const ext = path.extname(imagePath) || '.jpg';
-      const key = `uploads/tasks/${taskId}/hero/${Date.now()}_${randomUUID()}${ext}`;
-      await this.cos.uploadFile(key, imagePath);
-      const heroUrl = this.cos.getImageUrl(key);
+      let heroUrl = '';
+      if (isHttpUrl(imagePath)) {
+        heroUrl = imagePath;
+      } else {
+        const ext = path.extname(imagePath) || '.jpg';
+        const key = `uploads/tasks/${taskId}/hero/${Date.now()}_${randomUUID()}${ext}`;
+        await this.cos.uploadFile(key, imagePath);
+        heroUrl = this.cos.getImageUrl(key);
+      }
 
-      const nextTaskView = {
-        ...(task as any),
+      const nextTaskView: TaskModel = {
+        ...task,
         heroImageUrl: heroUrl,
         heroShootLog: (shootLogText ?? '').trim(),
         status: 'AWAITING_HERO_APPROVAL' as const,
@@ -352,10 +603,16 @@ export class HeroStoryboardService {
         gridImageUrl: undefined,
         gridShootLog: undefined,
         gridStatus: undefined,
-      } as TaskModel;
+      };
 
-      const nextWorkspace = this.buildHeroWorkspaceSnapshot(nextTaskView, heroAttemptCreatedAt);
-      const heroWorkspaces = this.upsertHeroWorkspace(task.heroWorkspaces, nextWorkspace);
+      const nextWorkspace = this.buildHeroWorkspaceSnapshot(
+        nextTaskView,
+        heroAttemptCreatedAt,
+      );
+      const heroWorkspaces = this.upsertHeroWorkspace(
+        task.heroWorkspaces,
+        nextWorkspace,
+      );
 
       await this.db.updateTask(taskId, {
         heroImageUrl: heroUrl,
@@ -377,7 +634,9 @@ export class HeroStoryboardService {
 
       // 成功结算：固定 1 张（4K=4x），预扣=实扣，通常不会发生退款/补扣
       if (task.userId) {
-        const actual = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
+        const actual = this.billing.creditsForSuccessfulHeroImage({
+          resolution: task.resolution,
+        });
         await this.billing.settleOnce({
           taskId,
           userId: task.userId,
@@ -390,16 +649,19 @@ export class HeroStoryboardService {
 
       // 审计：补全本次 attempt 的产物
       const latest = await this.db.getTask(taskId);
-      const heroHistory = (latest?.heroHistory || []).map((h) => {
-        if (h.createdAt !== heroAttemptCreatedAt) return h;
-        return {
-          ...h,
-          outputImageUrl: heroUrl,
-          outputShootLog: (shootLogText ?? '').trim(),
-        };
-      });
+      const heroHistory = this.normalizeHeroHistory(latest?.heroHistory).map(
+        (h) => {
+          if (h.createdAt !== heroAttemptCreatedAt) return h;
+          return {
+            ...h,
+            outputImageUrl: heroUrl,
+            outputShootLog: (shootLogText ?? '').trim(),
+          };
+        },
+      );
       await this.db.updateTask(taskId, { heroHistory });
-    } catch (e: any) {
+    } catch (e) {
+      const errorMessage = this.resolveErrorMessage(e, 'Hero rendering failed');
       const latestFail = await this.db.getTask(taskId);
       // 失败结算：全额退款（如已预扣）
       try {
@@ -413,13 +675,18 @@ export class HeroStoryboardService {
             reason: '母本失败结算',
           });
         }
-      } catch (err: any) {
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+      } catch (err) {
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
 
-      const heroHistory = (latestFail?.heroHistory || []).map((h) => {
+      const heroHistory = this.normalizeHeroHistory(
+        latestFail?.heroHistory,
+      ).map((h) => {
         if (h.createdAt !== heroAttemptCreatedAt) return h;
-        return { ...h, error: e?.message || 'Hero rendering failed' };
+        return { ...h, error: errorMessage };
       });
       await this.db.updateTask(taskId, { heroHistory });
       throw e;
@@ -429,7 +696,9 @@ export class HeroStoryboardService {
 
     const updated = await this.db.getTask(taskId);
     if (updated?.autoApproveHero) {
-      this.logger.log(`⚡ autoApproveHero enabled, confirming Hero for task ${taskId}`);
+      this.logger.log(
+        `⚡ autoApproveHero enabled, confirming Hero for task ${taskId}`,
+      );
       await this.confirmHero(taskId);
     }
 
@@ -463,10 +732,14 @@ export class HeroStoryboardService {
     });
 
     // 后台异步跑，接口快速返回，前端靠轮询/状态展示
-    this.startHero(taskId).catch(async (err) => {
+    this.startHero(taskId).catch(async (err: unknown) => {
+      const errorMessage = this.resolveErrorMessage(
+        err,
+        'Hero rendering failed',
+      );
       await this.db.updateTask(taskId, {
         status: 'FAILED',
-        error: err?.message || 'Hero rendering failed',
+        error: errorMessage,
       });
       this.logger.error(`Hero re-rendering failed for task ${taskId}`, err);
     });
@@ -505,7 +778,10 @@ export class HeroStoryboardService {
       throw new Error('workflow prompts 未发布：缺少 plannerSystemPrompt');
     }
 
-    const brainRuntime = await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot(task.config);
+    const brainRuntime =
+      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot(
+        task.config,
+      );
 
     try {
       const result = await this.brain.planStoryboard(
@@ -531,10 +807,13 @@ export class HeroStoryboardService {
         { taskId },
       );
 
-      const cards = this.buildStoryboardCardsFromPlan(result.plan, task.shotCount || 4);
+      const cards = this.buildStoryboardCardsFromPlan(
+        result.plan,
+        task.shotCount || 4,
+      );
       const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(task);
-      const nextTaskView = {
-        ...(task as any),
+      const nextTaskView: TaskModel = {
+        ...task,
         heroApprovedAt,
         storyboardPlan: result.plan,
         storyboardCards: cards,
@@ -542,9 +821,15 @@ export class HeroStoryboardService {
         storyboardThinkingProcess: result.thinkingProcess,
         status: 'STORYBOARD_READY' as const,
         error: undefined,
-      } as TaskModel;
+      };
       const heroWorkspaces = activeAttemptCreatedAt
-        ? this.upsertHeroWorkspace(task.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+        ? this.upsertHeroWorkspace(
+            task.heroWorkspaces,
+            this.buildHeroWorkspaceSnapshot(
+              nextTaskView,
+              activeAttemptCreatedAt,
+            ),
+          )
         : task.heroWorkspaces;
 
       await this.db.updateTask(taskId, {
@@ -553,7 +838,7 @@ export class HeroStoryboardService {
         storyboardPlannedAt: Date.now(),
         storyboardThinkingProcess: result.thinkingProcess,
         storyboardHistory: [
-          ...((task.storyboardHistory || []) as any[]),
+          ...this.normalizeStoryboardHistory(task.storyboardHistory),
           {
             createdAt: Date.now(),
             model: brainRuntime?.brainModel,
@@ -571,27 +856,32 @@ export class HeroStoryboardService {
         ...(heroWorkspaces ? { heroWorkspaces } : {}),
       });
 
-      this.logger.log(`✅ Storyboard planned for task ${taskId} (${result.plan.shots.length} shots)`);
+      this.logger.log(
+        `✅ Storyboard planned for task ${taskId} (${result.plan.shots.length} shots)`,
+      );
       return this.db.getTask(taskId);
-    } catch (e: any) {
+    } catch (e) {
+      const errorMessage = this.resolveErrorMessage(
+        e,
+        'Storyboard planning failed',
+      );
       await this.db.updateTask(taskId, {
         status: 'AWAITING_HERO_APPROVAL',
-        error: e?.message || 'Storyboard planning failed',
+        error: errorMessage,
         storyboardHistory: [
-          ...((task.storyboardHistory || []) as any[]),
+          ...this.normalizeStoryboardHistory(task.storyboardHistory),
           {
             createdAt: Date.now(),
             model: brainRuntime?.brainModel,
             systemPromptVersionId: version?.versionId,
             promptSha256: version?.sha256,
             heroImageUrl: task.heroImageUrl,
-            error: e?.message || 'Storyboard planning failed',
+            error: errorMessage,
           },
         ],
       });
       throw e;
     }
-
   }
 
   async replanStoryboard(taskId: string) {
@@ -604,7 +894,11 @@ export class HeroStoryboardService {
       throw new Error('Hero 尚未生成完成');
     }
 
-    if (task.status !== 'STORYBOARD_READY' && task.status !== 'AWAITING_HERO_APPROVAL' && task.status !== 'STORYBOARD_PLANNING') {
+    if (
+      task.status !== 'STORYBOARD_READY' &&
+      task.status !== 'AWAITING_HERO_APPROVAL' &&
+      task.status !== 'STORYBOARD_PLANNING'
+    ) {
       throw new Error(`任务当前状态不允许重新抽卡：${task.status}`);
     }
 
@@ -627,11 +921,17 @@ export class HeroStoryboardService {
     const { version } = await this.workflowPrompts.getActive();
     const plannerSystemPrompt = version?.pack?.plannerSystemPrompt?.trim();
     if (!plannerSystemPrompt) {
-      await this.db.updateTask(taskId, { status: 'STORYBOARD_READY', error: 'workflow prompts 未发布：缺少 plannerSystemPrompt' });
+      await this.db.updateTask(taskId, {
+        status: 'STORYBOARD_READY',
+        error: 'workflow prompts 未发布：缺少 plannerSystemPrompt',
+      });
       throw new Error('workflow prompts 未发布：缺少 plannerSystemPrompt');
     }
 
-    const brainRuntime = await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot(task.config);
+    const brainRuntime =
+      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot(
+        task.config,
+      );
 
     try {
       const result = await this.brain.planStoryboard(
@@ -657,10 +957,13 @@ export class HeroStoryboardService {
         { taskId },
       );
 
-      const cards = this.buildStoryboardCardsFromPlan(result.plan, task.shotCount || 4);
+      const cards = this.buildStoryboardCardsFromPlan(
+        result.plan,
+        task.shotCount || 4,
+      );
       const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(task);
-      const nextTaskView = {
-        ...(task as any),
+      const nextTaskView: TaskModel = {
+        ...task,
         storyboardPlan: result.plan,
         storyboardCards: cards,
         storyboardPlannedAt: Date.now(),
@@ -670,9 +973,15 @@ export class HeroStoryboardService {
         gridImageUrl: undefined,
         gridShootLog: undefined,
         gridStatus: undefined,
-      } as TaskModel;
+      };
       const heroWorkspaces = activeAttemptCreatedAt
-        ? this.upsertHeroWorkspace(task.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+        ? this.upsertHeroWorkspace(
+            task.heroWorkspaces,
+            this.buildHeroWorkspaceSnapshot(
+              nextTaskView,
+              activeAttemptCreatedAt,
+            ),
+          )
         : task.heroWorkspaces;
 
       await this.db.updateTask(taskId, {
@@ -681,7 +990,7 @@ export class HeroStoryboardService {
         storyboardPlannedAt: Date.now(),
         storyboardThinkingProcess: result.thinkingProcess,
         storyboardHistory: [
-          ...((task.storyboardHistory || []) as any[]),
+          ...this.normalizeStoryboardHistory(task.storyboardHistory),
           {
             createdAt: Date.now(),
             model: brainRuntime?.brainModel,
@@ -703,23 +1012,31 @@ export class HeroStoryboardService {
         ...(heroWorkspaces ? { heroWorkspaces } : {}),
       });
 
-      this.logger.log(`🔄 Storyboard replanned for task ${taskId} (${result.plan.shots.length} shots)`);
+      this.logger.log(
+        `🔄 Storyboard replanned for task ${taskId} (${result.plan.shots.length} shots)`,
+      );
       return this.db.getTask(taskId);
-    } catch (e: any) {
+    } catch (e) {
+      const errorMessage = this.resolveErrorMessage(
+        e,
+        'Storyboard replan failed',
+      );
       // 失败回滚，避免把任务留在“抽卡中”或丢失旧结果
       await this.db.updateTask(taskId, {
         ...previousSnapshot,
-        status: previousSnapshot.storyboardPlan ? 'STORYBOARD_READY' : 'AWAITING_HERO_APPROVAL',
-        error: e?.message || 'Storyboard replan failed',
+        status: previousSnapshot.storyboardPlan
+          ? 'STORYBOARD_READY'
+          : 'AWAITING_HERO_APPROVAL',
+        error: errorMessage,
         storyboardHistory: [
-          ...((task.storyboardHistory || []) as any[]),
+          ...this.normalizeStoryboardHistory(task.storyboardHistory),
           {
             createdAt: Date.now(),
             model: brainRuntime?.brainModel,
             systemPromptVersionId: version?.versionId,
             promptSha256: version?.sha256,
             heroImageUrl: task.heroImageUrl,
-            error: e?.message || 'Storyboard replan failed',
+            error: errorMessage,
           },
         ],
       });
@@ -728,7 +1045,10 @@ export class HeroStoryboardService {
   }
 
   private limitPainterRefs(task: TaskModel) {
-    const garments = (task.garmentImagePaths || []).slice(0, this.maxPainterGarmentRefs);
+    const garments = (task.garmentImagePaths || []).slice(
+      0,
+      this.maxPainterGarmentRefs,
+    );
     const faces = (task.faceRefPaths || []).slice(0, this.maxPainterFaceRefs);
     const styles = (task.styleRefPaths || []).slice(0, 1);
     return {
@@ -746,18 +1066,27 @@ export class HeroStoryboardService {
     }
   }
 
-  private recomputeRenderStatus(task: TaskModel): 'SHOTS_RENDERING' | 'STORYBOARD_READY' {
-    const hasPendingShots = (task.heroShots || []).some((s) => s.status === 'PENDING');
+  private recomputeRenderStatus(
+    task: TaskModel,
+  ): 'SHOTS_RENDERING' | 'STORYBOARD_READY' {
+    const hasPendingShots = (task.heroShots || []).some(
+      (s) => s.status === 'PENDING',
+    );
     const hasPendingGrid = task.gridStatus === 'PENDING';
-    return hasPendingShots || hasPendingGrid ? 'SHOTS_RENDERING' : 'STORYBOARD_READY';
+    return hasPendingShots || hasPendingGrid
+      ? 'SHOTS_RENDERING'
+      : 'STORYBOARD_READY';
   }
 
-  private getSelectedOrLatestShotImageUrl(shot: HeroShotOutput | undefined): string | undefined {
+  private getSelectedOrLatestShotImageUrl(
+    shot: HeroShotOutput | undefined,
+  ): string | undefined {
     if (!shot) return undefined;
 
     if (shot.selectedAttemptCreatedAt) {
       const selected = (shot.attempts || []).find(
-        (a) => a.createdAt === shot.selectedAttemptCreatedAt && !!a.outputImageUrl,
+        (a) =>
+          a.createdAt === shot.selectedAttemptCreatedAt && !!a.outputImageUrl,
       );
       if (selected?.outputImageUrl) return selected.outputImageUrl;
     }
@@ -789,22 +1118,34 @@ export class HeroStoryboardService {
       return (s.attempts || []).some((a) => !!a.outputImageUrl);
     });
     if (laterHasAnyImage) {
-      throw new Error(`镜头 #${index} 不能再次生成：后续镜头已生成。为保证连续性，请从最后一个镜头继续`);
+      throw new Error(
+        `镜头 #${index} 不能再次生成：后续镜头已生成。为保证连续性，请从最后一个镜头继续`,
+      );
     }
 
     // 生成前先校验余额：避免“先出图，后扣费失败”
     if (task.userId) {
-      const estimatedCost = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
-      const creditCheck = await this.billing.hasEnoughCreditsForAmount(task.userId, estimatedCost);
+      const estimatedCost = this.billing.creditsForSuccessfulHeroImage({
+        resolution: task.resolution,
+      });
+      const creditCheck = await this.billing.hasEnoughCreditsForAmount(
+        task.userId,
+        estimatedCost,
+      );
       if (!creditCheck.enough) {
-        throw new Error(`积分不足。需要 ${creditCheck.required} 积分，当前余额 ${creditCheck.balance} 积分`);
+        throw new Error(
+          `积分不足。需要 ${creditCheck.required} 积分，当前余额 ${creditCheck.balance} 积分`,
+        );
       }
     }
 
     const systemMeta = await this.resolvePainterSystemInstruction(task);
     const session = this.ensurePainterSession(task, systemMeta);
 
-    const painterRuntime = await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(task.config);
+    const painterRuntime =
+      await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(
+        task.config,
+      );
 
     const refs = this.limitPainterRefs(task);
     const prevShot = (task.heroShots || []).find((s) => s.index === index - 1);
@@ -814,12 +1155,13 @@ export class HeroStoryboardService {
     }
 
     const refImages: string[] = [
-      task.heroImageUrl!,
+      task.heroImageUrl,
       prevShotUrl,
       ...refs.all,
-    ].filter(Boolean) as string[];
+    ].filter(Boolean);
 
-    const shot = task.storyboardPlan?.shots?.[index - 1];
+    const plan = this.normalizeStoryboardPlan(task.storyboardPlan);
+    const shot = plan.shots[index - 1];
     if (!shot) throw new Error(`镜头规划不存在: ${index}`);
 
     const userText = [
@@ -845,7 +1187,9 @@ export class HeroStoryboardService {
       '[Hard Output Requirement]',
       // 经验：某些网关/模型会只回 TEXT；这里强制 IMAGE 必须输出（如有 TEXT 也要同时输出 IMAGE）。
       'Return IMAGE (mandatory). If you output any TEXT, keep it brief and still output IMAGE.',
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const promptForAudit = [
       '[SystemInstruction]',
@@ -853,7 +1197,9 @@ export class HeroStoryboardService {
       '',
       '[UserText]',
       userText,
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const nextShots: HeroShotOutput[] = [
       ...(task.heroShots || []).filter((s) => s.index !== index),
@@ -876,7 +1222,7 @@ export class HeroStoryboardService {
       heroShots: nextShots.map((s) => {
         if (s.index !== index) return s;
         const attempts = [
-          ...((s.attempts || []) as any[]),
+          ...(Array.isArray(s.attempts) ? s.attempts : []),
           {
             createdAt: attemptCreatedAt,
             model: painterRuntime?.painterModel,
@@ -895,7 +1241,9 @@ export class HeroStoryboardService {
     const reserveKey = `reserve:${billingBaseKey}`;
     const settleKey = `settle:${billingBaseKey}`;
     if (task.userId) {
-      const reserveAmount = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
+      const reserveAmount = this.billing.creditsForSuccessfulHeroImage({
+        resolution: task.resolution,
+      });
       await this.billing.reserveOnce({
         taskId,
         userId: task.userId,
@@ -913,47 +1261,75 @@ export class HeroStoryboardService {
         history: this.buildSessionHistoryForRequest(session),
         userText,
         images: [
-          { label: 'HERO', pathOrUrl: task.heroImageUrl! },
-          ...(prevShotUrl ? [{ label: `PREV_SHOT_${index - 1}`, pathOrUrl: prevShotUrl }] : []),
-          ...refs.garment.map((u, idx) => ({ label: `GARMENT_${idx + 1}`, pathOrUrl: u })),
-          ...refs.face.map((u, idx) => ({ label: `FACE_${idx + 1}`, pathOrUrl: u })),
-          ...refs.style.map((u, idx) => ({ label: `STYLE_${idx + 1}`, pathOrUrl: u })),
+          { label: 'HERO', pathOrUrl: task.heroImageUrl },
+          ...(prevShotUrl
+            ? [{ label: `PREV_SHOT_${index - 1}`, pathOrUrl: prevShotUrl }]
+            : []),
+          ...refs.garment.map((u, idx) => ({
+            label: `GARMENT_${idx + 1}`,
+            pathOrUrl: u,
+          })),
+          ...refs.face.map((u, idx) => ({
+            label: `FACE_${idx + 1}`,
+            pathOrUrl: u,
+          })),
+          ...refs.style.map((u, idx) => ({
+            label: `STYLE_${idx + 1}`,
+            pathOrUrl: u,
+          })),
         ],
-        options: { aspectRatio: task.aspectRatio || '3:4', imageSize: task.resolution || '2K' },
+        options: {
+          aspectRatio: task.aspectRatio || '3:4',
+          imageSize: task.resolution || '2K',
+        },
         config: painterRuntime,
         context: { taskId, stage: `shot_${index}` },
       });
       imagePath = r.imagePath;
       shootLogText = r.shootLogText;
       this.appendSessionTurn(session, userText, shootLogText);
-    } catch (e: any) {
+    } catch (e) {
+      const errorMessage = this.resolveErrorMessage(e, 'Shot rendering failed');
       const latestFail = await this.getTaskOrThrow(taskId);
       const updatedShots = (latestFail.heroShots || []).map((s) => {
         if (s.index !== index) return s;
-        const hadPreviousImage = !!s.imageUrl || (s.attempts || []).some((a) => !!a.outputImageUrl);
+        const hadPreviousImage =
+          !!s.imageUrl || (s.attempts || []).some((a) => !!a.outputImageUrl);
         const attempts = (s.attempts || []).map((a) => {
           if (a.createdAt !== attemptCreatedAt) return a;
-          return { ...a, error: e?.message || 'Shot rendering failed' };
+          return { ...a, error: errorMessage };
         });
         // 新一次生成失败，不应该覆盖/抹掉用户已有的可用版本：
         // - 如果已有历史图片，则保持整体 status=RENDERED，只在 attempt 上记录 error
         // - 如果没有任何图片，则 status=FAILED
         return {
           ...s,
-          status: hadPreviousImage ? ('RENDERED' as const) : ('FAILED' as const),
-          error: hadPreviousImage ? undefined : (e?.message || 'Shot rendering failed'),
+          status: hadPreviousImage
+            ? ('RENDERED' as const)
+            : ('FAILED' as const),
+          error: hadPreviousImage ? undefined : errorMessage,
           attempts,
         };
       });
-      const nextStatus = this.recomputeRenderStatus({ ...latestFail, heroShots: updatedShots } as TaskModel);
-      const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(latestFail);
-      const nextTaskView = {
-        ...(latestFail as any),
+      const nextStatus = this.recomputeRenderStatus({
+        ...latestFail,
+        heroShots: updatedShots,
+      });
+      const activeAttemptCreatedAt =
+        this.getActiveHeroAttemptCreatedAt(latestFail);
+      const nextTaskView: TaskModel = {
+        ...latestFail,
         heroShots: updatedShots,
         status: nextStatus,
-      } as TaskModel;
+      };
       const heroWorkspaces = activeAttemptCreatedAt
-        ? this.upsertHeroWorkspace(latestFail.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+        ? this.upsertHeroWorkspace(
+            latestFail.heroWorkspaces,
+            this.buildHeroWorkspaceSnapshot(
+              nextTaskView,
+              activeAttemptCreatedAt,
+            ),
+          )
         : latestFail.heroWorkspaces;
 
       await this.db.updateTask(taskId, {
@@ -974,24 +1350,33 @@ export class HeroStoryboardService {
             reason: `镜头 #${index} 失败结算`,
           });
         }
-      } catch (err: any) {
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+      } catch (err) {
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
 
       throw e;
     }
 
-    if (!this.cos.isEnabled()) {
+    const isHttpUrl = (value: string) =>
+      value.startsWith('http://') || value.startsWith('https://');
+    if (!this.cos.isEnabled() && !isHttpUrl(imagePath)) {
       throw new Error('COS未配置：Shot 输出图必须上传 COS');
     }
 
     let imageUrl = '';
     try {
-      const ext = path.extname(imagePath) || '.jpg';
-      const key = `uploads/tasks/${taskId}/shots/${index}/${Date.now()}_${randomUUID()}${ext}`;
-      await this.cos.uploadFile(key, imagePath);
-      imageUrl = this.cos.getImageUrl(key);
-    } catch (e: any) {
+      if (isHttpUrl(imagePath)) {
+        imageUrl = imagePath;
+      } else {
+        const ext = path.extname(imagePath) || '.jpg';
+        const key = `uploads/tasks/${taskId}/shots/${index}/${Date.now()}_${randomUUID()}${ext}`;
+        await this.cos.uploadFile(key, imagePath);
+        imageUrl = this.cos.getImageUrl(key);
+      }
+    } catch (e) {
       // 上传失败也应退款
       try {
         if (task.userId) {
@@ -1004,51 +1389,64 @@ export class HeroStoryboardService {
             reason: `镜头 #${index} 上传失败结算`,
           });
         }
-      } catch (err: any) {
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+      } catch (err) {
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
       throw e;
     }
 
     const latest = await this.getTaskOrThrow(taskId);
-    const finalShots: HeroShotOutput[] = (latest.heroShots || []).map((s) => {
-      if (s.index !== index) return s;
-      const attempts = (s.attempts || []).map((a) => {
-        if (a.createdAt !== attemptCreatedAt) return a;
-        return {
-          ...a,
-          outputImageUrl: imageUrl,
-          outputShootLog: (shootLogText ?? '').trim(),
-        };
-      });
+    const finalShots: HeroShotOutput[] = (latest.heroShots || [])
+      .map((s) => {
+        if (s.index !== index) return s;
+        const attempts = (s.attempts || []).map((a) => {
+          if (a.createdAt !== attemptCreatedAt) return a;
+          return {
+            ...a,
+            outputImageUrl: imageUrl,
+            outputShootLog: (shootLogText ?? '').trim(),
+          };
+        });
 
-      const hasSelected = Number.isFinite(s.selectedAttemptCreatedAt || 0) && (s.selectedAttemptCreatedAt as any) > 0;
-      const shouldAutoSelect = !hasSelected && !s.imageUrl;
-      return {
-        ...s,
-        status: 'RENDERED' as const,
-        // 不覆盖用户当前选中的版本：默认保留 imageUrl/shootLog
-        ...(shouldAutoSelect ? {
-          imageUrl,
-          shootLog: (shootLogText ?? '').trim(),
-          selectedAttemptCreatedAt: attemptCreatedAt,
-        } : {}),
-        error: undefined,
-        createdAt: Date.now(),
-        attempts,
-      };
-    }).sort((a, b) => a.index - b.index);
+        const hasSelected = Number(s.selectedAttemptCreatedAt || 0) > 0;
+        const shouldAutoSelect = !hasSelected && !s.imageUrl;
+        return {
+          ...s,
+          status: 'RENDERED' as const,
+          // 不覆盖用户当前选中的版本：默认保留 imageUrl/shootLog
+          ...(shouldAutoSelect
+            ? {
+                imageUrl,
+                shootLog: (shootLogText ?? '').trim(),
+                selectedAttemptCreatedAt: attemptCreatedAt,
+              }
+            : {}),
+          error: undefined,
+          createdAt: Date.now(),
+          attempts,
+        };
+      })
+      .sort((a, b) => a.index - b.index);
 
     const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(latest);
-    const nextStatus = this.recomputeRenderStatus({ ...latest, heroShots: finalShots } as TaskModel);
-    const nextTaskView = {
-      ...(latest as any),
+    const nextStatus = this.recomputeRenderStatus({
+      ...latest,
+      heroShots: finalShots,
+    } as TaskModel);
+    const nextTaskView: TaskModel = {
+      ...latest,
       heroShots: finalShots,
       status: nextStatus,
       painterSession: session,
-    } as TaskModel;
+    };
     const heroWorkspaces = activeAttemptCreatedAt
-      ? this.upsertHeroWorkspace(latest.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+      ? this.upsertHeroWorkspace(
+          latest.heroWorkspaces,
+          this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt),
+        )
       : latest.heroWorkspaces;
 
     await this.db.updateTask(taskId, {
@@ -1061,7 +1459,9 @@ export class HeroStoryboardService {
     // 成功结算：固定 1 张（4K=4x），预扣=实扣
     if (task.userId) {
       try {
-        const actual = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
+        const actual = this.billing.creditsForSuccessfulHeroImage({
+          resolution: task.resolution,
+        });
         await this.billing.settleOnce({
           taskId,
           userId: task.userId,
@@ -1070,9 +1470,15 @@ export class HeroStoryboardService {
           actualAmount: actual,
           reason: `镜头 #${index} 结算`,
         });
-      } catch (err: any) {
-        this.logger.error(`Billing failed for task ${taskId} (shot ${index})`, err);
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+      } catch (err) {
+        this.logger.error(
+          `Billing failed for task ${taskId} (shot ${index})`,
+          err,
+        );
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
     }
 
@@ -1088,10 +1494,17 @@ export class HeroStoryboardService {
 
     // 生成前先校验余额：避免“先出图，后扣费失败”
     if (task.userId) {
-      const estimatedCost = this.billing.creditsForSuccessfulHeroGrid({ resolution: task.resolution });
-      const creditCheck = await this.billing.hasEnoughCreditsForAmount(task.userId, estimatedCost);
+      const estimatedCost = this.billing.creditsForSuccessfulHeroGrid({
+        resolution: task.resolution,
+      });
+      const creditCheck = await this.billing.hasEnoughCreditsForAmount(
+        task.userId,
+        estimatedCost,
+      );
       if (!creditCheck.enough) {
-        throw new Error(`积分不足。需要 ${creditCheck.required} 积分，当前余额 ${creditCheck.balance} 积分`);
+        throw new Error(
+          `积分不足。需要 ${creditCheck.required} 积分，当前余额 ${creditCheck.balance} 积分`,
+        );
       }
     }
 
@@ -1103,13 +1516,15 @@ export class HeroStoryboardService {
     const systemMeta = await this.resolvePainterSystemInstruction(task);
     const session = this.ensurePainterSession(task, systemMeta);
 
-    const painterRuntime = await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(task.config);
+    const painterRuntime =
+      await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(
+        task.config,
+      );
 
     const refs = this.limitPainterRefs(task);
-    const refImages: string[] = [
-      task.heroImageUrl!,
-      ...refs.all,
-    ].filter(Boolean) as string[];
+    const refImages: string[] = [task.heroImageUrl, ...refs.all].filter(
+      Boolean,
+    );
 
     const userText = [
       '[Mode]',
@@ -1131,7 +1546,9 @@ export class HeroStoryboardService {
       '',
       '[Hard Output Requirement]',
       'Return IMAGE only. Do not output any TEXT.',
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const promptForAudit = [
       '[SystemInstruction]',
@@ -1139,7 +1556,9 @@ export class HeroStoryboardService {
       '',
       '[UserText]',
       userText,
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const gridAttemptCreatedAt = Date.now();
     const billingBaseKey = `hero:grid:${gridAttemptCreatedAt}`;
@@ -1148,7 +1567,9 @@ export class HeroStoryboardService {
 
     // 扣费策略（B）：先预扣最大额度（拼图固定 2 张），失败则全额退回
     if (task.userId) {
-      const reserveAmount = this.billing.creditsForSuccessfulHeroGrid({ resolution: task.resolution });
+      const reserveAmount = this.billing.creditsForSuccessfulHeroGrid({
+        resolution: task.resolution,
+      });
       await this.billing.reserveOnce({
         taskId,
         userId: task.userId,
@@ -1162,7 +1583,7 @@ export class HeroStoryboardService {
       status: 'SHOTS_RENDERING',
       gridStatus: 'PENDING',
       gridHistory: [
-        ...((task.gridHistory || []) as any[]),
+        ...this.normalizeGridHistory(task.gridHistory),
         {
           createdAt: gridAttemptCreatedAt,
           model: painterRuntime?.painterModel,
@@ -1183,10 +1604,19 @@ export class HeroStoryboardService {
         history: [],
         userText,
         images: [
-          { label: 'HERO', pathOrUrl: task.heroImageUrl! },
-          ...refs.garment.map((u, idx) => ({ label: `GARMENT_${idx + 1}`, pathOrUrl: u })),
-          ...refs.face.map((u, idx) => ({ label: `FACE_${idx + 1}`, pathOrUrl: u })),
-          ...refs.style.map((u, idx) => ({ label: `STYLE_${idx + 1}`, pathOrUrl: u })),
+          { label: 'HERO', pathOrUrl: task.heroImageUrl },
+          ...refs.garment.map((u, idx) => ({
+            label: `GARMENT_${idx + 1}`,
+            pathOrUrl: u,
+          })),
+          ...refs.face.map((u, idx) => ({
+            label: `FACE_${idx + 1}`,
+            pathOrUrl: u,
+          })),
+          ...refs.style.map((u, idx) => ({
+            label: `STYLE_${idx + 1}`,
+            pathOrUrl: u,
+          })),
         ],
         options: {
           aspectRatio: task.aspectRatio || '3:4',
@@ -1199,28 +1629,45 @@ export class HeroStoryboardService {
       imagePath = r.imagePath;
       shootLogText = r.shootLogText;
       // 该调用强制 IMAGE-only，通常不会返回可用的 shootLogText；会话里只记录最小摘要，避免膨胀与干扰后续生成。
-      this.appendSessionTurn(session, `mode=GRID aspectRatio=${task.aspectRatio || '3:4'} resolution=${task.resolution || '2K'}`, '');
-    } catch (e: any) {
+      this.appendSessionTurn(
+        session,
+        `mode=GRID aspectRatio=${task.aspectRatio || '3:4'} resolution=${task.resolution || '2K'}`,
+        '',
+      );
+    } catch (e) {
+      const errorMessage = this.resolveErrorMessage(e, 'Grid rendering failed');
       const latestFail = await this.getTaskOrThrow(taskId);
-      const nextStatus = this.recomputeRenderStatus({ ...latestFail, gridStatus: 'FAILED' } as TaskModel);
-      const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(latestFail);
-      const nextTaskView = {
-        ...(latestFail as any),
+      const nextStatus = this.recomputeRenderStatus({
+        ...latestFail,
+        gridStatus: 'FAILED',
+      });
+      const activeAttemptCreatedAt =
+        this.getActiveHeroAttemptCreatedAt(latestFail);
+      const nextTaskView: TaskModel = {
+        ...latestFail,
         gridStatus: 'FAILED' as const,
         status: nextStatus,
-      } as TaskModel;
+      };
       const heroWorkspaces = activeAttemptCreatedAt
-        ? this.upsertHeroWorkspace(latestFail.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+        ? this.upsertHeroWorkspace(
+            latestFail.heroWorkspaces,
+            this.buildHeroWorkspaceSnapshot(
+              nextTaskView,
+              activeAttemptCreatedAt,
+            ),
+          )
         : latestFail.heroWorkspaces;
 
       await this.db.updateTask(taskId, {
         gridStatus: 'FAILED',
         status: nextStatus,
         ...(heroWorkspaces ? { heroWorkspaces } : {}),
-        gridHistory: (latestFail.gridHistory || []).map((h) => {
-          if (h.createdAt !== gridAttemptCreatedAt) return h;
-          return { ...h, error: e?.message || 'Grid rendering failed' };
-        }),
+        gridHistory: this.normalizeGridHistory(latestFail.gridHistory).map(
+          (h) => {
+            if (h.createdAt !== gridAttemptCreatedAt) return h;
+            return { ...h, error: errorMessage };
+          },
+        ),
       });
 
       // 失败结算：全额退款（如已预扣）
@@ -1235,23 +1682,32 @@ export class HeroStoryboardService {
             reason: '拼图失败结算',
           });
         }
-      } catch (err: any) {
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+      } catch (err) {
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
       throw e;
     }
 
-    if (!this.cos.isEnabled()) {
+    const isHttpUrl = (value: string) =>
+      value.startsWith('http://') || value.startsWith('https://');
+    if (!this.cos.isEnabled() && !isHttpUrl(imagePath)) {
       throw new Error('COS未配置：Grid 输出图必须上传 COS');
     }
 
     let gridUrl = '';
     try {
-      const ext = path.extname(imagePath) || '.jpg';
-      const key = `uploads/tasks/${taskId}/grid/${Date.now()}_${randomUUID()}${ext}`;
-      await this.cos.uploadFile(key, imagePath);
-      gridUrl = this.cos.getImageUrl(key);
-    } catch (e: any) {
+      if (isHttpUrl(imagePath)) {
+        gridUrl = imagePath;
+      } else {
+        const ext = path.extname(imagePath) || '.jpg';
+        const key = `uploads/tasks/${taskId}/grid/${Date.now()}_${randomUUID()}${ext}`;
+        await this.cos.uploadFile(key, imagePath);
+        gridUrl = this.cos.getImageUrl(key);
+      }
+    } catch (e) {
       // 上传失败也应退款
       try {
         if (task.userId) {
@@ -1264,34 +1720,44 @@ export class HeroStoryboardService {
             reason: '拼图上传失败结算',
           });
         }
-      } catch (err: any) {
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+      } catch (err) {
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
       throw e;
     }
 
     const latest = await this.getTaskOrThrow(taskId);
     const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(latest);
-    const nextTaskView = {
-      ...(latest as any),
+    const nextStatus = this.recomputeRenderStatus({
+      ...latest,
+      gridStatus: 'RENDERED',
+    });
+    const nextTaskView: TaskModel = {
+      ...latest,
       gridStatus: 'RENDERED' as const,
       gridImageUrl: gridUrl,
       gridShootLog: (shootLogText ?? '').trim(),
       painterSession: session,
-      status: this.recomputeRenderStatus({ ...latest, gridStatus: 'RENDERED' } as TaskModel),
-    } as TaskModel;
+      status: nextStatus,
+    };
     const heroWorkspaces = activeAttemptCreatedAt
-      ? this.upsertHeroWorkspace(latest.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+      ? this.upsertHeroWorkspace(
+          latest.heroWorkspaces,
+          this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt),
+        )
       : latest.heroWorkspaces;
 
     await this.db.updateTask(taskId, {
       gridStatus: 'RENDERED',
       gridImageUrl: gridUrl,
       gridShootLog: (shootLogText ?? '').trim(),
-      status: this.recomputeRenderStatus({ ...latest, gridStatus: 'RENDERED' } as TaskModel),
+      status: nextStatus,
       painterSession: session,
       ...(heroWorkspaces ? { heroWorkspaces } : {}),
-      gridHistory: (latest.gridHistory || []).map((h) => {
+      gridHistory: this.normalizeGridHistory(latest.gridHistory).map((h) => {
         if (h.createdAt !== gridAttemptCreatedAt) return h;
         return {
           ...h,
@@ -1304,7 +1770,9 @@ export class HeroStoryboardService {
     // 成功结算：固定 2 张（4K=4x），预扣=实扣
     if (task.userId) {
       try {
-        const actual = this.billing.creditsForSuccessfulHeroGrid({ resolution: task.resolution });
+        const actual = this.billing.creditsForSuccessfulHeroGrid({
+          resolution: task.resolution,
+        });
         await this.billing.settleOnce({
           taskId,
           userId: task.userId,
@@ -1313,9 +1781,12 @@ export class HeroStoryboardService {
           actualAmount: actual,
           reason: '拼图结算',
         });
-      } catch (err: any) {
+      } catch (err) {
         this.logger.error(`Billing failed for task ${taskId} (grid)`, err);
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
     }
 
@@ -1365,36 +1836,60 @@ export class HeroStoryboardService {
       throw new Error(`镜头不存在: ${index}`);
     }
 
-    const originalShot = task.storyboardPlan.shots[index - 1] || {};
-    const nextShot = { ...originalShot } as any;
+    const normalizedPlan = this.normalizeStoryboardPlan(task.storyboardPlan);
+    const originalShot = normalizedPlan.shots[index - 1] || {};
+    const nextShot: StoryboardPlanShot = { ...originalShot };
 
-    if (typeof patch.scene_subarea === 'string') nextShot.scene_subarea = patch.scene_subarea;
-    if (typeof patch.action_pose === 'string') nextShot.action_pose = patch.action_pose;
-    if (typeof patch.shot_type === 'string') nextShot.shot_type = patch.shot_type;
+    if (typeof patch.scene_subarea === 'string')
+      nextShot.scene_subarea = patch.scene_subarea;
+    if (typeof patch.action_pose === 'string')
+      nextShot.action_pose = patch.action_pose;
+    if (typeof patch.shot_type === 'string')
+      nextShot.shot_type = patch.shot_type;
     if (typeof patch.goal === 'string') nextShot.goal = patch.goal;
-    if (typeof patch.physical_logic === 'string') nextShot.physical_logic = patch.physical_logic;
-    if (typeof patch.composition_notes === 'string') nextShot.composition_notes = patch.composition_notes;
-    if (typeof patch.exec_instruction_text === 'string') nextShot.exec_instruction_text = patch.exec_instruction_text;
+    if (typeof patch.physical_logic === 'string')
+      nextShot.physical_logic = patch.physical_logic;
+    if (typeof patch.composition_notes === 'string')
+      nextShot.composition_notes = patch.composition_notes;
+    if (typeof patch.exec_instruction_text === 'string')
+      nextShot.exec_instruction_text = patch.exec_instruction_text;
 
-    if ('occlusion_guard' in patch) nextShot.occlusion_guard = this.normalizeStringArray(patch.occlusion_guard);
-    if ('ref_requirements' in patch) nextShot.ref_requirements = this.normalizeStringArray(patch.ref_requirements);
-    if ('universal_requirements' in patch) nextShot.universal_requirements = this.normalizeStringArray(patch.universal_requirements);
+    if ('occlusion_guard' in patch)
+      nextShot.occlusion_guard = this.normalizeStringArray(
+        patch.occlusion_guard,
+      );
+    if ('ref_requirements' in patch)
+      nextShot.ref_requirements = this.normalizeStringArray(
+        patch.ref_requirements,
+      );
+    if ('universal_requirements' in patch)
+      nextShot.universal_requirements = this.normalizeStringArray(
+        patch.universal_requirements,
+      );
 
     if (patch.lighting_plan) {
       const prevLighting = nextShot.lighting_plan || {};
       const prevProduct = prevLighting.product_light || {};
       nextShot.lighting_plan = {
         ...prevLighting,
-        ...(typeof patch.lighting_plan.scene_light === 'string' ? { scene_light: patch.lighting_plan.scene_light } : {}),
+        ...(typeof patch.lighting_plan.scene_light === 'string'
+          ? { scene_light: patch.lighting_plan.scene_light }
+          : {}),
         ...(patch.lighting_plan.product_light
           ? {
-            product_light: {
-              ...prevProduct,
-              ...(typeof patch.lighting_plan.product_light.key === 'string' ? { key: patch.lighting_plan.product_light.key } : {}),
-              ...(typeof patch.lighting_plan.product_light.rim === 'string' ? { rim: patch.lighting_plan.product_light.rim } : {}),
-              ...(typeof patch.lighting_plan.product_light.fill === 'string' ? { fill: patch.lighting_plan.product_light.fill } : {}),
-            },
-          }
+              product_light: {
+                ...prevProduct,
+                ...(typeof patch.lighting_plan.product_light.key === 'string'
+                  ? { key: patch.lighting_plan.product_light.key }
+                  : {}),
+                ...(typeof patch.lighting_plan.product_light.rim === 'string'
+                  ? { rim: patch.lighting_plan.product_light.rim }
+                  : {}),
+                ...(typeof patch.lighting_plan.product_light.fill === 'string'
+                  ? { fill: patch.lighting_plan.product_light.fill }
+                  : {}),
+              },
+            }
           : {}),
       };
     }
@@ -1403,20 +1898,31 @@ export class HeroStoryboardService {
       const prevCamera = nextShot.camera_choice || {};
       nextShot.camera_choice = {
         ...prevCamera,
-        ...(typeof patch.camera_choice.system === 'string' ? { system: patch.camera_choice.system } : {}),
-        ...(typeof patch.camera_choice.model === 'string' ? { model: patch.camera_choice.model } : {}),
-        ...(typeof patch.camera_choice.f_stop === 'string' ? { f_stop: patch.camera_choice.f_stop } : {}),
+        ...(typeof patch.camera_choice.system === 'string'
+          ? { system: patch.camera_choice.system }
+          : {}),
+        ...(typeof patch.camera_choice.model === 'string'
+          ? { model: patch.camera_choice.model }
+          : {}),
+        ...(typeof patch.camera_choice.f_stop === 'string'
+          ? { f_stop: patch.camera_choice.f_stop }
+          : {}),
       };
     }
 
-    const nextPlan = {
-      ...(task.storyboardPlan as any),
-      shots: (task.storyboardPlan.shots || []).map((s: any, idx: number) => (idx === index - 1 ? nextShot : s)),
+    const nextPlan: StoryboardPlan = {
+      ...normalizedPlan,
+      shots: normalizedPlan.shots.map((shot, idx) =>
+        idx === index - 1 ? nextShot : shot,
+      ),
     };
 
-    const nextCards = this.buildStoryboardCardsFromPlan(nextPlan, task.shotCount || nextPlan?.resolved_params?.shot_count || 4);
+    const nextCards = this.buildStoryboardCardsFromPlan(
+      nextPlan,
+      task.shotCount || nextPlan?.resolved_params?.shot_count || 4,
+    );
 
-    const patchAudit = {
+    const patchAudit: StoryboardHistoryEntry = {
       createdAt: Date.now(),
       event: 'manual_shot_patch',
       shotIndex: index,
@@ -1429,15 +1935,19 @@ export class HeroStoryboardService {
       storyboardPlan: nextPlan,
       storyboardCards: nextCards,
       storyboardHistory: [
-        ...((task.storyboardHistory || []) as any[]),
-        patchAudit as any,
+        ...this.normalizeStoryboardHistory(task.storyboardHistory),
+        patchAudit,
       ],
     });
 
     return this.db.getTask(taskId);
   }
 
-  async selectShotVariant(taskId: string, index: number, attemptCreatedAt: number) {
+  async selectShotVariant(
+    taskId: string,
+    index: number,
+    attemptCreatedAt: number,
+  ) {
     const task = await this.getTaskOrThrow(taskId);
     if ((task.workflow || 'legacy') !== 'hero_storyboard') {
       throw new Error(`Task ${taskId} workflow is not hero_storyboard`);
@@ -1448,32 +1958,42 @@ export class HeroStoryboardService {
       throw new Error(`镜头不存在: ${index}`);
     }
 
-    const attempt = (shot.attempts || []).find((a) => a.createdAt === attemptCreatedAt);
+    const attempt = (shot.attempts || []).find(
+      (a) => a.createdAt === attemptCreatedAt,
+    );
     if (!attempt?.outputImageUrl) {
       throw new Error('该版本尚未生成完成（缺少 outputImageUrl）');
     }
 
-    const nextShots: HeroShotOutput[] = (task.heroShots || []).map((s) => {
-      if (s.index !== index) return s;
-      return {
-        ...s,
-        status: 'RENDERED' as const,
-        selectedAttemptCreatedAt: attemptCreatedAt,
-        imageUrl: attempt.outputImageUrl,
-        shootLog: (attempt.outputShootLog ?? '').trim() || s.shootLog,
-        error: undefined,
-      };
-    }).sort((a, b) => a.index - b.index);
+    const nextShots: HeroShotOutput[] = (task.heroShots || [])
+      .map((s) => {
+        if (s.index !== index) return s;
+        return {
+          ...s,
+          status: 'RENDERED' as const,
+          selectedAttemptCreatedAt: attemptCreatedAt,
+          imageUrl: attempt.outputImageUrl,
+          shootLog: (attempt.outputShootLog ?? '').trim() || s.shootLog,
+          error: undefined,
+        };
+      })
+      .sort((a, b) => a.index - b.index);
 
-    const nextStatus = this.recomputeRenderStatus({ ...task, heroShots: nextShots } as TaskModel);
+    const nextStatus = this.recomputeRenderStatus({
+      ...task,
+      heroShots: nextShots,
+    });
     const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(task);
-    const nextTaskView = {
-      ...(task as any),
+    const nextTaskView: TaskModel = {
+      ...task,
       heroShots: nextShots,
       status: nextStatus,
-    } as TaskModel;
+    };
     const heroWorkspaces = activeAttemptCreatedAt
-      ? this.upsertHeroWorkspace(task.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+      ? this.upsertHeroWorkspace(
+          task.heroWorkspaces,
+          this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt),
+        )
       : task.heroWorkspaces;
 
     await this.db.updateTask(taskId, {
@@ -1493,12 +2013,18 @@ export class HeroStoryboardService {
 
     const next = this.sanitizeUserShootLogText(shootLogText);
     const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(task);
-    const nextTaskView = { ...(task as any), heroShootLog: next } as TaskModel;
+    const nextTaskView: TaskModel = { ...task, heroShootLog: next };
     const heroWorkspaces = activeAttemptCreatedAt
-      ? this.upsertHeroWorkspace(task.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+      ? this.upsertHeroWorkspace(
+          task.heroWorkspaces,
+          this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt),
+        )
       : task.heroWorkspaces;
 
-    await this.db.updateTask(taskId, { heroShootLog: next, ...(heroWorkspaces ? { heroWorkspaces } : {}) });
+    await this.db.updateTask(taskId, {
+      heroShootLog: next,
+      ...(heroWorkspaces ? { heroWorkspaces } : {}),
+    });
     return this.db.getTask(taskId);
   }
 
@@ -1510,50 +2036,84 @@ export class HeroStoryboardService {
 
     const next = this.sanitizeUserShootLogText(shootLogText);
     const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(task);
-    const nextTaskView = { ...(task as any), gridShootLog: next } as TaskModel;
+    const nextTaskView: TaskModel = { ...task, gridShootLog: next };
     const heroWorkspaces = activeAttemptCreatedAt
-      ? this.upsertHeroWorkspace(task.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+      ? this.upsertHeroWorkspace(
+          task.heroWorkspaces,
+          this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt),
+        )
       : task.heroWorkspaces;
 
-    await this.db.updateTask(taskId, { gridShootLog: next, ...(heroWorkspaces ? { heroWorkspaces } : {}) });
+    await this.db.updateTask(taskId, {
+      gridShootLog: next,
+      ...(heroWorkspaces ? { heroWorkspaces } : {}),
+    });
     return this.db.getTask(taskId);
   }
 
-  async updateShotShootLog(taskId: string, index: number, shootLogText: string) {
+  async updateShotShootLog(
+    taskId: string,
+    index: number,
+    shootLogText: string,
+  ) {
     const task = await this.getTaskOrThrow(taskId);
     if ((task.workflow || 'legacy') !== 'hero_storyboard') {
       throw new Error(`Task ${taskId} workflow is not hero_storyboard`);
     }
 
     const next = this.sanitizeUserShootLogText(shootLogText);
-    const shots: HeroShotOutput[] = (task.heroShots || []).map((s) => {
-      if (s.index !== index) return s;
+    const shots: HeroShotOutput[] = (task.heroShots || [])
+      .map((s) => {
+        if (s.index !== index) return s;
 
-      const selectedAttemptCreatedAt = s.selectedAttemptCreatedAt;
-      const attempts = (s.attempts || []).map((a) => {
-        if (selectedAttemptCreatedAt && a.createdAt === selectedAttemptCreatedAt) {
-          return { ...a, outputShootLog: next };
-        }
-        if (!selectedAttemptCreatedAt && s.imageUrl && a.outputImageUrl && a.outputImageUrl === s.imageUrl) {
-          return { ...a, outputShootLog: next };
-        }
-        return a;
-      });
+        const selectedAttemptCreatedAt = s.selectedAttemptCreatedAt;
+        const attempts = (s.attempts || []).map((a) => {
+          if (
+            selectedAttemptCreatedAt &&
+            a.createdAt === selectedAttemptCreatedAt
+          ) {
+            return { ...a, outputShootLog: next };
+          }
+          if (
+            !selectedAttemptCreatedAt &&
+            s.imageUrl &&
+            a.outputImageUrl &&
+            a.outputImageUrl === s.imageUrl
+          ) {
+            return { ...a, outputShootLog: next };
+          }
+          return a;
+        });
 
-      return { ...s, shootLog: next, attempts };
-    }).sort((a, b) => a.index - b.index);
+        return { ...s, shootLog: next, attempts };
+      })
+      .sort((a, b) => a.index - b.index);
 
     const activeAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(task);
-    const nextTaskView = { ...(task as any), heroShots: shots } as TaskModel;
+    const nextTaskView: TaskModel = { ...task, heroShots: shots };
     const heroWorkspaces = activeAttemptCreatedAt
-      ? this.upsertHeroWorkspace(task.heroWorkspaces, this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt))
+      ? this.upsertHeroWorkspace(
+          task.heroWorkspaces,
+          this.buildHeroWorkspaceSnapshot(nextTaskView, activeAttemptCreatedAt),
+        )
       : task.heroWorkspaces;
 
-    await this.db.updateTask(taskId, { heroShots: shots, ...(heroWorkspaces ? { heroWorkspaces } : {}) });
+    await this.db.updateTask(taskId, {
+      heroShots: shots,
+      ...(heroWorkspaces ? { heroWorkspaces } : {}),
+    });
     return this.db.getTask(taskId);
   }
 
-  async editHero(taskId: string, edit: { maskImage: string; referenceImages?: string[]; prompt: string; editMode?: string }) {
+  async editHero(
+    taskId: string,
+    edit: {
+      maskImage: string;
+      referenceImages?: string[];
+      prompt: string;
+      editMode?: string;
+    },
+  ) {
     const task = await this.getTaskOrThrow(taskId);
     if ((task.workflow || 'legacy') !== 'hero_storyboard') {
       throw new Error(`Task ${taskId} workflow is not hero_storyboard`);
@@ -1563,17 +2123,28 @@ export class HeroStoryboardService {
     }
 
     // 生成中不允许编辑，避免并发写导致“工作区错乱”
-    if (task.status === 'HERO_RENDERING' || task.status === 'STORYBOARD_PLANNING' || task.status === 'SHOTS_RENDERING') {
-      throw new Error(`任务当前状态不允许编辑母版：${task.status}（生成中，请稍后再试）`);
+    if (
+      task.status === 'HERO_RENDERING' ||
+      task.status === 'STORYBOARD_PLANNING' ||
+      task.status === 'SHOTS_RENDERING'
+    ) {
+      throw new Error(
+        `任务当前状态不允许编辑母版：${task.status}（生成中，请稍后再试）`,
+      );
     }
 
     const systemMeta = await this.resolvePainterSystemInstruction(task);
     const baseSession = this.ensurePainterSession(task, systemMeta);
     const nextSession = this.clonePainterSession(baseSession);
 
-    const painterRuntime = await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(task.config);
+    const painterRuntime =
+      await this.modelConfigResolver.resolvePainterRuntimeFromSnapshot(
+        task.config,
+      );
 
-    const safeRefs = Array.isArray(edit.referenceImages) ? edit.referenceImages : [];
+    const safeRefs = Array.isArray(edit.referenceImages)
+      ? edit.referenceImages
+      : [];
     const referenceImages = safeRefs
       .map((v) => (typeof v === 'string' ? v.trim() : ''))
       .filter(Boolean)
@@ -1591,7 +2162,9 @@ export class HeroStoryboardService {
       '[Anchor URLs]',
       `baseHeroUrl=${task.heroImageUrl}`,
       `maskUrl=${String(edit.maskImage || '').trim()}`,
-      referenceImages.length ? `referenceUrls=${referenceImages.join(',')}` : '',
+      referenceImages.length
+        ? `referenceUrls=${referenceImages.join(',')}`
+        : '',
       '',
       '[User Edit Instruction]',
       String(edit.prompt || '').trim(),
@@ -1600,7 +2173,10 @@ export class HeroStoryboardService {
       (task.requirements || '').trim(),
       '',
       `[Params] aspectRatio=${task.aspectRatio || '3:4'} resolution=${task.resolution || '2K'} scene=${task.scene || 'Auto'}`,
-    ].map((v) => String(v).trimEnd()).filter((v) => v.length > 0).join('\n');
+    ]
+      .map((v) => String(v).trimEnd())
+      .filter((v) => v.length > 0)
+      .join('\n');
 
     const promptForAudit = [
       '[SystemInstruction]',
@@ -1608,14 +2184,21 @@ export class HeroStoryboardService {
       '',
       '[UserText]',
       userText,
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     // 审计：先记录本次调用（即便失败也能复盘）
     const attemptCreatedAt = Date.now();
-    const refImages = [task.heroImageUrl, edit.maskImage, ...referenceImages].filter(Boolean);
+    const refImages = [
+      task.heroImageUrl,
+      edit.maskImage,
+      ...referenceImages,
+    ].filter(Boolean);
+    const heroHistory = this.normalizeHeroHistory(task.heroHistory);
     await this.db.updateTask(taskId, {
       heroHistory: [
-        ...((task.heroHistory || []) as any[]),
+        ...heroHistory,
         {
           createdAt: attemptCreatedAt,
           model: painterRuntime?.painterModel,
@@ -1635,7 +2218,9 @@ export class HeroStoryboardService {
       const reserveKey = `reserve:${billingBaseKey}`;
       const settleKey = `settle:${billingBaseKey}`;
       if (task.userId) {
-        const reserveAmount = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
+        const reserveAmount = this.billing.creditsForSuccessfulHeroImage({
+          resolution: task.resolution,
+        });
         await this.billing.reserveOnce({
           taskId,
           userId: task.userId,
@@ -1650,9 +2235,16 @@ export class HeroStoryboardService {
         history: this.buildSessionHistoryForRequest(baseSession),
         userText,
         images: [
-          { label: 'BASE_HERO', pathOrUrl: task.heroImageUrl!, allowCi: false },
-          { label: 'MASK', pathOrUrl: String(edit.maskImage || '').trim(), allowCi: false },
-          ...referenceImages.map((u, idx) => ({ label: `REF_${idx + 1}`, pathOrUrl: u })),
+          { label: 'BASE_HERO', pathOrUrl: task.heroImageUrl, allowCi: false },
+          {
+            label: 'MASK',
+            pathOrUrl: String(edit.maskImage || '').trim(),
+            allowCi: false,
+          },
+          ...referenceImages.map((u, idx) => ({
+            label: `REF_${idx + 1}`,
+            pathOrUrl: u,
+          })),
         ],
         options: {
           aspectRatio: task.aspectRatio || '3:4',
@@ -1666,26 +2258,36 @@ export class HeroStoryboardService {
       shootLogText = r.shootLogText;
       this.appendSessionTurn(nextSession, userText, shootLogText);
 
-      if (!this.cos.isEnabled()) {
+      const isHttpUrl = (value: string) =>
+        value.startsWith('http://') || value.startsWith('https://');
+      if (!this.cos.isEnabled() && !isHttpUrl(imagePath)) {
         throw new Error('COS未配置：Hero 输出图必须上传 COS 才能进入后续流程');
       }
 
-      const ext = path.extname(imagePath) || '.jpg';
-      const key = `uploads/tasks/${taskId}/hero/edits/${attemptCreatedAt}_${randomUUID()}${ext}`;
-      await this.cos.uploadFile(key, imagePath);
-      const heroUrl = this.cos.getImageUrl(key);
+      let heroUrl = '';
+      if (isHttpUrl(imagePath)) {
+        heroUrl = imagePath;
+      } else {
+        const ext = path.extname(imagePath) || '.jpg';
+        const key = `uploads/tasks/${taskId}/hero/edits/${attemptCreatedAt}_${randomUUID()}${ext}`;
+        await this.cos.uploadFile(key, imagePath);
+        heroUrl = this.cos.getImageUrl(key);
+      }
 
       // 旧工作区快照：用于 AB 切回去（切换时整套切换）
       const prevAttemptCreatedAt = this.getActiveHeroAttemptCreatedAt(task);
       let heroWorkspaces = task.heroWorkspaces;
       if (prevAttemptCreatedAt) {
-        const prevSnapshot = this.buildHeroWorkspaceSnapshot({ ...(task as any), painterSession: baseSession } as TaskModel, prevAttemptCreatedAt);
+        const prevSnapshot = this.buildHeroWorkspaceSnapshot(
+          { ...task, painterSession: baseSession },
+          prevAttemptCreatedAt,
+        );
         heroWorkspaces = this.upsertHeroWorkspace(heroWorkspaces, prevSnapshot);
       }
 
       // 新工作区（2.b）：编辑成功后回到“待确认母版”，后续（分镜/镜头/拼图）在新工作区重新生成
-      const nextTaskView = {
-        ...(task as any),
+      const nextTaskView: TaskModel = {
+        ...task,
         heroImageUrl: heroUrl,
         heroShootLog: (shootLogText ?? '').trim(),
         status: 'AWAITING_HERO_APPROVAL' as const,
@@ -1700,9 +2302,12 @@ export class HeroStoryboardService {
         gridImageUrl: undefined,
         gridShootLog: undefined,
         gridStatus: undefined,
-      } as TaskModel;
+      };
 
-      const nextWorkspace = this.buildHeroWorkspaceSnapshot(nextTaskView, attemptCreatedAt);
+      const nextWorkspace = this.buildHeroWorkspaceSnapshot(
+        nextTaskView,
+        attemptCreatedAt,
+      );
       heroWorkspaces = this.upsertHeroWorkspace(heroWorkspaces, nextWorkspace);
 
       await this.db.updateTask(taskId, {
@@ -1724,7 +2329,9 @@ export class HeroStoryboardService {
       });
 
       if (task.userId) {
-        const actual = this.billing.creditsForSuccessfulHeroImage({ resolution: task.resolution });
+        const actual = this.billing.creditsForSuccessfulHeroImage({
+          resolution: task.resolution,
+        });
         await this.billing.settleOnce({
           taskId,
           userId: task.userId,
@@ -1737,16 +2344,19 @@ export class HeroStoryboardService {
 
       // 审计：补全本次 attempt 的产物
       const latest = await this.db.getTask(taskId);
-      const heroHistory = (latest?.heroHistory || []).map((h) => {
-        if (h.createdAt !== attemptCreatedAt) return h;
-        return {
-          ...h,
-          outputImageUrl: heroUrl,
-          outputShootLog: (shootLogText ?? '').trim(),
-        };
-      });
+      const heroHistory = this.normalizeHeroHistory(latest?.heroHistory).map(
+        (h) => {
+          if (h.createdAt !== attemptCreatedAt) return h;
+          return {
+            ...h,
+            outputImageUrl: heroUrl,
+            outputShootLog: (shootLogText ?? '').trim(),
+          };
+        },
+      );
       await this.db.updateTask(taskId, { heroHistory });
-    } catch (e: any) {
+    } catch (e) {
+      const errorMessage = this.resolveErrorMessage(e, 'Hero editing failed');
       const latestFail = await this.db.getTask(taskId);
       // 失败结算：全额退款（如已预扣）
       try {
@@ -1760,13 +2370,18 @@ export class HeroStoryboardService {
             reason: '编辑母版失败结算',
           });
         }
-      } catch (err: any) {
-        await this.billing.markBillingError(taskId, err?.message || '结算失败');
+      } catch (err) {
+        await this.billing.markBillingError(
+          taskId,
+          this.resolveErrorMessage(err, '结算失败'),
+        );
       }
 
-      const heroHistory = (latestFail?.heroHistory || []).map((h) => {
+      const heroHistory = this.normalizeHeroHistory(
+        latestFail?.heroHistory,
+      ).map((h) => {
         if (h.createdAt !== attemptCreatedAt) return h;
-        return { ...h, error: e?.message || 'Hero editing failed' };
+        return { ...h, error: errorMessage };
       });
       await this.db.updateTask(taskId, { heroHistory });
       throw e;
@@ -1785,16 +2400,26 @@ export class HeroStoryboardService {
     }
 
     // 生成中不允许切换，避免并发写导致“工作区错乱”
-    if (task.status === 'HERO_RENDERING' || task.status === 'STORYBOARD_PLANNING' || task.status === 'SHOTS_RENDERING') {
-      throw new Error(`任务当前状态不允许切换母版版本：${task.status}（生成中，请稍后再试）`);
+    if (
+      task.status === 'HERO_RENDERING' ||
+      task.status === 'STORYBOARD_PLANNING' ||
+      task.status === 'SHOTS_RENDERING'
+    ) {
+      throw new Error(
+        `任务当前状态不允许切换母版版本：${task.status}（生成中，请稍后再试）`,
+      );
     }
 
-    const target = task.heroHistory.find((h) => Number(h?.createdAt) === attemptCreatedAt);
+    const target = task.heroHistory.find(
+      (h) => Number(h?.createdAt) === attemptCreatedAt,
+    );
     if (!target?.outputImageUrl) {
       throw new Error('该版本尚未生成完成（缺少 outputImageUrl）');
     }
 
-    const existingWorkspace = (task.heroWorkspaces || []).find((w) => Number(w?.attemptCreatedAt) === Number(attemptCreatedAt));
+    const existingWorkspace = (task.heroWorkspaces || []).find(
+      (w) => Number(w?.attemptCreatedAt) === Number(attemptCreatedAt),
+    );
     const fallbackWorkspace: HeroWorkspaceSnapshot = existingWorkspace || {
       attemptCreatedAt,
       updatedAt: Date.now(),
@@ -1817,6 +2442,13 @@ export class HeroStoryboardService {
     const heroWorkspaces = existingWorkspace
       ? task.heroWorkspaces
       : this.upsertHeroWorkspace(task.heroWorkspaces, fallbackWorkspace);
+    const fallbackStoryboardHistory = Array.isArray(
+      fallbackWorkspace.storyboardHistory,
+    )
+      ? fallbackWorkspace.storyboardHistory.map(
+          (entry) => this.toRecord(entry) as StoryboardHistoryEntry,
+        )
+      : undefined;
 
     await this.db.updateTask(taskId, {
       heroImageUrl: fallbackWorkspace.heroImageUrl,
@@ -1829,7 +2461,7 @@ export class HeroStoryboardService {
       storyboardCards: fallbackWorkspace.storyboardCards,
       storyboardPlannedAt: fallbackWorkspace.storyboardPlannedAt,
       storyboardThinkingProcess: fallbackWorkspace.storyboardThinkingProcess,
-      storyboardHistory: fallbackWorkspace.storyboardHistory as any,
+      storyboardHistory: fallbackStoryboardHistory,
       heroShots: fallbackWorkspace.heroShots,
       gridImageUrl: fallbackWorkspace.gridImageUrl,
       gridShootLog: fallbackWorkspace.gridShootLog,

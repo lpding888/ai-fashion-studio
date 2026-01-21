@@ -13,20 +13,26 @@ import {
   Logger,
   Req,
 } from '@nestjs/common';
-import { AnyFilesInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import {
+  AnyFilesInterceptor,
+  FilesInterceptor,
+} from '@nestjs/platform-express';
 import { TaskService } from './task.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import * as crypto from 'crypto';
+import type { Request } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
-import type { UserModel } from '../db/models';
+import type { TaskModel, UserModel } from '../db/models';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { z } from 'zod';
 import { TaskAccessService } from './task-access.service';
 
 const MAX_TOTAL_IMAGES = 14;
+const MAX_DIRECT_SHOTS = 6;
+const DIRECT_LAYOUT_MODES = ['Individual', 'Grid'] as const;
 
 const ClaimTaskBodySchema = z.object({
   claimToken: z.string().trim().min(1, 'claimToken 不能为空'),
@@ -43,21 +49,23 @@ const GetTasksQuerySchema = z
     // Optional search keyword (id/requirements). ADMIN-only semantics are handled in service.
     q: z.string().trim().max(200).optional(),
     // Optional status filter. (Keep explicit enum to avoid typos silently failing.)
-    status: z.enum([
-      'DRAFT',
-      'PENDING',
-      'QUEUED',
-      'PLANNING',
-      'AWAITING_APPROVAL',
-      'RENDERING',
-      'COMPLETED',
-      'FAILED',
-      'HERO_RENDERING',
-      'AWAITING_HERO_APPROVAL',
-      'STORYBOARD_PLANNING',
-      'STORYBOARD_READY',
-      'SHOTS_RENDERING',
-    ]).optional(),
+    status: z
+      .enum([
+        'DRAFT',
+        'PENDING',
+        'QUEUED',
+        'PLANNING',
+        'AWAITING_APPROVAL',
+        'RENDERING',
+        'COMPLETED',
+        'FAILED',
+        'HERO_RENDERING',
+        'AWAITING_HERO_APPROVAL',
+        'STORYBOARD_PLANNING',
+        'STORYBOARD_READY',
+        'SHOTS_RENDERING',
+      ])
+      .optional(),
   })
   .passthrough();
 
@@ -75,19 +83,34 @@ const CreateDirectTaskBodySchema = z
   .object({
     prompt: z.string().trim().min(1, 'prompt 不能为空'),
     resolution: z.enum(['1K', '2K', '4K']).optional(),
-    aspectRatio: z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9']).optional(),
+    aspectRatio: z
+      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
+      .optional(),
+    aspect_ratio: z
+      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
+      .optional(),
     style_preset_ids: z.string().trim().optional(), // comma-separated
     pose_preset_ids: z.string().trim().optional(), // comma-separated
     face_preset_ids: z.string().trim().optional(), // comma-separated
-    includeThoughts: z
-      .preprocess((v) => {
-        if (v === undefined || v === null || v === '') return undefined;
-        if (typeof v === 'boolean') return v;
-        const s = String(v).trim().toLowerCase();
-        if (s === 'true' || s === '1' || s === 'yes') return true;
-        if (s === 'false' || s === '0' || s === 'no') return false;
-        return undefined;
-      }, z.boolean().optional()),
+    layout_mode: z.enum(DIRECT_LAYOUT_MODES).optional(),
+    layoutMode: z.enum(DIRECT_LAYOUT_MODES).optional(),
+    shot_count: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      return Number(v);
+    }, z.number().int().min(1).max(MAX_DIRECT_SHOTS).optional()),
+    shotCount: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      return Number(v);
+    }, z.number().int().min(1).max(MAX_DIRECT_SHOTS).optional()),
+    includeThoughts: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v === 'boolean') return v;
+      if (typeof v !== 'string' && typeof v !== 'number') return undefined;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === '1' || s === 'yes') return true;
+      if (s === 'false' || s === '0' || s === 'no') return false;
+      return undefined;
+    }, z.boolean().optional()),
     seed: z.preprocess((v) => {
       if (v === undefined || v === null || v === '') return undefined;
       return Number(v);
@@ -102,21 +125,33 @@ const CreateDirectTaskBodySchema = z
 const CreateDirectUrlsTaskBodySchema = z
   .object({
     prompt: z.string().trim().min(1, 'prompt 不能为空'),
-    garmentUrls: z.array(z.string().trim().min(1)).min(1, '至少需要 1 张衣服图片').max(14),
+    garmentUrls: z
+      .array(z.string().trim().min(1))
+      .min(1, '至少需要 1 张衣服图片')
+      .max(14),
     resolution: z.enum(['1K', '2K', '4K']).optional(),
-    aspectRatio: z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9']).optional(),
+    aspectRatio: z
+      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
+      .optional(),
+    aspect_ratio: z
+      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
+      .optional(),
     stylePresetIds: z.array(z.string().trim().min(1)).max(1).optional(),
     posePresetIds: z.array(z.string().trim().min(1)).max(4).optional(),
     facePresetIds: z.array(z.string().trim().min(1)).max(3).optional(),
-    includeThoughts: z
-      .preprocess((v) => {
-        if (v === undefined || v === null || v === '') return undefined;
-        if (typeof v === 'boolean') return v;
-        const s = String(v).trim().toLowerCase();
-        if (s === 'true' || s === '1' || s === 'yes') return true;
-        if (s === 'false' || s === '0' || s === 'no') return false;
-        return undefined;
-      }, z.boolean().optional()),
+    layoutMode: z.enum(DIRECT_LAYOUT_MODES).optional(),
+    layout_mode: z.enum(DIRECT_LAYOUT_MODES).optional(),
+    shotCount: z.coerce.number().int().min(1).max(MAX_DIRECT_SHOTS).optional(),
+    shot_count: z.coerce.number().int().min(1).max(MAX_DIRECT_SHOTS).optional(),
+    includeThoughts: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v === 'boolean') return v;
+      if (typeof v !== 'string' && typeof v !== 'number') return undefined;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === '1' || s === 'yes') return true;
+      if (s === 'false' || s === '0' || s === 'no') return false;
+      return undefined;
+    }, z.boolean().optional()),
     seed: z.preprocess((v) => {
       if (v === undefined || v === null || v === '') return undefined;
       return Number(v);
@@ -140,6 +175,12 @@ const DirectMessageBodySchema = z
   })
   .strict();
 
+const ApproveTaskBodySchema = z
+  .object({
+    editedPrompts: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
 @Controller('tasks')
 export class TaskController {
   private readonly logger = new Logger(TaskController.name);
@@ -147,7 +188,7 @@ export class TaskController {
   constructor(
     private readonly taskService: TaskService,
     private readonly taskAccess: TaskAccessService,
-  ) { }
+  ) {}
 
   @Post()
   @Public()
@@ -164,27 +205,28 @@ export class TaskController {
   )
   async create(
     @UploadedFiles() uploadedFiles: Array<Express.Multer.File>,
-    @Body() body: any,
-    @Req() req: any,
+    @Body() body: unknown,
+    @Req() req: Request,
     @CurrentUser() user?: UserModel,
   ) {
+    const payload = this.toRecord(body);
     // Separate files by fieldname (handle undefined uploadedFiles for JSON requests)
     const safeFiles = uploadedFiles || [];
     const files = safeFiles.filter((f) => f.fieldname === 'files');
     const faceRefs = safeFiles.filter((f) => f.fieldname === 'face_refs');
     const styleRefs = safeFiles.filter((f) => f.fieldname === 'style_refs'); // 新增
+    const fileUrls = this.normalizeStringArray(payload.file_urls);
+    const faceRefUrls = this.normalizeStringArray(payload.face_ref_urls);
+    const styleRefUrls = this.normalizeStringArray(payload.style_ref_urls);
 
-    if (
-      (!files || files.length === 0) &&
-      (!body.file_urls || body.file_urls.length === 0)
-    ) {
+    if (files.length === 0 && fileUrls.length === 0) {
       this.logger.warn('CreateTask rejected: missing reference images', {
-        contentType: req?.headers?.['content-type'],
+        contentType: req.headers['content-type'],
         userId: user?.id,
         hasFiles: !!files?.length,
-        fileUrlsType: typeof body?.file_urls,
-        fileUrlsLength: Array.isArray(body?.file_urls) ? body.file_urls.length : undefined,
-        bodyKeys: body ? Object.keys(body) : [],
+        fileUrlsType: typeof payload.file_urls,
+        fileUrlsLength: fileUrls.length || undefined,
+        bodyKeys: Object.keys(payload),
       });
       throw new BadRequestException(
         'At least one reference image is required (files or file_urls).',
@@ -192,26 +234,56 @@ export class TaskController {
     }
 
     // Validate total image count (including style refs)
-    const urlCount =
-      (body.file_urls?.length || 0) +
-      (body.face_ref_urls?.length || 0) +
-      (body.style_ref_urls?.length || 0);
+    const urlCount = fileUrls.length + faceRefUrls.length + styleRefUrls.length;
     const fileCount = files.length + faceRefs.length + styleRefs.length;
     const totalImages = fileCount + urlCount;
 
     if (totalImages > MAX_TOTAL_IMAGES) {
       this.logger.warn('CreateTask rejected: too many images', {
-        contentType: req?.headers?.['content-type'],
+        contentType: req.headers['content-type'],
         userId: user?.id,
         fileCount,
         urlCount,
         totalImages,
-        bodyKeys: body ? Object.keys(body) : [],
+        bodyKeys: Object.keys(payload),
       });
       throw new BadRequestException(
         `Total image count (${totalImages}) exceeds maximum allowed (${MAX_TOTAL_IMAGES}).`,
       );
     }
+
+    const rawShotCount = payload.shot_count ?? payload.shotCount;
+    const shotCount = this.toOptionalNumber(rawShotCount) ?? 4;
+    const layoutMode =
+      this.toOptionalString(payload.layout_mode) ??
+      this.toOptionalString(payload.layoutMode) ??
+      'Individual';
+    const scene = this.toOptionalString(payload.scene) ?? 'Auto';
+    const resolution =
+      this.toEnumValue(payload.resolution, ['1K', '2K', '4K'] as const) ?? '2K';
+    const autoApprove = this.toOptionalBoolean(payload.autoApprove) ?? false;
+    const workflow =
+      this.toOptionalString(payload.workflow) === 'hero_storyboard'
+        ? 'hero_storyboard'
+        : 'legacy';
+    const autoApproveHero =
+      this.toOptionalBoolean(payload.autoApproveHero) ?? false;
+    const location = this.toOptionalString(payload.location);
+    const styleDirection = this.toOptionalString(payload.style_direction);
+    const garmentFocus = this.toEnumValue(payload.garment_focus, [
+      'top',
+      'bottom',
+      'footwear',
+      'accessories',
+      'full_outfit',
+    ] as const);
+    const aspectRatio = this.toEnumValue(
+      payload.aspect_ratio ?? payload.aspectRatio,
+      ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'] as const,
+    );
+    const facePresetIds = this.toOptionalString(payload.face_preset_ids);
+    const stylePresetIds = this.toOptionalString(payload.style_preset_ids);
+    const requirements = this.toOptionalString(payload.requirements) ?? '';
 
     // Build DTO
     const dto: CreateTaskDto = {
@@ -220,24 +292,24 @@ export class TaskController {
       style_refs: styleRefs.length > 0 ? styleRefs : undefined,
 
       // Map URL fields
-      file_urls: body.file_urls,
-      face_ref_urls: body.face_ref_urls,
-      style_ref_urls: body.style_ref_urls,
+      file_urls: fileUrls.length > 0 ? fileUrls : undefined,
+      face_ref_urls: faceRefUrls.length > 0 ? faceRefUrls : undefined,
+      style_ref_urls: styleRefUrls.length > 0 ? styleRefUrls : undefined,
 
-      requirements: body.requirements || '',
-      shot_count: parseInt(body.shot_count) || 4,
-      layout_mode: body.layout_mode || 'Individual',
-      scene: body.scene || 'Auto',
-      resolution: body.resolution || '2K',
-      autoApprove: body.autoApprove === 'true' || body.autoApprove === true,
-      workflow: body.workflow === 'hero_storyboard' ? 'hero_storyboard' : 'legacy',
-      autoApproveHero: body.autoApproveHero === 'true' || body.autoApproveHero === true,
-      location: body.location, // 拍摄地址
-      styleDirection: body.style_direction, // 风格描述
-      garmentFocus: body.garment_focus, // 焦点单品（新增）
-      aspectRatio: body.aspect_ratio, // 画面比例（新增）
-      facePresetIds: body.face_preset_ids, // 预设ID
-      stylePresetIds: body.style_preset_ids, // 风格预设ID
+      requirements,
+      shot_count: shotCount,
+      layout_mode: layoutMode,
+      scene,
+      resolution,
+      autoApprove,
+      workflow,
+      autoApproveHero,
+      location, // 拍摄地址
+      styleDirection, // 风格描述
+      garmentFocus, // 焦点单品（新增）
+      aspectRatio, // 画面比例（新增）
+      facePresetIds, // 预设ID
+      stylePresetIds, // 风格预设ID
       userId: user?.id,
     };
 
@@ -245,21 +317,22 @@ export class TaskController {
       const { task, claimToken } = await this.taskService.createTask(dto);
       const safeTask = this.sanitizeTask(task);
       return claimToken ? { ...safeTask, claimToken } : safeTask;
-    } catch (e: any) {
+    } catch (e) {
+      const errorMessage = this.resolveErrorMessage(e, '创建任务失败');
       this.logger.warn('CreateTask failed', {
-        message: e?.message,
-        contentType: req?.headers?.['content-type'],
+        message: errorMessage,
+        contentType: req.headers['content-type'],
         userId: user?.id,
         files: files?.length || 0,
         faceRefs: faceRefs?.length || 0,
         styleRefs: styleRefs?.length || 0,
-        fileUrls: Array.isArray(body?.file_urls) ? body.file_urls.length : 0,
-        faceRefUrls: Array.isArray(body?.face_ref_urls) ? body.face_ref_urls.length : 0,
-        styleRefUrls: Array.isArray(body?.style_ref_urls) ? body.style_ref_urls.length : 0,
-        facePresetIds: body?.face_preset_ids,
-        stylePresetIds: body?.style_preset_ids,
+        fileUrls: fileUrls.length,
+        faceRefUrls: faceRefUrls.length,
+        styleRefUrls: styleRefUrls.length,
+        facePresetIds,
+        stylePresetIds,
       });
-      throw new BadRequestException(e.message || '创建任务失败');
+      throw new BadRequestException(errorMessage);
     }
   }
 
@@ -279,7 +352,10 @@ export class TaskController {
       }),
       fileFilter: (req, file, cb) => {
         if (!file.mimetype.startsWith('image/')) {
-          return cb(new BadRequestException('Only image files are allowed'), false);
+          return cb(
+            new BadRequestException('Only image files are allowed'),
+            false,
+          );
         }
         cb(null, true);
       },
@@ -307,7 +383,9 @@ export class TaskController {
       garmentFiles,
       prompt: body.prompt,
       resolution: body.resolution,
-      aspectRatio: body.aspectRatio,
+      aspectRatio: body.aspectRatio ?? body.aspect_ratio,
+      shotCount: body.shot_count ?? body.shotCount,
+      layoutMode: body.layout_mode ?? body.layoutMode,
       includeThoughts: body.includeThoughts,
       seed: body.seed,
       temperature: body.temperature,
@@ -340,7 +418,9 @@ export class TaskController {
       garmentUrls: body.garmentUrls,
       prompt: body.prompt,
       resolution: body.resolution,
-      aspectRatio: body.aspectRatio,
+      aspectRatio: body.aspectRatio ?? body.aspect_ratio,
+      shotCount: body.shotCount ?? body.shot_count,
+      layoutMode: body.layoutMode ?? body.layout_mode,
       includeThoughts: body.includeThoughts,
       seed: body.seed,
       temperature: body.temperature,
@@ -364,11 +444,17 @@ export class TaskController {
     const pageNum = query?.page ?? 1;
     const limitNum = query?.limit ?? 20;
     const scope = query?.scope;
-    const result = await this.taskService.getAllTasks(user, pageNum, limitNum, scope, {
-      userId: query?.userId,
-      q: query?.q,
-      status: query?.status,
-    });
+    const result = await this.taskService.getAllTasks(
+      user,
+      pageNum,
+      limitNum,
+      scope,
+      {
+        userId: query?.userId,
+        q: query?.q,
+        status: query?.status,
+      },
+    );
     return {
       ...result,
       tasks: result.tasks.map((t) => this.sanitizeTask(t)),
@@ -385,7 +471,8 @@ export class TaskController {
   async approveTask(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body() body: { editedPrompts?: any },
+    @Body(new ZodValidationPipe(ApproveTaskBodySchema))
+    body: z.infer<typeof ApproveTaskBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(id, user);
     return this.taskService.approveAndRender(id, body.editedPrompts);
@@ -395,17 +482,15 @@ export class TaskController {
   async claimTask(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(ClaimTaskBodySchema)) body: z.infer<typeof ClaimTaskBodySchema>,
+    @Body(new ZodValidationPipe(ClaimTaskBodySchema))
+    body: z.infer<typeof ClaimTaskBodySchema>,
   ) {
     const task = await this.taskService.claimTask(id, user, body.claimToken);
     return this.sanitizeTask(task);
   }
 
   @Post(':id/start')
-  async startTask(
-    @CurrentUser() user: UserModel,
-    @Param('id') id: string,
-  ) {
+  async startTask(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
     const task = await this.taskService.startTask(id, user);
     return this.sanitizeTask(task);
@@ -433,7 +518,8 @@ export class TaskController {
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
     @Param('shotId') shotId: string,
-    @Body(new ZodValidationPipe(EditShotBodySchema)) body: z.infer<typeof EditShotBodySchema>,
+    @Body(new ZodValidationPipe(EditShotBodySchema))
+    body: z.infer<typeof EditShotBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     return this.taskService.editShot(taskId, shotId, body);
@@ -446,11 +532,14 @@ export class TaskController {
   async directRegenerate(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
-    @Body(new ZodValidationPipe(DirectRegenerateBodySchema)) body: z.infer<typeof DirectRegenerateBodySchema>,
+    @Body(new ZodValidationPipe(DirectRegenerateBodySchema))
+    body: z.infer<typeof DirectRegenerateBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
     if (body.prompt && String(body.prompt).trim()) {
-      throw new BadRequestException('直出图“重绘”不支持修改提示词；请使用 /tasks/:id/direct-message 走对话流程');
+      throw new BadRequestException(
+        '直出图“重绘”不支持修改提示词；请使用 /tasks/:id/direct-message 走对话流程',
+      );
     }
     const task = await this.taskService.regenerateDirectTask(taskId, user);
     return this.sanitizeTask(task);
@@ -463,10 +552,15 @@ export class TaskController {
   async directMessage(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
-    @Body(new ZodValidationPipe(DirectMessageBodySchema)) body: z.infer<typeof DirectMessageBodySchema>,
+    @Body(new ZodValidationPipe(DirectMessageBodySchema))
+    body: z.infer<typeof DirectMessageBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
-    const task = await this.taskService.directMessage(taskId, user, body.message);
+    const task = await this.taskService.directMessage(
+      taskId,
+      user,
+      body.message,
+    );
     return this.sanitizeTask(task);
   }
 
@@ -488,10 +582,7 @@ export class TaskController {
    * Retry Brain planning (legacy)
    */
   @Post(':id/retry-brain')
-  async retryBrain(
-    @CurrentUser() user: UserModel,
-    @Param('id') id: string,
-  ) {
+  async retryBrain(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
     const task = await this.taskService.retryBrain(id);
     return this.sanitizeTask(task);
@@ -501,13 +592,10 @@ export class TaskController {
    * Retry Painter rendering (legacy)
    */
   @Post(':id/retry-render')
-  async retryRender(
-    @CurrentUser() user: UserModel,
-    @Param('id') id: string,
-  ) {
+  async retryRender(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
     const task = await this.taskService.retryRender(id);
-    return this.sanitizeTask(task);
+    return this.isTaskModel(task) ? this.sanitizeTask(task) : task;
   }
 
   /**
@@ -519,8 +607,76 @@ export class TaskController {
     return this.taskService.deleteTask(id);
   }
 
-  private sanitizeTask(task: any) {
-    const { claimTokenHash: _claimTokenHash, ...rest } = task || {};
+  private toRecord(input: unknown): Record<string, unknown> {
+    if (!input || typeof input !== 'object') return {};
+    return input as Record<string, unknown>;
+  }
+
+  private normalizeStringArray(input: unknown): string[] {
+    if (Array.isArray(input)) {
+      return input
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter(Boolean);
+    }
+    if (typeof input === 'string') {
+      const trimmed = input.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    return [];
+  }
+
+  private toOptionalString(input: unknown): string | undefined {
+    if (typeof input !== 'string') return undefined;
+    const trimmed = input.trim();
+    return trimmed ? trimmed : undefined;
+  }
+
+  private toOptionalNumber(input: unknown): number | undefined {
+    if (input === undefined || input === null || input === '') return undefined;
+    const value = typeof input === 'number' ? input : Number(input);
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  private toOptionalBoolean(input: unknown): boolean | undefined {
+    if (typeof input === 'boolean') return input;
+    if (typeof input !== 'string') return undefined;
+    const normalized = input.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes')
+      return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no')
+      return false;
+    return undefined;
+  }
+
+  private toEnumValue<T extends string>(
+    input: unknown,
+    allowed: readonly T[],
+  ): T | undefined {
+    if (typeof input !== 'string') return undefined;
+    return (allowed as readonly string[]).includes(input)
+      ? (input as T)
+      : undefined;
+  }
+
+  private resolveErrorMessage(err: unknown, fallback: string): string {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'string') return err;
+    return fallback;
+  }
+
+  private isTaskModel(input: unknown): input is TaskModel {
+    const record = this.toRecord(input);
+    return (
+      typeof record.id === 'string' && typeof record.createdAt === 'number'
+    );
+  }
+
+  private sanitizeTask(
+    task: TaskModel | null | undefined,
+  ): Omit<TaskModel, 'claimTokenHash'> | null | undefined {
+    if (!task) return task;
+    const { claimTokenHash, ...rest } = task;
+    void claimTokenHash;
     return rest;
   }
 }

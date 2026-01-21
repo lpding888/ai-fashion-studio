@@ -1,108 +1,58 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { TaskService } from './task.service';
-import { DbService } from '../db/db.service';
-import { BrainService } from '../brain/brain.service';
-import { PainterService } from '../painter/painter.service';
-import { ModelConfigResolverService } from '../model-profile/model-config-resolver.service';
-import { HeroStoryboardService } from './hero-storyboard.service';
-import { TaskBillingService } from './task-billing.service';
-import { CosService } from '../cos/cos.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { DirectPromptService } from '../direct-prompt/direct-prompt.service';
+import { DirectTaskService } from './direct-task.service';
+import { LegacyTaskService } from './legacy-task.service';
+import { TaskCrudService } from './task-crud.service';
+import { CreateTaskDto } from './dto/create-task.dto';
 
 describe('TaskService', () => {
   let service: TaskService;
-  let db: { saveTask: jest.Mock; updateTask: jest.Mock; getTask: jest.Mock; getFacePreset: jest.Mock };
-  let hero: { startHero: jest.Mock; regenerateHero?: jest.Mock };
+  let legacyService: { createTask: jest.Mock };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TaskService,
         {
-          provide: DbService,
+          provide: TaskCrudService,
           useValue: {
-            saveTask: jest.fn(),
-            updateTask: jest.fn(),
             getTask: jest.fn(),
-            getFacePreset: jest.fn(),
+            getAllTasks: jest.fn(),
+            claimTask: jest.fn(),
+            deleteTask: jest.fn(),
           },
         },
         {
-          provide: BrainService,
+          provide: DirectTaskService,
           useValue: {
-            planTask: jest.fn(),
+            createDirectTask: jest.fn(),
+            createDirectTaskFromUrls: jest.fn(),
+            regenerateDirectTask: jest.fn(),
+            directMessage: jest.fn(),
           },
         },
         {
-          provide: PainterService,
+          provide: LegacyTaskService,
           useValue: {
-            generateImage: jest.fn(),
-            generateImageWithLog: jest.fn(),
-          },
-        },
-        {
-          provide: TaskBillingService,
-          useValue: {
-            hasEnoughCreditsForAmount: jest.fn(async () => ({ enough: true, required: 0, balance: 0 })),
-            creditsForSuccessfulHeroImage: jest.fn(() => 1),
-            estimateLegacyTaskCredits: jest.fn(() => 1),
-          },
-        },
-        {
-          provide: ModelConfigResolverService,
-          useValue: {
-            buildSnapshotFromActive: jest.fn(async () => ({})),
-            resolveBrainRuntimeFromSnapshot: jest.fn(async (s: any) => s || {}),
-            resolvePainterRuntimeFromSnapshot: jest.fn(async (s: any) => s || {}),
-          },
-        },
-        {
-          provide: HeroStoryboardService,
-          useValue: {
-            startHero: jest.fn(async () => ({})),
-            regenerateHero: jest.fn(async () => ({})),
-          },
-        },
-        {
-          provide: CosService,
-          useValue: {
-            isEnabled: jest.fn(() => false),
-            uploadFile: jest.fn(),
-            getImageUrl: jest.fn(),
-          },
-        },
-        {
-          provide: PrismaService,
-          useValue: {
-            task: {
-              count: jest.fn(async () => 0),
-              findMany: jest.fn(async () => []),
-            },
-          },
-        },
-        {
-          provide: DirectPromptService,
-          useValue: {
-            getActiveSystemPromptText: jest.fn(async () => ''),
+            createTask: jest.fn(),
           },
         },
       ],
     }).compile();
 
     service = module.get<TaskService>(TaskService);
-    db = module.get(DbService);
-    hero = module.get(HeroStoryboardService);
+    legacyService = module.get(LegacyTaskService);
   });
 
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
 
-  it('creates hero_storyboard task and starts Hero workflow (non-draft)', async () => {
-    db.saveTask.mockResolvedValue(undefined);
+  it('delegates createTask to LegacyTaskService', async () => {
+    const result = { task: { id: 'task-1' }, claimToken: undefined };
+    legacyService.createTask.mockResolvedValue(result);
 
-    const { task } = await service.createTask({
+    const dto: CreateTaskDto = {
       files: [],
       requirements: 'test',
       shot_count: 4,
@@ -112,11 +62,10 @@ describe('TaskService', () => {
       workflow: 'hero_storyboard',
       autoApproveHero: true,
       userId: 'user-1',
-    } as any);
+    };
+    const response = await service.createTask(dto);
 
-    expect(task.workflow).toBe('hero_storyboard');
-    expect(task.autoApproveHero).toBe(true);
-    expect(task.status).toBe('HERO_RENDERING');
-    expect(hero.startHero).toHaveBeenCalledWith(task.id);
+    expect(legacyService.createTask).toHaveBeenCalled();
+    expect(response).toBe(result);
   });
 });

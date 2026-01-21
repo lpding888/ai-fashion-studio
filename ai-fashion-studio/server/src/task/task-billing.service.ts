@@ -11,13 +11,14 @@ type LayoutMode = TaskModel['layout_mode'];
 export class TaskBillingService {
   private readonly logger = new Logger(TaskBillingService.name);
 
-  constructor(
-    private readonly prisma: PrismaService,
-  ) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   async hasEnoughCreditsForAmount(userId: string, amount: number) {
     const required = this.normalizeAmount(amount);
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { credits: true },
+    });
     if (!user) return { enough: false, required, balance: 0 };
     const balance = user?.credits ?? 0;
     return { enough: balance >= required, required, balance };
@@ -28,17 +29,21 @@ export class TaskBillingService {
   }
 
   resolutionMultiplier(resolution: Resolution | undefined): number {
-    // 定价口径：4K=4 积分/张；1K/2K=1 积分/张
-    return resolution === '4K' ? 4 : 1;
+    // 定价口径：1K=1 积分/张；2K=2 积分/张；4K=4 积分/张
+    if (resolution === '4K') return 4;
+    if (resolution === '2K') return 2;
+    return 1;
   }
 
   estimateLegacyTaskCredits(opts: {
     shotCount: number;
-    layoutMode: LayoutMode | string | undefined;
+    layoutMode: LayoutMode | undefined;
     resolution: Resolution | undefined;
   }): number {
-    const shotCount = Number.isFinite(opts.shotCount) ? Math.max(0, Math.floor(opts.shotCount)) : 0;
-    const layoutMode = (opts.layoutMode || 'Individual') as string;
+    const shotCount = Number.isFinite(opts.shotCount)
+      ? Math.max(0, Math.floor(opts.shotCount))
+      : 0;
+    const layoutMode = opts.layoutMode || 'Individual';
 
     const baseUnits = layoutMode === 'Grid' ? 2 : shotCount;
     return baseUnits * this.resolutionMultiplier(opts.resolution);
@@ -48,19 +53,27 @@ export class TaskBillingService {
     successfulImages: number;
     resolution: Resolution | undefined;
   }): number {
-    const count = Number.isFinite(opts.successfulImages) ? Math.max(0, Math.floor(opts.successfulImages)) : 0;
+    const count = Number.isFinite(opts.successfulImages)
+      ? Math.max(0, Math.floor(opts.successfulImages))
+      : 0;
     return count * this.resolutionMultiplier(opts.resolution);
   }
 
-  creditsForSuccessfulLegacyGridRender(opts: { resolution: Resolution | undefined }): number {
+  creditsForSuccessfulLegacyGridRender(opts: {
+    resolution: Resolution | undefined;
+  }): number {
     return 2 * this.resolutionMultiplier(opts.resolution);
   }
 
-  creditsForSuccessfulHeroImage(opts: { resolution: Resolution | undefined }): number {
+  creditsForSuccessfulHeroImage(opts: {
+    resolution: Resolution | undefined;
+  }): number {
     return 1 * this.resolutionMultiplier(opts.resolution);
   }
 
-  creditsForSuccessfulHeroGrid(opts: { resolution: Resolution | undefined }): number {
+  creditsForSuccessfulHeroGrid(opts: {
+    resolution: Resolution | undefined;
+  }): number {
     return 2 * this.resolutionMultiplier(opts.resolution);
   }
 
@@ -79,9 +92,12 @@ export class TaskBillingService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        const taskRow = await tx.task.findUnique({ where: { id: opts.taskId }, select: { data: true } });
+        const taskRow = await tx.task.findUnique({
+          where: { id: opts.taskId },
+          select: { data: true },
+        });
         if (!taskRow) throw new Error(`Task ${opts.taskId} not found`);
-        const task = taskRow.data as any as TaskModel;
+        const task = taskRow.data as unknown as TaskModel;
         if (!task.userId || task.userId !== opts.userId) {
           throw new Error('任务未绑定用户或用户不匹配，无法扣费');
         }
@@ -108,7 +124,10 @@ export class TaskBillingService {
           throw new Error(`积分不足（需要 ${amount}）`);
         }
 
-        const u = await tx.user.findUnique({ where: { id: opts.userId }, select: { credits: true } });
+        const u = await tx.user.findUnique({
+          where: { id: opts.userId },
+          select: { credits: true },
+        });
         const balance = u?.credits ?? 0;
 
         await tx.creditTransaction.create({
@@ -126,16 +145,24 @@ export class TaskBillingService {
         });
 
         const createdAt = Date.now();
-        const existing = Array.isArray(task.billingEvents) ? task.billingEvents : [];
+        const existing = Array.isArray(task.billingEvents)
+          ? task.billingEvents
+          : [];
         const nextEvents = [
           ...existing,
-          { key: opts.eventKey, kind: 'RESERVE' as const, amount, reason: opts.reason, createdAt },
+          {
+            key: opts.eventKey,
+            kind: 'RESERVE' as const,
+            amount,
+            reason: opts.reason,
+            createdAt,
+          },
         ];
 
         const nextTask: TaskModel = {
           ...task,
           creditsSpent: (task.creditsSpent ?? 0) + amount,
-          billingEvents: nextEvents as any,
+          billingEvents: nextEvents,
           billingError: undefined,
         };
 
@@ -143,17 +170,24 @@ export class TaskBillingService {
           where: { id: opts.taskId },
           data: {
             creditsSpent: nextTask.creditsSpent ?? null,
-            data: nextTask as any,
+            data: nextTask as unknown as Prisma.InputJsonValue,
           },
         });
       });
-    } catch (e: any) {
+    } catch (err) {
       // 幂等：唯一键冲突 => 已预扣过
-      if (e?.code === 'P2002') return { reserved: false, skipped: true };
-      throw e;
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        return { reserved: false, skipped: true };
+      }
+      throw err;
     }
 
-    this.logger.log(`💳 Task ${opts.taskId} 预扣成功：${amount}（event=${opts.eventKey}）`);
+    this.logger.log(
+      `💳 Task ${opts.taskId} 预扣成功：${amount}（event=${opts.eventKey}）`,
+    );
     return { reserved: true, skipped: false };
   }
 
@@ -170,7 +204,12 @@ export class TaskBillingService {
     settleEventKey: string;
     actualAmount: number;
     reason: string;
-  }): Promise<{ settled: boolean; skipped: boolean; refunded: number; extraSpent: number }> {
+  }): Promise<{
+    settled: boolean;
+    skipped: boolean;
+    refunded: number;
+    extraSpent: number;
+  }> {
     const actualAmount = this.normalizeAmount(opts.actualAmount);
 
     let refunded = 0;
@@ -179,9 +218,12 @@ export class TaskBillingService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        const taskRow = await tx.task.findUnique({ where: { id: opts.taskId }, select: { data: true } });
+        const taskRow = await tx.task.findUnique({
+          where: { id: opts.taskId },
+          select: { data: true },
+        });
         if (!taskRow) throw new Error(`Task ${opts.taskId} not found`);
-        const task = taskRow.data as any as TaskModel;
+        const task = taskRow.data as unknown as TaskModel;
         if (!task.userId || task.userId !== opts.userId) {
           throw new Error('任务未绑定用户或用户不匹配，无法结算');
         }
@@ -222,7 +264,10 @@ export class TaskBillingService {
             where: { id: opts.userId },
             data: { credits: { increment: refunded } },
           });
-          const u = await tx.user.findUnique({ where: { id: opts.userId }, select: { credits: true } });
+          const u = await tx.user.findUnique({
+            where: { id: opts.userId },
+            select: { credits: true },
+          });
           const balance = u?.credits ?? 0;
           await tx.creditTransaction.create({
             data: {
@@ -243,8 +288,12 @@ export class TaskBillingService {
             where: { id: opts.userId, credits: { gte: extraSpent } },
             data: { credits: { decrement: extraSpent } },
           });
-          if (updated.count !== 1) throw new Error(`积分不足（需要补扣 ${extraSpent}）`);
-          const u = await tx.user.findUnique({ where: { id: opts.userId }, select: { credits: true } });
+          if (updated.count !== 1)
+            throw new Error(`积分不足（需要补扣 ${extraSpent}）`);
+          const u = await tx.user.findUnique({
+            where: { id: opts.userId },
+            select: { credits: true },
+          });
           const balance = u?.credits ?? 0;
           await tx.creditTransaction.create({
             data: {
@@ -261,7 +310,9 @@ export class TaskBillingService {
           });
         }
 
-        const existing = Array.isArray(task.billingEvents) ? task.billingEvents : [];
+        const existing = Array.isArray(task.billingEvents)
+          ? task.billingEvents
+          : [];
         const nextEvents = [
           ...existing,
           {
@@ -276,8 +327,11 @@ export class TaskBillingService {
 
         const nextTask: TaskModel = {
           ...task,
-          creditsSpent: Math.max(0, (task.creditsSpent ?? 0) - refunded + extraSpent),
-          billingEvents: nextEvents as any,
+          creditsSpent: Math.max(
+            0,
+            (task.creditsSpent ?? 0) - refunded + extraSpent,
+          ),
+          billingEvents: nextEvents,
           billingError: undefined,
         };
 
@@ -285,15 +339,18 @@ export class TaskBillingService {
           where: { id: opts.taskId },
           data: {
             creditsSpent: nextTask.creditsSpent ?? null,
-            data: nextTask as any,
+            data: nextTask as unknown as Prisma.InputJsonValue,
           },
         });
       });
-    } catch (e: any) {
-      if (e?.code === 'P2002') {
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
         return { settled: false, skipped: true, refunded: 0, extraSpent: 0 };
       }
-      throw e;
+      throw err;
     }
 
     if (!didSettle) {
@@ -310,10 +367,16 @@ export class TaskBillingService {
    * 扣费失败不应影响“已经出图”的结果返回；这里统一打标到 task，便于排查/补扣。
    */
   async markBillingError(taskId: string, message: string) {
-    const taskRow = await this.prisma.task.findUnique({ where: { id: taskId }, select: { data: true } });
+    const taskRow = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { data: true },
+    });
     if (!taskRow) return;
-    const task = taskRow.data as any as TaskModel;
+    const task = taskRow.data as unknown as TaskModel;
     const nextTask: TaskModel = { ...task, billingError: message };
-    await this.prisma.task.update({ where: { id: taskId }, data: { data: nextTask as any } });
+    await this.prisma.task.update({
+      where: { id: taskId },
+      data: { data: nextTask as unknown as Prisma.InputJsonValue },
+    });
   }
 }
