@@ -120,14 +120,24 @@ export class ModelProfileController {
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
-      if (Array.isArray(body.brainProfileIds) && body.brainProfileIds.length > 0) {
+      if (
+        Array.isArray(body.brainProfileIds) &&
+        body.brainProfileIds.length > 0
+      ) {
         await this.profiles.setActivePool('BRAIN', body.brainProfileIds, admin);
       } else if (body.brainProfileId) {
         await this.profiles.setActive('BRAIN', body.brainProfileId, admin);
       }
 
-      if (Array.isArray(body.painterProfileIds) && body.painterProfileIds.length > 0) {
-        await this.profiles.setActivePool('PAINTER', body.painterProfileIds, admin);
+      if (
+        Array.isArray(body.painterProfileIds) &&
+        body.painterProfileIds.length > 0
+      ) {
+        await this.profiles.setActivePool(
+          'PAINTER',
+          body.painterProfileIds,
+          admin,
+        );
       } else if (body.painterProfileId) {
         await this.profiles.setActive('PAINTER', body.painterProfileId, admin);
       }

@@ -7,16 +7,16 @@ import { JwtGuard } from './guards/jwt.guard';
 import { CreditService } from '../credit/credit.service';
 
 @Module({
-    controllers: [AuthController],
-    providers: [
-        AuthService,
-        UserDbService,
-        CreditService,
-        {
-            provide: APP_GUARD,
-            useClass: JwtGuard,
-        },
-    ],
-    exports: [AuthService, UserDbService]
+  controllers: [AuthController],
+  providers: [
+    AuthService,
+    UserDbService,
+    CreditService,
+    {
+      provide: APP_GUARD,
+      useClass: JwtGuard,
+    },
+  ],
+  exports: [AuthService, UserDbService],
 })
-export class AuthModule { }
+export class AuthModule {}

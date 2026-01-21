@@ -10,4 +10,3 @@ import { AdminAnalyticsService } from './admin-analytics.service';
   providers: [AdminAnalyticsService],
 })
 export class AdminAnalyticsModule {}
-

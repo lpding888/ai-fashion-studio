@@ -7,4 +7,3 @@ export const CurrentUser = createParamDecorator(
     return req.user as UserModel | undefined;
   },
 );
-

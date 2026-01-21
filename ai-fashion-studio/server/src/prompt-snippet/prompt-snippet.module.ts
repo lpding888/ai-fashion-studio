@@ -6,4 +6,4 @@ import { PromptSnippetService } from './prompt-snippet.service';
   controllers: [PromptSnippetController],
   providers: [PromptSnippetService],
 })
-export class PromptSnippetModule { }
+export class PromptSnippetModule {}

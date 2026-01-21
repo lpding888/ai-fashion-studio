@@ -1,4 +1,12 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -14,7 +22,7 @@ const CreatePromptSnippetBodySchema = z
 
 @Controller('prompt-snippets')
 export class PromptSnippetController {
-  constructor(private readonly promptSnippets: PromptSnippetService) { }
+  constructor(private readonly promptSnippets: PromptSnippetService) {}
 
   @Get()
   async list(@CurrentUser() user: UserModel) {
@@ -24,7 +32,8 @@ export class PromptSnippetController {
   @Post()
   async create(
     @CurrentUser() user: UserModel,
-    @Body(new ZodValidationPipe(CreatePromptSnippetBodySchema)) body: z.infer<typeof CreatePromptSnippetBodySchema>,
+    @Body(new ZodValidationPipe(CreatePromptSnippetBodySchema))
+    body: z.infer<typeof CreatePromptSnippetBodySchema>,
   ) {
     return this.promptSnippets.createSnippet(user.id, body);
   }

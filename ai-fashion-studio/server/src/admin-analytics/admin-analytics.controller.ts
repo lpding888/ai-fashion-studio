@@ -20,7 +20,8 @@ export class AdminAnalyticsController {
   @Get('overview')
   async overview(
     @CurrentUser() user: UserModel,
-    @Query(new ZodValidationPipe(OverviewQuerySchema)) query: z.infer<typeof OverviewQuerySchema>,
+    @Query(new ZodValidationPipe(OverviewQuerySchema))
+    query: z.infer<typeof OverviewQuerySchema>,
   ) {
     if (!user || user.role !== 'ADMIN') {
       throw new ForbiddenException('需要管理员权限');
@@ -33,4 +34,3 @@ export class AdminAnalyticsController {
     });
   }
 }
-

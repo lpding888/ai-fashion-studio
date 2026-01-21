@@ -14,4 +14,3 @@ export type AdminLogEvent =
       type: 'ping';
       ts: number;
     };
-

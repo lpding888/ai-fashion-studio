@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class UserDbService implements OnModuleInit {
   private readonly logger = new Logger(UserDbService.name);
 
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit() {
     await this.createDefaultAdmin();
@@ -76,8 +76,12 @@ export class UserDbService implements OnModuleInit {
     if (adminCount > 0) return;
 
     const isProd = process.env.NODE_ENV === 'production';
-    const bootstrapUsername = (process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim();
-    const bootstrapPassword = (process.env.BOOTSTRAP_ADMIN_PASSWORD || '').trim();
+    const bootstrapUsername = (
+      process.env.BOOTSTRAP_ADMIN_USERNAME || ''
+    ).trim();
+    const bootstrapPassword = (
+      process.env.BOOTSTRAP_ADMIN_PASSWORD || ''
+    ).trim();
 
     const username = isProd ? bootstrapUsername : 'admin';
     const password = isProd ? bootstrapPassword : 'admin123';
@@ -85,7 +89,7 @@ export class UserDbService implements OnModuleInit {
     if (isProd) {
       if (!username || !password) {
         throw new Error(
-          '生产环境未检测到管理员账户，且未配置 BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD'
+          '生产环境未检测到管理员账户，且未配置 BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD',
         );
       }
       if (password.length < 12) {
@@ -108,7 +112,9 @@ export class UserDbService implements OnModuleInit {
       },
     });
 
-    this.logger.log(`Created bootstrap admin account (username: ${row.username})`);
+    this.logger.log(
+      `Created bootstrap admin account (username: ${row.username})`,
+    );
     if (!isProd) {
       this.logger.warn('Please change the default admin password!');
     }
@@ -190,7 +196,10 @@ export class UserDbService implements OnModuleInit {
       if (params.inviteRequired) {
         if (!inviteCode) throw new Error('邀请码不能为空');
 
-        const codeHash = crypto.createHash('sha256').update(inviteCode).digest('hex');
+        const codeHash = crypto
+          .createHash('sha256')
+          .update(inviteCode)
+          .digest('hex');
         const locked = await tx.inviteCode.updateMany({
           where: {
             codeHash,
@@ -228,7 +237,10 @@ export class UserDbService implements OnModuleInit {
   }
 
   // 验证密码
-  async verifyPassword(username: string, password: string): Promise<UserModel | null> {
+  async verifyPassword(
+    username: string,
+    password: string,
+  ): Promise<UserModel | null> {
     const row = await this.prisma.user.findUnique({ where: { username } });
     if (!row) return null;
 
@@ -239,26 +251,36 @@ export class UserDbService implements OnModuleInit {
   }
 
   // 更新用户
-  async updateUser(id: string, updates: Partial<UserModel>): Promise<UserModel> {
+  async updateUser(
+    id: string,
+    updates: Partial<UserModel>,
+  ): Promise<UserModel> {
     const current = await this.prisma.user.findUnique({ where: { id } });
     if (!current) throw new Error('用户不存在');
 
     if (updates.username && updates.username !== (current as any).username) {
-      const exists = await this.prisma.user.findUnique({ where: { username: updates.username } });
+      const exists = await this.prisma.user.findUnique({
+        where: { username: updates.username },
+      });
       if (exists) throw new Error('用户名已存在');
     }
 
     const data: any = {};
 
     if (updates.username !== undefined) data.username = updates.username;
-    if (updates.nickname !== undefined) data.nickname = updates.nickname ?? null;
+    if (updates.nickname !== undefined)
+      data.nickname = updates.nickname ?? null;
     if (updates.email !== undefined) data.email = updates.email ?? null;
     if (updates.status !== undefined) data.status = updates.status;
     if (updates.role !== undefined) data.role = updates.role;
     if (updates.credits !== undefined) data.credits = updates.credits;
     if (updates.totalTasks !== undefined) data.totalTasks = updates.totalTasks;
-    if (updates.lastLoginAt !== undefined) data.lastLoginAt = updates.lastLoginAt ? new Date(updates.lastLoginAt) : null;
-    if (updates.createdBy !== undefined) data.createdBy = updates.createdBy ?? null;
+    if (updates.lastLoginAt !== undefined)
+      data.lastLoginAt = updates.lastLoginAt
+        ? new Date(updates.lastLoginAt)
+        : null;
+    if (updates.createdBy !== undefined)
+      data.createdBy = updates.createdBy ?? null;
     if (updates.notes !== undefined) data.notes = updates.notes ?? null;
 
     if (updates.password !== undefined) {
@@ -282,7 +304,9 @@ export class UserDbService implements OnModuleInit {
     return rows.map((row) => this.mapUser(row as any));
   }
 
-  async createInviteCode(params: { createdByUserId?: string; note?: string } = {}) {
+  async createInviteCode(
+    params: { createdByUserId?: string; note?: string } = {},
+  ) {
     const code = crypto.randomBytes(9).toString('base64url'); // 12 chars
     const codeHash = crypto.createHash('sha256').update(code).digest('hex');
 
@@ -307,7 +331,9 @@ export class UserDbService implements OnModuleInit {
   }
 
   async revokeInviteCode(inviteId: string): Promise<InviteCodeModel> {
-    const invite = await this.prisma.inviteCode.findUnique({ where: { id: inviteId } });
+    const invite = await this.prisma.inviteCode.findUnique({
+      where: { id: inviteId },
+    });
     if (!invite) throw new Error('邀请码不存在');
     if ((invite as any).usedAt || (invite as any).usedByUserId) {
       throw new Error('邀请码已被使用，不能撤销');
@@ -316,7 +342,9 @@ export class UserDbService implements OnModuleInit {
     const row = await this.prisma.inviteCode.update({
       where: { id: inviteId },
       data: {
-        revokedAt: (invite as any).revokedAt ? (invite as any).revokedAt : new Date(),
+        revokedAt: (invite as any).revokedAt
+          ? (invite as any).revokedAt
+          : new Date(),
       },
     });
 

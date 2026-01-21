@@ -11,4 +11,4 @@ import { CosModule } from '../cos/cos.module';
   controllers: [StylePresetController],
   providers: [StylePresetMigrationService],
 })
-export class StylePresetModule { }
+export class StylePresetModule {}

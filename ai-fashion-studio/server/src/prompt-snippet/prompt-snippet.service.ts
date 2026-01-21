@@ -12,7 +12,7 @@ export type PromptSnippetDto = {
 
 @Injectable()
 export class PromptSnippetService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   private mapSnippet(row: {
     id: string;
@@ -38,7 +38,10 @@ export class PromptSnippetService {
     return rows.map((row) => this.mapSnippet(row));
   }
 
-  async createSnippet(userId: string, input: { name?: string; text: string }): Promise<PromptSnippetDto> {
+  async createSnippet(
+    userId: string,
+    input: { name?: string; text: string },
+  ): Promise<PromptSnippetDto> {
     const name = input.name?.trim();
     const row = await this.prisma.promptSnippet.create({
       data: {

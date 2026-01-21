@@ -23,4 +23,3 @@ export async function dumpPromptText(params: {
   await fs.writeFile(filePath, text, 'utf8');
   return { filePath, sha256, len: text.length };
 }
-

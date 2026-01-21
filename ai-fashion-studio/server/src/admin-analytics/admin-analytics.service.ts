@@ -73,7 +73,12 @@ export class AdminAnalyticsService {
         where: { createdAt: { gte: start } },
         orderBy: { createdAt: 'desc' },
         take: args.sampleN,
-        select: { createdAt: true, data: true, creditsSpent: true, status: true },
+        select: {
+          createdAt: true,
+          data: true,
+          creditsSpent: true,
+          status: true,
+        },
       }),
     ]);
 
@@ -90,7 +95,9 @@ export class AdminAnalyticsService {
       distWorkflow,
       distIncludeThoughts,
     ] = await Promise.all([
-      this.prisma.$queryRaw<Array<{ userId: string; count: bigint }>>(Prisma.sql`
+      this.prisma.$queryRaw<
+        Array<{ userId: string; count: bigint }>
+      >(Prisma.sql`
         SELECT user_id as "userId", COUNT(*)::bigint as "count"
         FROM tasks
         WHERE created_at >= ${start} AND user_id IS NOT NULL
@@ -98,7 +105,9 @@ export class AdminAnalyticsService {
         ORDER BY "count" DESC
         LIMIT ${args.topN}
       `),
-      this.prisma.$queryRaw<Array<{ userId: string; spent: bigint }>>(Prisma.sql`
+      this.prisma.$queryRaw<
+        Array<{ userId: string; spent: bigint }>
+      >(Prisma.sql`
         SELECT user_id as "userId", COALESCE(SUM(amount), 0)::bigint as "spent"
         FROM credit_transactions
         WHERE created_at >= ${start} AND type = 'SPEND'
@@ -192,7 +201,11 @@ export class AdminAnalyticsService {
     }
 
     const txToMap = (
-      rows: Array<{ type: 'EARN' | 'SPEND'; _sum: { amount: number | null }; _count: { _all: number } }>,
+      rows: Array<{
+        type: 'EARN' | 'SPEND';
+        _sum: { amount: number | null };
+        _count: { _all: number };
+      }>,
     ) => {
       const out: Record<string, { count: number; sum: number }> = {};
       for (const r of rows) {
@@ -201,26 +214,36 @@ export class AdminAnalyticsService {
       return out;
     };
 
-    const statusToMap = (rows: Array<{ status: string; _count: { _all: number } }>) => {
+    const statusToMap = (
+      rows: Array<{ status: string; _count: { _all: number } }>,
+    ) => {
       const out: Record<string, number> = {};
       for (const r of rows) out[r.status] = r._count._all;
       return out;
     };
 
-    const usersStatusMap = usersByStatus.reduce<Record<string, number>>((acc, r) => {
-      acc[r.status] = r._count._all;
-      return acc;
-    }, {});
+    const usersStatusMap = usersByStatus.reduce<Record<string, number>>(
+      (acc, r) => {
+        acc[r.status] = r._count._all;
+        return acc;
+      },
+      {},
+    );
 
-    const usersRoleMap = usersByRole.reduce<Record<string, number>>((acc, r) => {
-      acc[r.role] = r._count._all;
-      return acc;
-    }, {});
+    const usersRoleMap = usersByRole.reduce<Record<string, number>>(
+      (acc, r) => {
+        acc[r.role] = r._count._all;
+        return acc;
+      },
+      {},
+    );
 
     const tasksStatusMap = statusToMap(tasksByStatus as any);
 
     const avgCreditsSpentWindow = (() => {
-      const rows = tasksSampleWindow.filter((t) => typeof t.creditsSpent === 'number') as Array<{ creditsSpent: number }>;
+      const rows = tasksSampleWindow.filter(
+        (t) => typeof t.creditsSpent === 'number',
+      ) as Array<{ creditsSpent: number }>;
       if (rows.length === 0) return null;
       const sum = rows.reduce((s, r) => s + r.creditsSpent, 0);
       return sum / rows.length;
@@ -237,7 +260,8 @@ export class AdminAnalyticsService {
           for (const shot of shots) {
             const versions = Array.isArray(shot?.versions) ? shot.versions : [];
             for (const v of versions) {
-              const ts = typeof v?.createdAt === 'number' ? v.createdAt : undefined;
+              const ts =
+                typeof v?.createdAt === 'number' ? v.createdAt : undefined;
               if (!ts) continue;
               earliest = earliest === undefined ? ts : Math.min(earliest, ts);
             }
@@ -250,7 +274,8 @@ export class AdminAnalyticsService {
           // ignore bad rows
         }
       }
-      if (durations.length === 0) return { sample: 0, avgMs: null, p50Ms: null, p90Ms: null };
+      if (durations.length === 0)
+        return { sample: 0, avgMs: null, p50Ms: null, p90Ms: null };
       durations.sort((a, b) => a - b);
       const avg = durations.reduce((s, v) => s + v, 0) / durations.length;
       const p50 = durations[Math.floor(durations.length * 0.5)];
@@ -273,11 +298,20 @@ export class AdminAnalyticsService {
       endDay.setHours(0, 0, 0, 0);
 
       const days: string[] = [];
-      for (let t = startDay.getTime(); t <= endDay.getTime(); t += 24 * 60 * 60 * 1000) {
+      for (
+        let t = startDay.getTime();
+        t <= endDay.getTime();
+        t += 24 * 60 * 60 * 1000
+      ) {
         days.push(normalizeDay(new Date(t)));
       }
 
-      const usersMap = new Map(usersByDay.map((r) => [normalizeDay(new Date(r.day)), Number(r.count || 0)]));
+      const usersMap = new Map(
+        usersByDay.map((r) => [
+          normalizeDay(new Date(r.day)),
+          Number(r.count || 0),
+        ]),
+      );
       const tasksCreatedMap = new Map<string, number>();
       const tasksFailedMap = new Map<string, number>();
       const tasksCompletedMap = new Map<string, number>();
@@ -285,8 +319,10 @@ export class AdminAnalyticsService {
         const day = normalizeDay(new Date(r.day));
         const c = Number(r.count || 0);
         tasksCreatedMap.set(day, (tasksCreatedMap.get(day) || 0) + c);
-        if (r.status === 'FAILED') tasksFailedMap.set(day, (tasksFailedMap.get(day) || 0) + c);
-        if (r.status === 'COMPLETED') tasksCompletedMap.set(day, (tasksCompletedMap.get(day) || 0) + c);
+        if (r.status === 'FAILED')
+          tasksFailedMap.set(day, (tasksFailedMap.get(day) || 0) + c);
+        if (r.status === 'COMPLETED')
+          tasksCompletedMap.set(day, (tasksCompletedMap.get(day) || 0) + c);
       }
 
       const creditsEarnMap = new Map<string, number>();
@@ -353,11 +389,26 @@ export class AdminAnalyticsService {
         })),
       },
       distributions: {
-        painterModel: distPainterModel.map((r) => ({ key: r.key, count: Number(r.count || 0) })),
-        resolution: distResolution.map((r) => ({ key: r.key, count: Number(r.count || 0) })),
-        aspectRatio: distAspectRatio.map((r) => ({ key: r.key, count: Number(r.count || 0) })),
-        workflow: distWorkflow.map((r) => ({ key: r.key, count: Number(r.count || 0) })),
-        includeThoughts: distIncludeThoughts.map((r) => ({ key: r.key, count: Number(r.count || 0) })),
+        painterModel: distPainterModel.map((r) => ({
+          key: r.key,
+          count: Number(r.count || 0),
+        })),
+        resolution: distResolution.map((r) => ({
+          key: r.key,
+          count: Number(r.count || 0),
+        })),
+        aspectRatio: distAspectRatio.map((r) => ({
+          key: r.key,
+          count: Number(r.count || 0),
+        })),
+        workflow: distWorkflow.map((r) => ({
+          key: r.key,
+          count: Number(r.count || 0),
+        })),
+        includeThoughts: distIncludeThoughts.map((r) => ({
+          key: r.key,
+          count: Number(r.count || 0),
+        })),
       },
       presets: {
         facePresets: facePresetCount,

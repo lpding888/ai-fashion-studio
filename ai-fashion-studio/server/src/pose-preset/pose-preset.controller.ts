@@ -56,7 +56,8 @@ export class PosePresetController {
       if (value === null || value === undefined) return false;
       if (typeof value === 'string') return value.trim().length > 0;
       if (typeof value === 'number' || typeof value === 'boolean') return true;
-      if (Array.isArray(value)) return value.some((item) => hasMeaningfulValue(item));
+      if (Array.isArray(value))
+        return value.some((item) => hasMeaningfulValue(item));
       if (typeof value === 'object') {
         return Object.values(value).some((item) => hasMeaningfulValue(item));
       }
@@ -74,7 +75,7 @@ export class PosePresetController {
   private requireOwnerOrAdmin(preset: any, user: UserModel) {
     if (!preset) throw new BadRequestException('Preset not found');
     if (user.role === 'ADMIN') return;
-    const ownerId = (preset as any).userId;
+    const ownerId = preset.userId;
     if (!ownerId || ownerId !== user.id) {
       throw new ForbiddenException('无权访问该姿势预设');
     }
@@ -100,7 +101,10 @@ export class PosePresetController {
       }),
       fileFilter: (req, file, cb) => {
         if (!file.mimetype.startsWith('image/')) {
-          return cb(new BadRequestException('Only image files are allowed'), false);
+          return cb(
+            new BadRequestException('Only image files are allowed'),
+            false,
+          );
         }
         cb(null, true);
       },
@@ -122,18 +126,29 @@ export class PosePresetController {
         const key = `pose-presets/${presetId}${ext}`;
         await this.cos.uploadFile(key, file.path);
         imageUrlOrPath = this.cos.getImageUrl(key);
-        await fs.remove(file.path).catch(() => { });
+        await fs.remove(file.path).catch(() => {});
       } catch (e: any) {
-        this.logger.warn(`COS upload failed for pose preset ${presetId}`, e?.message || e);
+        this.logger.warn(
+          `COS upload failed for pose preset ${presetId}`,
+          e?.message || e,
+        );
       }
     }
 
-    const brainRuntime = await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+    const brainRuntime =
+      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
     let analysis: any;
     try {
-      analysis = await this.brain.analyzePoseImage(imageUrlOrPath, brainRuntime, { traceId: presetId });
+      analysis = await this.brain.analyzePoseImage(
+        imageUrlOrPath,
+        brainRuntime,
+        { traceId: presetId },
+      );
     } catch (error: any) {
-      this.logger.error('Pose learning failed', error?.response?.data || error?.message || error);
+      this.logger.error(
+        'Pose learning failed',
+        error?.response?.data || error?.message || error,
+      );
       throw new BadRequestException(
         'Failed to learn pose: ' + (error?.message || error),
       );
@@ -185,9 +200,9 @@ export class PosePresetController {
   @Get()
   async list(@CurrentUser() user: UserModel) {
     const all = await this.db.getAllStylePresets();
-    const pose = all.filter((p: any) => (p as any)?.kind === 'POSE');
+    const pose = all.filter((p: any) => p?.kind === 'POSE');
     if (user.role === 'ADMIN') return pose;
-    return pose.filter((p: any) => (p as any)?.userId === user.id);
+    return pose.filter((p: any) => p?.userId === user.id);
   }
 
   @Get(':id')
@@ -228,7 +243,8 @@ export class PosePresetController {
   async relearn(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(RelearnPoseBodySchema)) _body: z.infer<typeof RelearnPoseBodySchema>,
+    @Body(new ZodValidationPipe(RelearnPoseBodySchema))
+    _body: z.infer<typeof RelearnPoseBodySchema>,
   ) {
     const preset = await this.db.getStylePreset(id);
     if (!preset || (preset as any).kind !== 'POSE') {
@@ -236,14 +252,19 @@ export class PosePresetController {
     }
     this.requireOwnerOrAdmin(preset, user);
 
-    const imagePaths = Array.isArray((preset as any).imagePaths) ? (preset as any).imagePaths : [];
+    const imagePaths = Array.isArray((preset as any).imagePaths)
+      ? (preset as any).imagePaths
+      : [];
     if (imagePaths.length === 0) {
       throw new BadRequestException('Preset has no images to relearn');
     }
 
-    this.logger.log(`🧠 Relearning Pose preset ${id} from ${imagePaths.length} image(s)...`);
+    this.logger.log(
+      `🧠 Relearning Pose preset ${id} from ${imagePaths.length} image(s)...`,
+    );
 
-    const brainRuntime = await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+    const brainRuntime =
+      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
     let analysis: any;
     try {
       analysis = await this.brain.analyzePoseImage(
@@ -252,7 +273,10 @@ export class PosePresetController {
         { traceId: `${id}:relearn:${Date.now()}` },
       );
     } catch (error: any) {
-      this.logger.error('Pose relearn failed', error?.response?.data || error?.message || error);
+      this.logger.error(
+        'Pose relearn failed',
+        error?.response?.data || error?.message || error,
+      );
       throw new BadRequestException(
         'Failed to relearn pose: ' + (error?.message || error),
       );
@@ -267,10 +291,13 @@ export class PosePresetController {
     }
 
     const name =
-      String(analysis?.name || '').trim()
-      || String((preset as any).name || '').trim()
-      || `Auto Pose ${new Date().toLocaleDateString()}`;
-    const description = String(analysis?.description || '').trim() || (preset as any).description || undefined;
+      String(analysis?.name || '').trim() ||
+      String((preset as any).name || '').trim() ||
+      `Auto Pose ${new Date().toLocaleDateString()}`;
+    const description =
+      String(analysis?.description || '').trim() ||
+      (preset as any).description ||
+      undefined;
     const promptBlock = this.formatPosePromptBlockAsJson(analysis);
 
     const updates: any = {
@@ -301,7 +328,7 @@ export class PosePresetController {
       if (!v) continue;
       if (v.startsWith('http://') || v.startsWith('https://')) continue;
       if (await fs.pathExists(v)) {
-        await fs.remove(v).catch(() => { });
+        await fs.remove(v).catch(() => {});
       }
     }
 

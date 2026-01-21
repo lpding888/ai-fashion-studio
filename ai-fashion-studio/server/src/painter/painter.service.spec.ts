@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PainterService } from './painter.service';
 import { CosService } from '../cos/cos.service';
 import { Readable } from 'stream';
+import { DbService } from '../db/db.service';
 
 describe('PainterService', () => {
   let service: PainterService;
@@ -14,8 +15,16 @@ describe('PainterService', () => {
           provide: CosService,
           useValue: {
             isEnabled: jest.fn(() => true),
-            getImageUrl: jest.fn((key: string) => `https://cos.example.com/${key}`),
+            getImageUrl: jest.fn(
+              (key: string) => `https://cos.example.com/${key}`,
+            ),
             uploadFile: jest.fn(),
+          },
+        },
+        {
+          provide: DbService,
+          useValue: {
+            getTask: jest.fn(),
           },
         },
       ],
@@ -61,7 +70,10 @@ describe('PainterService', () => {
       return { base64Data: imageData.data, mimeType: imageData.mime_type };
     };
 
-    const result = await (service as any).readGeminiStreamForImage(stream, onJson);
+    const result = await (service as any).readGeminiStreamForImage(
+      stream,
+      onJson,
+    );
     expect(result.base64Data).toBe(base64);
     expect(result.mimeType).toBe('image/png');
   });
@@ -95,7 +107,10 @@ describe('PainterService', () => {
       return { base64Data: imageData.data, mimeType: imageData.mimeType };
     };
 
-    const result = await (service as any).readGeminiStreamForImage(stream, onJson);
+    const result = await (service as any).readGeminiStreamForImage(
+      stream,
+      onJson,
+    );
     expect(result.base64Data).toBe(base64);
     expect(result.mimeType).toBe('image/jpeg');
   });

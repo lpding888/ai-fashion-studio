@@ -1,12 +1,30 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
+import { existsSync } from 'fs';
+import { join, resolve } from 'path';
 import { json, urlencoded } from 'express';
 import { AdminLogService } from './admin-log/admin-log.service';
 import { StreamLogger } from './admin-log/stream-logger';
+import { config as loadEnv } from 'dotenv';
+
+const loadEnvFiles = () => {
+  const serverRoot = resolve(__dirname, '..', '..');
+  const candidates = [
+    resolve(process.cwd(), '.env'),
+    resolve(process.cwd(), '.env.local'),
+    resolve(serverRoot, '.env'),
+    resolve(serverRoot, '.env.local'),
+  ];
+  candidates.forEach((path) => {
+    if (!existsSync(path)) return;
+    loadEnv({ path, override: true });
+  });
+};
 
 async function bootstrap() {
+  // 确保环境变量在模块初始化前可用（兼容多工作目录启动）
+  loadEnvFiles();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // 允许 JSON 里携带 base64 图片（用于局部编辑 mask / 参考图）。
@@ -43,7 +61,9 @@ async function bootstrap() {
   // Serve Static Assets
   // ⚠️ 生产环境仅暴露 uploads，避免静态暴露源码/环境变量等敏感文件
   const isProd = process.env.NODE_ENV === 'production';
-  const staticRoot = isProd ? join(process.cwd(), 'uploads') : join(process.cwd());
+  const staticRoot = isProd
+    ? join(process.cwd(), 'uploads')
+    : join(process.cwd());
   const staticPrefix = isProd ? '/uploads' : '/';
   app.useStaticAssets(staticRoot, { prefix: staticPrefix });
 

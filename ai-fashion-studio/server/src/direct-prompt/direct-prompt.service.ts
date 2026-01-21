@@ -78,7 +78,11 @@ export class DirectPromptService implements OnModuleInit {
   private normalizePack(pack: any | null | undefined): DirectPromptPack | null {
     const input: any = pack ?? {};
     const seed = this.seedPackCache;
-    const directSystemPrompt = (input.directSystemPrompt ?? seed?.directSystemPrompt ?? '').trim();
+    const directSystemPrompt = (
+      input.directSystemPrompt ??
+      seed?.directSystemPrompt ??
+      ''
+    ).trim();
     if (!directSystemPrompt) return null;
     return { directSystemPrompt };
   }
@@ -100,8 +104,15 @@ export class DirectPromptService implements OnModuleInit {
     }
 
     const createdBy = { id: 'system', username: 'system' };
-    const seeded = await this.createVersion(seed, createdBy, 'Seed from docs', true);
-    this.logger.log(`Seeded direct prompt store with version ${seeded.versionId}`);
+    const seeded = await this.createVersion(
+      seed,
+      createdBy,
+      'Seed from docs',
+      true,
+    );
+    this.logger.log(
+      `Seeded direct prompt store with version ${seeded.versionId}`,
+    );
   }
 
   async getActiveRef(): Promise<ActivePromptRef | null> {
@@ -122,7 +133,7 @@ export class DirectPromptService implements OnModuleInit {
   async getVersion(versionId: string): Promise<DirectPromptVersion | null> {
     const filePath = this.versionPath(versionId);
     if (!(await fs.pathExists(filePath))) return null;
-    const raw = (await fs.readJson(filePath)) as any;
+    const raw = await fs.readJson(filePath);
     const normalized = this.normalizePack(raw?.pack);
     if (!raw || !normalized) return null;
     return { ...(raw as DirectPromptVersion), pack: normalized };
@@ -130,7 +141,9 @@ export class DirectPromptService implements OnModuleInit {
 
   async listVersions(): Promise<DirectPromptVersionMeta[]> {
     await fs.ensureDir(this.versionsDir);
-    const files = (await fs.readdir(this.versionsDir)).filter((f) => f.endsWith('.json'));
+    const files = (await fs.readdir(this.versionsDir)).filter((f) =>
+      f.endsWith('.json'),
+    );
 
     const metas: DirectPromptVersionMeta[] = [];
     for (const file of files) {

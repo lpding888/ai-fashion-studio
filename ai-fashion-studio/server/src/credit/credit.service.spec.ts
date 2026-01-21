@@ -24,16 +24,18 @@ describe('CreditService', () => {
   const txCreditCreate = jest.fn(async () => ({}));
 
   const prismaMock = {
-    $transaction: jest.fn(async (fn: any) => fn({
-      user: {
-        updateMany: txUserUpdateMany,
-        update: txUserUpdate,
-        findUnique: txUserFindUnique,
-      },
-      creditTransaction: {
-        create: txCreditCreate,
-      },
-    })),
+    $transaction: jest.fn(async (fn: any) =>
+      fn({
+        user: {
+          updateMany: txUserUpdateMany,
+          update: txUserUpdate,
+          findUnique: txUserFindUnique,
+        },
+        creditTransaction: {
+          create: txCreditCreate,
+        },
+      }),
+    ),
   };
 
   beforeEach(async () => {
@@ -51,7 +53,9 @@ describe('CreditService', () => {
   });
 
   it('should throw NotFoundException when user missing', async () => {
-    await expect(service.getUserCredits('missing')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.getUserCredits('missing')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 
   it('should return credits when user exists', async () => {
@@ -108,4 +112,3 @@ describe('CreditService', () => {
     expect(txCreditCreate).not.toHaveBeenCalled();
   });
 });
-

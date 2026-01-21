@@ -10,4 +10,3 @@ import { PosePresetController } from './pose-preset.controller';
   controllers: [PosePresetController],
 })
 export class PosePresetModule {}
-

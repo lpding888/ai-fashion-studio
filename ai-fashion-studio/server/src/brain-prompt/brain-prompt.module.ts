@@ -5,10 +5,9 @@ import { AuthModule } from '../auth/auth.module';
 import { BrainModule } from '../brain/brain.module';
 
 @Module({
-    imports: [AuthModule, BrainModule],
-    controllers: [BrainPromptController],
-    providers: [BrainPromptService],
-    exports: [BrainPromptService],
+  imports: [AuthModule, BrainModule],
+  controllers: [BrainPromptController],
+  providers: [BrainPromptService],
+  exports: [BrainPromptService],
 })
-export class BrainPromptModule { }
-
+export class BrainPromptModule {}

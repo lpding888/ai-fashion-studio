@@ -62,4 +62,3 @@ describe('FacePresetController', () => {
     expect(res).toHaveLength(3);
   });
 });
-

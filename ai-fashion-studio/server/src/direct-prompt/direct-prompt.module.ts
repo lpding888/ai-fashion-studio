@@ -11,4 +11,3 @@ import { DbModule } from '../db/db.module';
   exports: [DirectPromptService],
 })
 export class DirectPromptModule {}
-

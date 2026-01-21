@@ -11,4 +11,3 @@ import { WorkflowPromptService } from './workflow-prompt.service';
   exports: [WorkflowPromptService],
 })
 export class WorkflowPromptModule {}
-

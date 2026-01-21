@@ -15,7 +15,9 @@ export class ModelConfigResolverService {
   };
 
   private normalizePoolIds(poolIds?: string[], fallbackId?: string): string[] {
-    const ids = Array.isArray(poolIds) ? poolIds.map((v) => String(v).trim()).filter(Boolean) : [];
+    const ids = Array.isArray(poolIds)
+      ? poolIds.map((v) => String(v).trim()).filter(Boolean)
+      : [];
     if (ids.length > 0) return ids;
     const single = String(fallbackId || '').trim();
     return single ? [single] : [];
@@ -37,7 +39,10 @@ export class ModelConfigResolverService {
         // ignore missing/disabled
       }
     }
-    return { ids: resolved.map((r) => r.id), keys: resolved.map((r) => r.apiKey) };
+    return {
+      ids: resolved.map((r) => r.id),
+      keys: resolved.map((r) => r.apiKey),
+    };
   }
 
   async buildSnapshotFromActive(): Promise<ModelConfig> {
@@ -48,13 +53,21 @@ export class ModelConfigResolverService {
     const painter = painterPool[0];
 
     // Guard: pool must be consistent (same gateway+model) for predictable behavior.
-    const mismatchBrain = brainPool.some((p) => p.gateway !== brain.gateway || p.model !== brain.model);
+    const mismatchBrain = brainPool.some(
+      (p) => p.gateway !== brain.gateway || p.model !== brain.model,
+    );
     if (mismatchBrain) {
-      throw new Error('BRAIN Key 池的 gateway/model 不一致，请确保同一网关/模型下仅更换 apiKey');
+      throw new Error(
+        'BRAIN Key 池的 gateway/model 不一致，请确保同一网关/模型下仅更换 apiKey',
+      );
     }
-    const mismatchPainter = painterPool.some((p) => p.gateway !== painter.gateway || p.model !== painter.model);
+    const mismatchPainter = painterPool.some(
+      (p) => p.gateway !== painter.gateway || p.model !== painter.model,
+    );
     if (mismatchPainter) {
-      throw new Error('PAINTER Key 池的 gateway/model 不一致，请确保同一网关/模型下仅更换 apiKey');
+      throw new Error(
+        'PAINTER Key 池的 gateway/model 不一致，请确保同一网关/模型下仅更换 apiKey',
+      );
     }
 
     return {
@@ -84,8 +97,16 @@ export class ModelConfigResolverService {
       snapshot?.painterProfileIds,
     );
 
-    const brainPool = await this.resolvePoolKeys('BRAIN', snapshot?.brainProfileIds, snapshot?.brainProfileId);
-    const painterPool = await this.resolvePoolKeys('PAINTER', snapshot?.painterProfileIds, snapshot?.painterProfileId);
+    const brainPool = await this.resolvePoolKeys(
+      'BRAIN',
+      snapshot?.brainProfileIds,
+      snapshot?.brainProfileId,
+    );
+    const painterPool = await this.resolvePoolKeys(
+      'PAINTER',
+      snapshot?.painterProfileIds,
+      snapshot?.painterProfileId,
+    );
 
     return {
       ...snapshot,
@@ -114,7 +135,11 @@ export class ModelConfigResolverService {
       snapshot?.brainProfileId,
       snapshot?.brainProfileIds,
     );
-    const pool = await this.resolvePoolKeys('BRAIN', snapshot?.brainProfileIds, snapshot?.brainProfileId);
+    const pool = await this.resolvePoolKeys(
+      'BRAIN',
+      snapshot?.brainProfileIds,
+      snapshot?.brainProfileId,
+    );
     return {
       ...snapshot,
       brainProfileId: brainRuntime.id,
@@ -134,7 +159,11 @@ export class ModelConfigResolverService {
       snapshot?.painterProfileId,
       snapshot?.painterProfileIds,
     );
-    const pool = await this.resolvePoolKeys('PAINTER', snapshot?.painterProfileIds, snapshot?.painterProfileId);
+    const pool = await this.resolvePoolKeys(
+      'PAINTER',
+      snapshot?.painterProfileIds,
+      snapshot?.painterProfileId,
+    );
     return {
       ...snapshot,
       painterProfileId: painterRuntime.id,
@@ -159,7 +188,9 @@ export class ModelConfigResolverService {
       return runtime;
     }
 
-    const ids = Array.isArray(poolIds) ? poolIds.map((v) => String(v).trim()).filter(Boolean) : [];
+    const ids = Array.isArray(poolIds)
+      ? poolIds.map((v) => String(v).trim()).filter(Boolean)
+      : [];
     if (ids.length > 0) {
       const start = this.rr[kind] % ids.length;
       this.rr[kind] = (this.rr[kind] + 1) % ids.length;

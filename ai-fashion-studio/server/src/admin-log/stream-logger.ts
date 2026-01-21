@@ -16,7 +16,12 @@ export class StreamLogger implements LoggerService {
     const safeTrace = trace ? safeStringifyLogMessage(trace) : undefined;
     if (trace) {
       console.error(this.format(context, safeMessage), safeTrace);
-      this.logs.push({ level: 'error', message: safeMessage, context, meta: { trace: safeTrace } });
+      this.logs.push({
+        level: 'error',
+        message: safeMessage,
+        context,
+        meta: { trace: safeTrace },
+      });
       return;
     }
     console.error(this.format(context, safeMessage));
@@ -30,14 +35,12 @@ export class StreamLogger implements LoggerService {
   }
 
   debug(message: any, context?: string) {
-    // eslint-disable-next-line no-console
     const safeMessage = sanitizeLogValue(message);
     console.debug(this.format(context, safeMessage));
     this.logs.push({ level: 'debug', message: safeMessage, context });
   }
 
   verbose(message: any, context?: string) {
-    // eslint-disable-next-line no-console
     const safeMessage = sanitizeLogValue(message);
     console.info(this.format(context, safeMessage));
     this.logs.push({ level: 'verbose', message: safeMessage, context });

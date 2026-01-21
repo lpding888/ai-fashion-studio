@@ -56,17 +56,26 @@ function isSensitiveKey(key: string) {
   );
 }
 
-export function sanitizeLogValue(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+export function sanitizeLogValue(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): unknown {
   if (value === null || value === undefined) return value;
 
   if (typeof value === 'string') {
     const s = value.trim();
-    if (s.startsWith('data:image/') && s.includes(';base64,')) return redactDataUrlBase64(s);
+    if (s.startsWith('data:image/') && s.includes(';base64,'))
+      return redactDataUrlBase64(s);
     if (looksLikeBase64Payload(s)) return redactBase64(s);
     return truncateLongString(value);
   }
 
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint'
+  ) {
     return value;
   }
 
@@ -78,10 +87,14 @@ export function sanitizeLogValue(value: unknown, depth = 0, seen = new WeakSet<o
   // Buffer / Uint8Array
   const anyValue: any = value as any;
   if (anyValue && typeof anyValue === 'object') {
-    if (typeof anyValue?.byteLength === 'number' && anyValue?.constructor?.name) {
+    if (
+      typeof anyValue?.byteLength === 'number' &&
+      anyValue?.constructor?.name
+    ) {
       const name = String(anyValue.constructor.name);
       const len = Number(anyValue.byteLength);
-      if (Number.isFinite(len) && len >= 0) return `[${name} byteLength=${len}]`;
+      if (Number.isFinite(len) && len >= 0)
+        return `[${name} byteLength=${len}]`;
     }
 
     if (seen.has(anyValue)) return '[Circular]';
@@ -95,7 +108,8 @@ export function sanitizeLogValue(value: unknown, depth = 0, seen = new WeakSet<o
     for (let i = 0; i < take; i++) {
       out.push(sanitizeLogValue(value[i], depth + 1, seen));
     }
-    if (value.length > take) out.push(`[...omitted ${value.length - take} items]`);
+    if (value.length > take)
+      out.push(`[...omitted ${value.length - take} items]`);
     return out;
   }
 
@@ -110,7 +124,10 @@ export function sanitizeLogValue(value: unknown, depth = 0, seen = new WeakSet<o
       const [k, v] = entries[i];
       if (typeof v === 'string' && isSensitiveKey(k)) {
         const s = v.trim();
-        out[k] = s.startsWith('data:image/') && s.includes(';base64,') ? redactDataUrlBase64(s) : redactBase64(s);
+        out[k] =
+          s.startsWith('data:image/') && s.includes(';base64,')
+            ? redactDataUrlBase64(s)
+            : redactBase64(s);
         continue;
       }
       out[k] = sanitizeLogValue(v, depth + 1, seen);
@@ -135,4 +152,3 @@ export function safeStringifyLogMessage(message: unknown) {
     return String(sanitized);
   }
 }
-

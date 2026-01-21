@@ -273,7 +273,10 @@ export class ModelProfileService {
 
     const kind = target.kind;
 
-    const pickReplacement = (preferredGateway: string, preferredModel: string) => {
+    const pickReplacement = (
+      preferredGateway: string,
+      preferredModel: string,
+    ) => {
       const byGroup = store.profiles
         .filter(
           (p) =>
@@ -293,10 +296,14 @@ export class ModelProfileService {
     };
 
     // 先从 activePool 移除，并在必要时自动挑一个替代主 Key，避免删除 Active 导致系统无可用 Key
-    const currentActive = this.normalizeActiveIds(store.active?.[kind]).filter((activeId) => {
-      const exists = store.profiles.some((p) => p.id === activeId && p.kind === kind && !p.disabled);
-      return exists;
-    });
+    const currentActive = this.normalizeActiveIds(store.active?.[kind]).filter(
+      (activeId) => {
+        const exists = store.profiles.some(
+          (p) => p.id === activeId && p.kind === kind && !p.disabled,
+        );
+        return exists;
+      },
+    );
 
     const nextActive = currentActive.filter((activeId) => activeId !== id);
     if (currentActive.includes(id) && nextActive.length === 0) {
@@ -336,12 +343,18 @@ export class ModelProfileService {
     admin: { id: string; username: string },
   ) {
     const store = await this.readStore();
-    const unique = Array.from(new Set((ids || []).map((v) => String(v).trim()).filter(Boolean)));
+    const unique = Array.from(
+      new Set((ids || []).map((v) => String(v).trim()).filter(Boolean)),
+    );
     if (unique.length === 0) throw new Error('activePool 不能为空');
 
-    const profiles = unique.map((id) => store.profiles.find((p) => p.id === id && p.kind === kind));
-    if (profiles.some((p) => !p)) throw new Error('activePool 包含不存在或类型不匹配的 profileId');
-    if (profiles.some((p) => (p as any).disabled)) throw new Error('activePool 包含已禁用的 profile');
+    const profiles = unique.map((id) =>
+      store.profiles.find((p) => p.id === id && p.kind === kind),
+    );
+    if (profiles.some((p) => !p))
+      throw new Error('activePool 包含不存在或类型不匹配的 profileId');
+    if (profiles.some((p) => (p as any).disabled))
+      throw new Error('activePool 包含已禁用的 profile');
 
     store.active[kind] = unique;
     const now = Date.now();
@@ -377,7 +390,9 @@ export class ModelProfileService {
     return this.getRuntimeById(activeId);
   }
 
-  async getActiveRuntimePool(kind: ModelProfileKind): Promise<ModelProfileRuntime[]> {
+  async getActiveRuntimePool(
+    kind: ModelProfileKind,
+  ): Promise<ModelProfileRuntime[]> {
     const store = await this.readStore();
     const ids = this.normalizeActiveIds(store.active?.[kind]);
     if (ids.length === 0) throw new Error(`未设置当前生效的 ${kind} 配置`);
@@ -391,119 +406,154 @@ export class ModelProfileService {
   private normalizeActiveIds(value: unknown): string[] {
     if (!value) return [];
     if (Array.isArray(value)) {
-      return Array.from(new Set(value.map((v) => String(v).trim()).filter(Boolean)));
+      return Array.from(
+        new Set(value.map((v) => String(v).trim()).filter(Boolean)),
+      );
     }
     const single = String(value).trim();
     return single ? [single] : [];
   }
 
-    private normalizeGatewayToV1beta(gateway: string) {
-        let baseUrl = gateway.replace(/\/+$/, '');
-        if (baseUrl.endsWith('/v1')) {
-            baseUrl = baseUrl.replace('/v1', '/v1beta');
-        } else if (!baseUrl.includes('/v1beta')) {
-            baseUrl = `${baseUrl}/v1beta`;
-        }
-        return baseUrl;
+  private normalizeGatewayToV1beta(gateway: string) {
+    let baseUrl = gateway.replace(/\/+$/, '');
+    if (baseUrl.endsWith('/v1')) {
+      baseUrl = baseUrl.replace('/v1', '/v1beta');
+    } else if (!baseUrl.includes('/v1beta')) {
+      baseUrl = `${baseUrl}/v1beta`;
     }
+    return baseUrl;
+  }
 
-    private normalizeGatewayToV1(gateway: string) {
-        let baseUrl = gateway.replace(/\/+$/, '');
-        if (baseUrl.endsWith('/v1beta')) {
-            baseUrl = baseUrl.replace('/v1beta', '/v1');
-        } else if (!baseUrl.endsWith('/v1')) {
-            baseUrl = `${baseUrl}/v1`;
-        }
-        return baseUrl;
+  private normalizeGatewayToV1(gateway: string) {
+    let baseUrl = gateway.replace(/\/+$/, '');
+    if (baseUrl.endsWith('/v1beta')) {
+      baseUrl = baseUrl.replace('/v1beta', '/v1');
+    } else if (!baseUrl.endsWith('/v1')) {
+      baseUrl = `${baseUrl}/v1`;
     }
+    return baseUrl;
+  }
 
-    private getTestTimeoutMs() {
-        const raw = process.env.MODEL_PROFILE_TEST_TIMEOUT_MS;
-        const parsed = raw ? Number(raw) : 60000;
-        if (!Number.isFinite(parsed) || parsed <= 0) return 60000;
-        return Math.min(Math.max(parsed, 5000), 300000);
-    }
+  private getTestTimeoutMs() {
+    const raw = process.env.MODEL_PROFILE_TEST_TIMEOUT_MS;
+    const parsed = raw ? Number(raw) : 60000;
+    if (!Number.isFinite(parsed) || parsed <= 0) return 60000;
+    return Math.min(Math.max(parsed, 5000), 300000);
+  }
 
-    private buildTestPayload(kind: ModelProfileKind) {
-        if (kind === 'PAINTER') {
-            return {
-                contents: [{ role: 'user', parts: [{ text: 'Generate a simple studio product photo of a banana on white background. Return IMAGE only.' }] }],
-                generationConfig: {
-                    // 图片模型测试：只要 IMAGE，避免网关/模型偏向返回 TEXT 导致“测试通过但无图”
-                    responseModalities: ['IMAGE'],
-                    candidateCount: 1,
-                    imageConfig: { imageSize: '1K', aspectRatio: '1:1' },
-                },
-                safetySettings: [
-                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-                ],
-            };
-        }
-
-        return {
-            contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
-            generationConfig: { maxOutputTokens: 32 },
-            safetySettings: [
-                { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-                { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+  private buildTestPayload(kind: ModelProfileKind) {
+    if (kind === 'PAINTER') {
+      return {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: 'Generate a simple studio product photo of a banana on white background. Return IMAGE only.',
+              },
             ],
-        };
+          },
+        ],
+        generationConfig: {
+          // 图片模型测试：只要 IMAGE，避免网关/模型偏向返回 TEXT 导致“测试通过但无图”
+          responseModalities: ['IMAGE'],
+          candidateCount: 1,
+          imageConfig: { imageSize: '1K', aspectRatio: '1:1' },
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+          {
+            category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+            threshold: 'BLOCK_NONE',
+          },
+          {
+            category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+            threshold: 'BLOCK_NONE',
+          },
+        ],
+      };
     }
 
-    async testProfile(id: string): Promise<{ ok: boolean; message: string }> {
-        const runtime = await this.getRuntimeById(id);
-        const payload = this.buildTestPayload(runtime.kind);
-        const timeout = this.getTestTimeoutMs();
+    return {
+      contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
+      generationConfig: { maxOutputTokens: 32 },
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+        {
+          category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+          threshold: 'BLOCK_NONE',
+        },
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_NONE',
+        },
+      ],
+    };
+  }
 
-        const tryOnce = async (baseUrl: string, label: 'v1beta' | 'v1') => {
-            const endpoint = `${baseUrl}/models/${encodeURIComponent(runtime.model)}:generateContent?key=${encodeURIComponent(runtime.apiKey)}`;
-            const res = await axios.post(endpoint, payload, {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                },
-                timeout,
-            });
-            if (res.data?.candidates || res.data?.promptFeedback) {
-                return { ok: true as const, message: `连接成功（${label}）` };
-            }
-            return { ok: false as const, message: `上游返回不符合预期（${label}）` };
-        };
+  async testProfile(id: string): Promise<{ ok: boolean; message: string }> {
+    const runtime = await this.getRuntimeById(id);
+    const payload = this.buildTestPayload(runtime.kind);
+    const timeout = this.getTestTimeoutMs();
 
-        const primary: 'v1beta' | 'v1' = runtime.kind === 'PAINTER' ? 'v1' : 'v1beta';
-        const secondary: 'v1beta' | 'v1' = primary === 'v1' ? 'v1beta' : 'v1';
+    const tryOnce = async (baseUrl: string, label: 'v1beta' | 'v1') => {
+      const endpoint = `${baseUrl}/models/${encodeURIComponent(runtime.model)}:generateContent?key=${encodeURIComponent(runtime.apiKey)}`;
+      const res = await axios.post(endpoint, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        timeout,
+      });
+      if (res.data?.candidates || res.data?.promptFeedback) {
+        return { ok: true as const, message: `连接成功（${label}）` };
+      }
+      return { ok: false as const, message: `上游返回不符合预期（${label}）` };
+    };
 
-        const baseUrlPrimary = primary === 'v1' ? this.normalizeGatewayToV1(runtime.gateway) : this.normalizeGatewayToV1beta(runtime.gateway);
-        const baseUrlSecondary = secondary === 'v1' ? this.normalizeGatewayToV1(runtime.gateway) : this.normalizeGatewayToV1beta(runtime.gateway);
+    const primary: 'v1beta' | 'v1' =
+      runtime.kind === 'PAINTER' ? 'v1' : 'v1beta';
+    const secondary: 'v1beta' | 'v1' = primary === 'v1' ? 'v1beta' : 'v1';
 
+    const baseUrlPrimary =
+      primary === 'v1'
+        ? this.normalizeGatewayToV1(runtime.gateway)
+        : this.normalizeGatewayToV1beta(runtime.gateway);
+    const baseUrlSecondary =
+      secondary === 'v1'
+        ? this.normalizeGatewayToV1(runtime.gateway)
+        : this.normalizeGatewayToV1beta(runtime.gateway);
+
+    try {
+      return await tryOnce(baseUrlPrimary, primary);
+    } catch (e: any) {
+      const status = e?.response?.status as number | undefined;
+      const msg = e?.response?.data?.error?.message || e?.message || '未知错误';
+
+      const shouldFallback =
+        status === 404 ||
+        status === 400 ||
+        e?.code === 'ECONNABORTED' ||
+        String(msg).toLowerCase().includes('timeout');
+
+      if (shouldFallback) {
         try {
-            return await tryOnce(baseUrlPrimary, primary);
-        } catch (e: any) {
-            const status = e?.response?.status as number | undefined;
-            const msg = e?.response?.data?.error?.message || e?.message || '未知错误';
-
-            const shouldFallback =
-                status === 404 ||
-                status === 400 ||
-                e?.code === 'ECONNABORTED' ||
-                String(msg).toLowerCase().includes('timeout');
-
-            if (shouldFallback) {
-                try {
-                    return await tryOnce(baseUrlSecondary, secondary);
-                } catch (e2: any) {
-                    const status2 = e2?.response?.status as number | undefined;
-                    const msg2 = e2?.response?.data?.error?.message || e2?.message || '未知错误';
-                    return { ok: false, message: `${status2 ? `${status2}: ` : ''}${msg2}` };
-                }
-            }
-
-            return { ok: false, message: status ? `${status}: ${msg}` : msg };
+          return await tryOnce(baseUrlSecondary, secondary);
+        } catch (e2: any) {
+          const status2 = e2?.response?.status as number | undefined;
+          const msg2 =
+            e2?.response?.data?.error?.message || e2?.message || '未知错误';
+          return {
+            ok: false,
+            message: `${status2 ? `${status2}: ` : ''}${msg2}`,
+          };
         }
+      }
+
+      return { ok: false, message: status ? `${status}: ${msg}` : msg };
     }
+  }
 }

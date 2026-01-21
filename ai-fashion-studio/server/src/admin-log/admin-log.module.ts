@@ -8,4 +8,3 @@ import { AdminLogService } from './admin-log.service';
   exports: [AdminLogService],
 })
 export class AdminLogModule {}
-

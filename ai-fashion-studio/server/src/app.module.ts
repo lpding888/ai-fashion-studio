@@ -24,6 +24,8 @@ import { AdminLogModule } from './admin-log/admin-log.module';
 import { DirectPromptModule } from './direct-prompt/direct-prompt.module';
 import { AdminAnalyticsModule } from './admin-analytics/admin-analytics.module';
 import { PromptSnippetModule } from './prompt-snippet/prompt-snippet.module';
+import { UserAssetModule } from './user-asset/user-asset.module';
+import { LearnPromptModule } from './learn-prompt/learn-prompt.module';
 
 @Module({
   imports: [
@@ -62,8 +64,10 @@ import { PromptSnippetModule } from './prompt-snippet/prompt-snippet.module';
     AdminLogModule,
     AdminAnalyticsModule,
     PromptSnippetModule,
+    UserAssetModule,
+    LearnPromptModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}

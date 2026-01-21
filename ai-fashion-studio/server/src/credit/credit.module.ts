@@ -5,9 +5,9 @@ import { DbModule } from '../db/db.module';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
-    imports: [DbModule, AuthModule],
-    controllers: [CreditController],
-    providers: [CreditService],
-    exports: [CreditService],
+  imports: [DbModule, AuthModule],
+  controllers: [CreditController],
+  providers: [CreditService],
+  exports: [CreditService],
 })
-export class CreditModule { }
+export class CreditModule {}

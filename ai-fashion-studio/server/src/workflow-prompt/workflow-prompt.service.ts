@@ -64,7 +64,10 @@ export class WorkflowPromptService implements OnModuleInit {
     for (const dir of candidates) {
       const plannerPath = path.join(dir, 'planner_system.md');
       const painterPath = path.join(dir, 'painter_system.md');
-      if ((await fs.pathExists(plannerPath)) && (await fs.pathExists(painterPath))) {
+      if (
+        (await fs.pathExists(plannerPath)) &&
+        (await fs.pathExists(painterPath))
+      ) {
         const [plannerSystemPrompt, painterSystemPrompt] = await Promise.all([
           fs.readFile(plannerPath, 'utf8'),
           fs.readFile(painterPath, 'utf8'),
@@ -79,29 +82,31 @@ export class WorkflowPromptService implements OnModuleInit {
     return null;
   }
 
-  private normalizePack(pack: any | null | undefined): WorkflowPromptPack | null {
+  private normalizePack(
+    pack: any | null | undefined,
+  ): WorkflowPromptPack | null {
     const input: any = pack ?? {};
     const seed = this.seedPackCache;
 
     // Backward compatible with older pack shapes (hero/storyboard/shot/grid)
     const plannerSystemPrompt = (
-      input.plannerSystemPrompt
-      ?? input.storyboardBrainSystemPrompt
-      ?? seed?.plannerSystemPrompt
-      ?? (seed as any)?.storyboardBrainSystemPrompt
-      ?? ''
+      input.plannerSystemPrompt ??
+      input.storyboardBrainSystemPrompt ??
+      seed?.plannerSystemPrompt ??
+      (seed as any)?.storyboardBrainSystemPrompt ??
+      ''
     ).trim();
 
     const painterSystemPrompt = (
-      input.painterSystemPrompt
-      ?? input.heroPainterPrompt
-      ?? input.shotPainterPrompt
-      ?? input.gridPainterPrompt
-      ?? seed?.painterSystemPrompt
-      ?? (seed as any)?.heroPainterPrompt
-      ?? (seed as any)?.shotPainterPrompt
-      ?? (seed as any)?.gridPainterPrompt
-      ?? ''
+      input.painterSystemPrompt ??
+      input.heroPainterPrompt ??
+      input.shotPainterPrompt ??
+      input.gridPainterPrompt ??
+      seed?.painterSystemPrompt ??
+      (seed as any)?.heroPainterPrompt ??
+      (seed as any)?.shotPainterPrompt ??
+      (seed as any)?.gridPainterPrompt ??
+      ''
     ).trim();
 
     if (!plannerSystemPrompt || !painterSystemPrompt) {
@@ -128,13 +133,22 @@ export class WorkflowPromptService implements OnModuleInit {
 
     const seed = await this.readSeedPackFromDocs();
     if (!seed) {
-      this.logger.warn('No workflow seed prompts found; initialized empty store');
+      this.logger.warn(
+        'No workflow seed prompts found; initialized empty store',
+      );
       return;
     }
 
     const createdBy = { id: 'system', username: 'system' };
-    const seeded = await this.createVersion(seed, createdBy, 'Seed from docs', true);
-    this.logger.log(`Seeded workflow prompt store with version ${seeded.versionId}`);
+    const seeded = await this.createVersion(
+      seed,
+      createdBy,
+      'Seed from docs',
+      true,
+    );
+    this.logger.log(
+      `Seeded workflow prompt store with version ${seeded.versionId}`,
+    );
   }
 
   async getActiveRef(): Promise<ActivePromptRef | null> {
@@ -155,7 +169,7 @@ export class WorkflowPromptService implements OnModuleInit {
   async getVersion(versionId: string): Promise<WorkflowPromptVersion | null> {
     const filePath = this.versionPath(versionId);
     if (!(await fs.pathExists(filePath))) return null;
-    const raw = (await fs.readJson(filePath)) as any;
+    const raw = await fs.readJson(filePath);
     const normalized = this.normalizePack(raw?.pack);
     if (!raw || !normalized) return null;
     return { ...(raw as WorkflowPromptVersion), pack: normalized };
@@ -163,7 +177,9 @@ export class WorkflowPromptService implements OnModuleInit {
 
   async listVersions(): Promise<WorkflowPromptVersionMeta[]> {
     await fs.ensureDir(this.versionsDir);
-    const files = (await fs.readdir(this.versionsDir)).filter((f) => f.endsWith('.json'));
+    const files = (await fs.readdir(this.versionsDir)).filter((f) =>
+      f.endsWith('.json'),
+    );
 
     const metas: WorkflowPromptVersionMeta[] = [];
     for (const file of files) {
@@ -201,7 +217,10 @@ export class WorkflowPromptService implements OnModuleInit {
     const versionId = crypto.randomUUID();
     const createdAt = Date.now();
 
-    const normalizedPack: WorkflowPromptPack = { plannerSystemPrompt, painterSystemPrompt };
+    const normalizedPack: WorkflowPromptPack = {
+      plannerSystemPrompt,
+      painterSystemPrompt,
+    };
     const sha256 = this.sha256(JSON.stringify(normalizedPack));
 
     const version: WorkflowPromptVersion = {

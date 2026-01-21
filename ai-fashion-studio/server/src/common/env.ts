@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-const boolFromString = z
-  .enum(['true', 'false'])
-  .transform((v) => v === 'true');
+const boolFromString = z.enum(['true', 'false']).transform((v) => v === 'true');
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  NODE_ENV: z
+    .enum(['development', 'test', 'production'])
+    .default('development'),
   PORT: z.coerce.number().int().positive().optional(),
   DATABASE_URL: z.string().optional(),
   JWT_SECRET: z.string().optional(),
@@ -24,6 +24,12 @@ const envSchema = z.object({
   COS_REGION: z.string().optional(),
   COS_CDN_DOMAIN: z.string().optional(),
   COS_UPLOAD_ACL: z.string().optional(),
+
+  // SCF Painter（可选）
+  USE_SCF_PAINTER: boolFromString.optional(),
+  SCF_PAINTER_URL: z.string().optional(),
+  SCF_API_KEY: z.string().optional(),
+  SCF_PAINTER_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
@@ -52,7 +58,9 @@ export function validateEnv(config: Record<string, unknown>): AppEnv {
     }
 
     if (!env.BOOTSTRAP_ADMIN_USERNAME || !env.BOOTSTRAP_ADMIN_PASSWORD) {
-      throw new Error('生产环境必须配置 BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD 用于初始化管理员');
+      throw new Error(
+        '生产环境必须配置 BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD 用于初始化管理员',
+      );
     }
 
     if (env.BOOTSTRAP_ADMIN_PASSWORD.length < 12) {
@@ -60,7 +68,9 @@ export function validateEnv(config: Record<string, unknown>): AppEnv {
     }
 
     if (!env.SETTINGS_ENCRYPTION_KEY) {
-      throw new Error('生产环境必须配置 SETTINGS_ENCRYPTION_KEY（32 bytes base64，用于加密模型密钥等设置）');
+      throw new Error(
+        '生产环境必须配置 SETTINGS_ENCRYPTION_KEY（32 bytes base64，用于加密模型密钥等设置）',
+      );
     }
   }
 

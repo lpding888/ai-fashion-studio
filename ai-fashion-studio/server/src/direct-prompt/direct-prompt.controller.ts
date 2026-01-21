@@ -1,4 +1,12 @@
-import { BadRequestException, Body, Controller, Get, Headers, Param, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AuthService } from '../auth/auth.service';
@@ -39,9 +47,12 @@ export class DirectPromptController {
     if (!payload) throw new BadRequestException('令牌无效或已过期');
 
     const user = await this.userDb.getUserById(payload.userId);
-    if (!user || user.role !== 'ADMIN') throw new BadRequestException('需要管理员权限');
+    if (!user || user.role !== 'ADMIN')
+      throw new BadRequestException('需要管理员权限');
     if (user.status !== 'ACTIVE') {
-      throw new BadRequestException(user.status === 'PENDING' ? '账户待管理员审核' : '账户已被禁用');
+      throw new BadRequestException(
+        user.status === 'PENDING' ? '账户待管理员审核' : '账户已被禁用',
+      );
     }
 
     return { id: user.id, username: user.username };
@@ -80,7 +91,12 @@ export class DirectPromptController {
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
-      const meta = await this.promptStore.createVersion(body.pack as DirectPromptPack, admin, body.note, body.publish);
+      const meta = await this.promptStore.createVersion(
+        body.pack as DirectPromptPack,
+        admin,
+        body.note,
+        body.publish,
+      );
       return { success: true, version: meta };
     } catch (e: any) {
       throw new BadRequestException(e.message || '创建版本失败');
@@ -90,11 +106,15 @@ export class DirectPromptController {
   @Post('publish')
   async publish(
     @Headers('authorization') authorization: string,
-    @Body(new ZodValidationPipe(PublishBodySchema)) body: z.infer<typeof PublishBodySchema>,
+    @Body(new ZodValidationPipe(PublishBodySchema))
+    body: z.infer<typeof PublishBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
-      const { version, ref } = await this.promptStore.publishVersion(body.versionId, admin);
+      const { version, ref } = await this.promptStore.publishVersion(
+        body.versionId,
+        admin,
+      );
       const { pack: _pack, ...safeVersion } = version;
       return { success: true, ref, version: safeVersion };
     } catch (e: any) {
@@ -102,4 +122,3 @@ export class DirectPromptController {
     }
   }
 }
-

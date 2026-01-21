@@ -1,10 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import type { CreditTransaction, FacePreset, StylePreset, TaskModel, User } from './models';
+import type {
+  CreditTransaction,
+  FacePreset,
+  StylePreset,
+  TaskModel,
+  User,
+} from './models';
 
 @Injectable()
 export class DbService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   // ===== Task Operations =====
 
@@ -304,7 +310,9 @@ export class DbService {
     return rows.map((row) => this.mapCreditTransaction(row as any));
   }
 
-  async saveCreditTransaction(transaction: CreditTransaction): Promise<CreditTransaction> {
+  async saveCreditTransaction(
+    transaction: CreditTransaction,
+  ): Promise<CreditTransaction> {
     const row = await this.prisma.creditTransaction.create({
       data: {
         id: transaction.id,
@@ -328,4 +336,3 @@ export class DbService {
     return rows.map((row) => this.mapCreditTransaction(row as any));
   }
 }
-

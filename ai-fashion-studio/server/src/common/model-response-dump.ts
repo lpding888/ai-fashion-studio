@@ -64,4 +64,3 @@ export async function dumpModelResponseIfEnabled(params: {
 
   await fs.writeJson(filePath, payload, { spaces: 2 });
 }
-

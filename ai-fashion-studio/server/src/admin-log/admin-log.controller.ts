@@ -13,7 +13,10 @@ export class AdminLogController {
   constructor(private readonly logs: AdminLogService) {}
 
   @Get('recent')
-  async recent(@Query(new ZodValidationPipe(RecentQuerySchema)) query: z.infer<typeof RecentQuerySchema>) {
+  async recent(
+    @Query(new ZodValidationPipe(RecentQuerySchema))
+    query: z.infer<typeof RecentQuerySchema>,
+  ) {
     return { success: true, items: this.logs.recent(query.limit) };
   }
 
@@ -54,4 +57,3 @@ export class AdminLogController {
     write({ type: 'ping', ts: Date.now() });
   }
 }
-

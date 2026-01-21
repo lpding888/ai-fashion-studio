@@ -16,7 +16,7 @@ export class JwtGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly authService: AuthService,
     private readonly userDb: UserDbService,
-  ) { }
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
@@ -25,7 +25,8 @@ export class JwtGuard implements CanActivate {
     ]);
 
     const req = context.switchToHttp().getRequest();
-    const authHeader = (req.headers?.authorization as string | undefined) || undefined;
+    const authHeader =
+      (req.headers?.authorization as string | undefined) || undefined;
     const token = this.authService.extractTokenFromHeader(authHeader);
 
     if (!token) {
@@ -33,7 +34,7 @@ export class JwtGuard implements CanActivate {
       throw new UnauthorizedException('未提供认证令牌');
     }
 
-    const payload = this.authService.verifyToken(token);
+    const payload = this.authService.verifyToken(token, { silent: isPublic });
     if (!payload) {
       if (isPublic) return true;
       throw new UnauthorizedException('令牌无效或已过期');
@@ -59,4 +60,3 @@ export class JwtGuard implements CanActivate {
     return /\/admin(\/|$)/.test(url);
   }
 }
-

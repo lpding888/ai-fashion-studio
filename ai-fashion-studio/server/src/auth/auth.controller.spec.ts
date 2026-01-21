@@ -19,7 +19,11 @@ describe('AuthController (admin update-user)', () => {
   };
 
   const creditServiceMock = {
-    setCreditsByAdmin: jest.fn(async () => ({ previousBalance: 0, newBalance: 0, delta: 0 })),
+    setCreditsByAdmin: jest.fn(async () => ({
+      previousBalance: 0,
+      newBalance: 0,
+      delta: 0,
+    })),
   };
 
   const prismaMock = {} as Partial<PrismaService>;

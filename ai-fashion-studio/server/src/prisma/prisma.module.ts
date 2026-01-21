@@ -1,4 +1,3 @@
-
 import { Global, Module } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 
@@ -7,4 +6,4 @@ import { PrismaService } from './prisma.service';
   providers: [PrismaService],
   exports: [PrismaService], // Export so TaskModule can use it
 })
-export class PrismaModule { }
+export class PrismaModule {}

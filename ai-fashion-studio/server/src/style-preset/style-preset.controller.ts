@@ -63,7 +63,8 @@ export class StylePresetController {
       if (value === null || value === undefined) return false;
       if (typeof value === 'string') return value.trim().length > 0;
       if (typeof value === 'number' || typeof value === 'boolean') return true;
-      if (Array.isArray(value)) return value.some((item) => hasMeaningfulValue(item));
+      if (Array.isArray(value))
+        return value.some((item) => hasMeaningfulValue(item));
       if (typeof value === 'object') {
         return Object.values(value).some((item) => hasMeaningfulValue(item));
       }
@@ -157,7 +158,7 @@ export class StylePresetController {
         this.logger.warn(`Failed to parse tags: ${tagsStr}`, e);
         // 清理已上传的文件
         for (const file of files) {
-          await fs.remove(file.path).catch(() => { });
+          await fs.remove(file.path).catch(() => {});
         }
         throw new BadRequestException(
           'Invalid tags format (must be JSON array)',
@@ -187,9 +188,12 @@ export class StylePresetController {
           this.logger.log(`✅ Uploaded to COS: ${cosKey} -> ${cosUrl}`);
 
           // 删除本地临时文件
-          await fs.remove(file.path).catch(() => { });
+          await fs.remove(file.path).catch(() => {});
         } catch (error) {
-          this.logger.error(`Failed to upload to COS: ${file.originalname}`, error);
+          this.logger.error(
+            `Failed to upload to COS: ${file.originalname}`,
+            error,
+          );
           // 失败时保留本地路径
           imagePaths.push(file.path.replace(/^\./, ''));
         }
@@ -239,10 +243,10 @@ export class StylePresetController {
   @Get()
   async list(@CurrentUser() user: UserModel) {
     const presets = await this.db.getAllStylePresets();
-    const styles = presets.filter((p: any) => (p as any)?.kind !== 'POSE');
+    const styles = presets.filter((p: any) => p?.kind !== 'POSE');
     if (user.role === 'ADMIN') return styles;
     // 兼容旧数据：不带 userId 的默认不返回给普通用户
-    return styles.filter((p: any) => (p as any)?.userId === user.id);
+    return styles.filter((p: any) => p?.userId === user.id);
   }
 
   /**
@@ -334,7 +338,10 @@ export class StylePresetController {
     // 删除所有关联的图片文件
     for (const imgPath of preset.imagePaths) {
       try {
-        if (String(imgPath || '').startsWith('http://') || String(imgPath || '').startsWith('https://')) {
+        if (
+          String(imgPath || '').startsWith('http://') ||
+          String(imgPath || '').startsWith('https://')
+        ) {
           continue;
         }
         if (await fs.pathExists(imgPath)) {
@@ -417,9 +424,12 @@ export class StylePresetController {
           this.logger.log(`✅ Uploaded learned style image to COS: ${cosKey}`);
 
           // 删除本地临时文件
-          await fs.remove(file.path).catch(() => { });
+          await fs.remove(file.path).catch(() => {});
         } catch (error) {
-          this.logger.error(`Failed to upload to COS: ${file.originalname}`, error);
+          this.logger.error(
+            `Failed to upload to COS: ${file.originalname}`,
+            error,
+          );
           // 失败时保留本地路径
           filePaths.push(file.path.replace(/^\./, ''));
         }
@@ -455,7 +465,9 @@ export class StylePresetController {
           learnError: '模型返回为空',
         };
         await this.db.saveStylePreset(preset);
-        this.logger.warn(`⚠️ Style learning returned empty analysis: ${presetId}`);
+        this.logger.warn(
+          `⚠️ Style learning returned empty analysis: ${presetId}`,
+        );
         return { success: false, preset, reason: 'EMPTY_ANALYSIS' };
       }
 
@@ -464,17 +476,19 @@ export class StylePresetController {
         if (!v) return '';
         if (typeof v === 'string') return v.trim();
         if (typeof v === 'object') {
-          const s = String((v as any).summary || '').trim();
+          const s = String(v.summary || '').trim();
           if (s) return s;
           // best-effort: surface a few important fields for quick scanning
-          const key = (v as any).key_light ? JSON.stringify((v as any).key_light) : '';
+          const key = v.key_light ? JSON.stringify(v.key_light) : '';
           return key ? `key_light=${key}` : '';
         }
         return '';
       };
       const lightingHint = pickSummary(analysis?.lighting);
       const sceneHint = pickSummary(analysis?.scene);
-      const gradingHint = pickSummary(analysis?.color_grading ?? analysis?.grading);
+      const gradingHint = pickSummary(
+        analysis?.color_grading ?? analysis?.grading,
+      );
       const cameraHint = pickSummary(analysis?.camera);
       const styleHint = [
         lightingHint ? `Lighting: ${lightingHint}` : '',
@@ -516,7 +530,7 @@ export class StylePresetController {
         const v = String(p || '').trim();
         if (!v) continue;
         if (v.startsWith('http://') || v.startsWith('https://')) continue;
-        await fs.remove(v).catch(() => { });
+        await fs.remove(v).catch(() => {});
       }
       this.logger.error('Style Learning failed', error);
       throw new BadRequestException(
@@ -533,7 +547,8 @@ export class StylePresetController {
   async relearn(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(RelearnBodySchema)) _body: z.infer<typeof RelearnBodySchema>,
+    @Body(new ZodValidationPipe(RelearnBodySchema))
+    _body: z.infer<typeof RelearnBodySchema>,
   ) {
     const existing = await this.db.getStylePreset(id);
     if (!existing || (existing as any).kind === 'POSE') {
@@ -541,14 +556,19 @@ export class StylePresetController {
     }
     this.requireOwnerOrAdmin(existing, user);
 
-    const filePaths = Array.isArray((existing as any).imagePaths) ? (existing as any).imagePaths : [];
+    const filePaths = Array.isArray((existing as any).imagePaths)
+      ? (existing as any).imagePaths
+      : [];
     if (filePaths.length === 0) {
       throw new BadRequestException('Preset has no images to relearn');
     }
 
-    this.logger.log(`🧠 Relearning Style preset ${id} from ${filePaths.length} images...`);
+    this.logger.log(
+      `🧠 Relearning Style preset ${id} from ${filePaths.length} images...`,
+    );
 
-    const config = await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+    const config =
+      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
     const analysis = await this.brainService.analyzeStyleImage(
       filePaths,
       config,
@@ -567,16 +587,18 @@ export class StylePresetController {
       if (!v) return '';
       if (typeof v === 'string') return v.trim();
       if (typeof v === 'object') {
-        const s = String((v as any).summary || '').trim();
+        const s = String(v.summary || '').trim();
         if (s) return s;
-        const key = (v as any).key_light ? JSON.stringify((v as any).key_light) : '';
+        const key = v.key_light ? JSON.stringify(v.key_light) : '';
         return key ? `key_light=${key}` : '';
       }
       return '';
     };
     const lightingHint = pickSummary(analysis?.lighting);
     const sceneHint = pickSummary(analysis?.scene);
-    const gradingHint = pickSummary(analysis?.color_grading ?? analysis?.grading);
+    const gradingHint = pickSummary(
+      analysis?.color_grading ?? analysis?.grading,
+    );
     const cameraHint = pickSummary(analysis?.camera);
     const styleHint = [
       lightingHint ? `Lighting: ${lightingHint}` : '',
@@ -590,8 +612,12 @@ export class StylePresetController {
     const promptBlock = JSON.stringify(analysis, null, 2);
 
     const updates: Partial<StylePreset> = {
-      name: analysis?.name ? String(analysis.name).trim() : (existing as any).name,
-      description: analysis?.description ? String(analysis.description).trim() : (existing as any).description,
+      name: analysis?.name
+        ? String(analysis.name).trim()
+        : (existing as any).name,
+      description: analysis?.description
+        ? String(analysis.description).trim()
+        : (existing as any).description,
       styleHint: styleHint || (existing as any).styleHint,
       promptBlock,
       analysis,
@@ -604,7 +630,9 @@ export class StylePresetController {
     const next = await this.db.updateStylePreset(id, updates);
     if (!next) throw new BadRequestException('Preset not found');
 
-    this.logger.log(`✅ Relearned & Updated style: "${(next as any).name || id}"`);
+    this.logger.log(
+      `✅ Relearned & Updated style: "${(next as any).name || id}"`,
+    );
     return { success: true, preset: next };
   }
 

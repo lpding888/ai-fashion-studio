@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BrainService } from './brain.service';
 import { TranslationService } from '../translation/translation.service';
 import { CosService } from '../cos/cos.service';
+import { LearnPromptService } from '../learn-prompt/learn-prompt.service';
 
 describe('BrainService', () => {
   let service: BrainService;
@@ -22,8 +23,17 @@ describe('BrainService', () => {
           useValue: {
             isEnabled: jest.fn(() => true),
             isValidCosUrl: jest.fn(() => false),
-            getImageUrl: jest.fn((key: string) => `https://cos.example.com/${key}`),
+            getImageUrl: jest.fn(
+              (key: string) => `https://cos.example.com/${key}`,
+            ),
             uploadFile: jest.fn(),
+          },
+        },
+        {
+          provide: LearnPromptService,
+          useValue: {
+            getActiveStyleLearnPromptText: jest.fn(async () => ''),
+            getActivePoseLearnPromptText: jest.fn(async () => ''),
           },
         },
       ],
