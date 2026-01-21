@@ -51,6 +51,7 @@ model User {
   creditTransactions   CreditTransaction[]
   billingEvents        BillingEvent[]
   promptSnippets       PromptSnippet[]
+  userAssets           UserAsset[]
   inviteCodesCreated   InviteCode[] @relation("InviteCreatedBy")
   inviteCodesUsed      InviteCode[] @relation("InviteUsedBy")
 
@@ -185,4 +186,25 @@ model PromptSnippet {
   @@index([userId])
   @@index([updatedAt(sort: Desc)])
   @@map("prompt_snippets")
+}
+
+model UserAsset {
+  id        String   @id @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  sha256    String
+  url       String
+  cosKey    String?  @map("cos_key")
+  fileName  String?  @map("file_name")
+  mimeType  String?  @map("mime_type")
+  size      Int?
+  width     Int?
+  height    Int?
+  createdAt DateTime @default(now()) @map("created_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sha256])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("user_assets")
 }
