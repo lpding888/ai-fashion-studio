@@ -1,12 +1,12 @@
 # SCF Painter云函数
 
-腾讯云Serverless函数，用于批量并行调用Painter API生成图片。
+腾讯云Serverless函数，用于单任务多张串行调用Painter API生成图片。
 
 ## 功能
 
 - ✅ 从COS下载参考图
 - ✅ WebP自动压缩（数据万象CI）
-- ✅ 批量并行调用Painter API
+- ✅ 批量串行调用Painter API（并发=1）
 - ✅ 保存生成图到COS
 - ✅ 完整错误处理和日志
 
@@ -118,37 +118,63 @@ import axios from 'axios';
 const scfUrl = 'https://service-xxx.gz.apigw.tencentcs.com/release/painter-generator';
 
 const result = await axios.post(scfUrl, {
-  referenceImageUrls: [
-    'https://your-bucket.cos.ap-beijing.myqcloud.com/image.jpg'
-  ],
-  prompts: [
-    'Prompt 1',
-    'Prompt 2',
-    'Prompt 3'
+  taskId: 'task_xxx',
+  shots: [
+    {
+      shotId: 'shot_1',
+      prompt: 'Prompt 1',
+      images: [
+        { url: 'https://your-bucket.cos.ap-beijing.myqcloud.com/image.jpg', label: 'REF_1' }
+      ],
+      painterParams: {
+        aspectRatio: '16:9',
+        imageSize: '1K'
+      }
+    },
+    {
+      shotId: 'shot_2',
+      prompt: 'Prompt 2',
+      images: [
+        { url: 'https://your-bucket.cos.ap-beijing.myqcloud.com/image2.jpg', label: 'REF_1' }
+      ],
+      painterParams: {
+        aspectRatio: '16:9',
+        imageSize: '1K'
+      }
+    }
   ],
   config: {
     painterApiUrl: 'https://painter-api.com/generate',
     apiKey: 'your-api-key',
-    painterParams: {
-      style: 'realistic',
-      size: '1024x1024'
-    }
+    painterModel: 'gemini-3-pro-image-preview'
   }
 });
 
-console.log(result.data.imageUrls);
+console.log(result.data.results);
 ```
 
 ### 请求格式
 
 ```json
 {
-  "referenceImageUrls": ["https://..."],
-  "prompts": ["prompt 1", "prompt 2"],
+  "taskId": "task_xxx",
+  "shots": [
+    {
+      "shotId": "shot_1",
+      "prompt": "prompt 1",
+      "images": [
+        { "url": "https://...", "label": "REF_1" }
+      ],
+      "painterParams": {
+        "aspectRatio": "16:9",
+        "imageSize": "1K"
+      }
+    }
+  ],
   "config": {
     "painterApiUrl": "https://...",
     "apiKey": "...",
-    "painterParams": {}
+    "painterModel": "gemini-3-pro-image-preview"
   }
 }
 ```
@@ -158,9 +184,18 @@ console.log(result.data.imageUrls);
 ```json
 {
   "success": true,
-  "imageUrls": [
-    "https://bucket.cos.region.myqcloud.com/generated/xxx-0.png",
-    "https://bucket.cos.region.myqcloud.com/generated/xxx-1.png"
+  "results": [
+    {
+      "shotId": "shot_1",
+      "success": true,
+      "imageUrl": "https://bucket.cos.region.myqcloud.com/generated/xxx-0.png",
+      "shootLogText": ""
+    },
+    {
+      "shotId": "shot_2",
+      "success": false,
+      "error": "xxx"
+    }
   ],
   "count": 2
 }
@@ -237,4 +272,4 @@ console.log('详细信息:', JSON.stringify(data, null, 2));
 
 ## 更新日志
 
-- v1.0.0 (2026-01-07): 初始版本，支持批量并行生成
+- v1.1.0 (2026-01-19): 支持批量串行生成与逐张返回结果
