@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, X, Trash2, Check, Loader2, Sparkles, Image as ImageIcon, RotateCcw } from "lucide-react";
+import { Pencil, X, Trash2, Check, Loader2, Sparkles, Image as ImageIcon, RotateCcw, Star } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,12 +23,19 @@ export function PresetCard(props: {
   onRetry?: () => Promise<void>;
   onOpenDetails?: () => void;
   compact?: boolean; // Added for AssetLibrary smaller layout
+  batchMode?: boolean;
+  batchSelected?: boolean;
+  onBatchToggle?: () => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
 }) {
-  const { id, name, description, thumbnailPath, selected, kindLabel, isFailed, onToggle, onRename, onDelete, onRetry, onOpenDetails } = props;
+  const { id, name, description, thumbnailPath, selected, kindLabel, isFailed, onToggle, onRename, onDelete, onRetry, onOpenDetails, batchMode, batchSelected, onBatchToggle, isFavorite, onToggleFavorite } = props;
   const [editing, setEditing] = React.useState(false);
   const [draftName, setDraftName] = React.useState(name);
   const [busy, setBusy] = React.useState<"rename" | "delete" | "retry" | null>(null);
   const showInlineActions = !onOpenDetails;
+  const showFavoriteAction = !!onToggleFavorite;
+  const showDetailsOnlyAction = !!onOpenDetails && !showInlineActions;
 
   React.useEffect(() => setDraftName(name), [name]);
 
@@ -38,7 +45,14 @@ export function PresetCard(props: {
         "group overflow-hidden border transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 active:scale-95 " +
         (selected ? "border-purple-500 ring-2 ring-purple-200 shadow-purple-200/50" : "border-border hover:border-purple-300 hover:shadow-purple-100")
       }
-      onClick={() => !editing && onToggle()}
+      onClick={() => {
+        if (editing) return;
+        if (batchMode && onBatchToggle) {
+          onBatchToggle();
+          return;
+        }
+        onToggle();
+      }}
       title={name}
     >
       <div className="aspect-[4/3] bg-muted relative">
@@ -64,8 +78,39 @@ export function PresetCard(props: {
           </Badge>
         </div>
 
+        {showDetailsOnlyAction && (
+          <div className="absolute top-2 right-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDetails?.();
+              }}
+            >
+              详情/编辑
+            </Button>
+          </div>
+        )}
+
         {showInlineActions && (
           <div className="absolute top-2 right-2 flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+            {showFavoriteAction && (
+              <Button
+                variant="secondary"
+                size="icon"
+                className="h-9 w-9"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite?.();
+                }}
+                title={isFavorite ? "取消收藏" : "收藏"}
+                disabled={busy !== null}
+              >
+                <Star className={`w-5 h-5 ${isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
+              </Button>
+            )}
             {!!onRetry && (
               <Button
                 variant="secondary"
@@ -139,6 +184,26 @@ export function PresetCard(props: {
             </Button>
           </div>
         )}
+
+        {!showInlineActions && showFavoriteAction && (
+          <button
+            type="button"
+            className="absolute top-2 right-2 rounded-full bg-white/90 p-2 text-slate-700 shadow-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite?.();
+            }}
+            title={isFavorite ? "取消收藏" : "收藏"}
+          >
+            <Star className={`h-4 w-4 ${isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
+          </button>
+        )}
+
+        {batchMode && (
+          <div className="absolute bottom-2 right-2 rounded-full bg-white/90 px-2 py-1 text-xs font-semibold text-slate-700 shadow-sm">
+            {batchSelected ? "已选" : "未选"}
+          </div>
+        )}
       </div>
 
       <CardContent className="p-3">
@@ -178,19 +243,6 @@ export function PresetCard(props: {
             !!description && (
               <div className="text-[11px] text-muted-foreground line-clamp-1">备注：{description}</div>
             )
-          )}
-          {!!onOpenDetails && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 px-2 text-[11px]"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenDetails();
-              }}
-            >
-              详情/编辑
-            </Button>
           )}
         </div>
         <div className="mt-2 text-[11px] text-muted-foreground">ID: {id.slice(0, 8)}</div>

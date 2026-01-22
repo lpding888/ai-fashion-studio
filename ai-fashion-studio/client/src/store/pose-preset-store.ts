@@ -10,6 +10,9 @@ export interface PosePreset {
   imagePaths: string[];
   thumbnailPath?: string;
   tags?: string[];
+  collectionIds?: string[];
+  favoriteAt?: number;
+  lastUsedAt?: number;
   promptBlock?: string;
   learnStatus?: 'SUCCESS' | 'FAILED';
   learnError?: string;

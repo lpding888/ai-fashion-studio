@@ -1,32 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BACKEND_ORIGIN } from '@/lib/api';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { RefreshCw, Loader2 } from 'lucide-react';
+import { PageHeader } from '@/components/admin/shared/page-header';
 
-type McpStatus = {
-  name: string;
-  version: string;
-  tools: string[];
-  toolCallCounts: Record<string, number>;
-  lastToolCallAt?: number;
-  lastConnectedAt?: number;
-  hasActiveTransport: boolean;
-  activeSessions?: number;
-  sessionIds?: string[];
-};
-
-type SseEvent = {
-  ts: number;
-  event: string;
-  data: string;
-  parsed?: unknown;
-};
+import { McpStatus, SseEvent } from './types';
+import { StatusCards } from './status-cards';
+import { ConnectorCard } from './connector-card';
+import { EventsCard } from './events-card';
+import { ToolsTable } from './tools-table';
+import { DebugConsole } from './debug-console';
 
 export default function AdminMcpPage() {
   const [loading, setLoading] = useState(true);
@@ -37,22 +22,8 @@ export default function AdminMcpPage() {
   const [connecting, setConnecting] = useState(false);
   const [messagesUrl, setMessagesUrl] = useState<string | null>(null);
   const [events, setEvents] = useState<SseEvent[]>([]);
-  const [sendText, setSendText] = useState<string>('');
-  const [clientName, setClientName] = useState('afs-admin');
-  const [protocolVersion, setProtocolVersion] = useState('2024-11-05');
   const [nextId, setNextId] = useState(1);
   const abortRef = useRef<AbortController | null>(null);
-
-  const rows = useMemo(() => {
-    if (!status) return [];
-    const tools = status.tools || [];
-    return tools
-      .map((t) => ({
-        name: t,
-        count: Number(status.toolCallCounts?.[t] || 0),
-      }))
-      .sort((a, b) => b.count - a.count);
-  }, [status]);
 
   const pushEvent = (evt: SseEvent) => {
     setEvents((prev) => {
@@ -100,7 +71,6 @@ export default function AdminMcpPage() {
       const token = localStorage.getItem('token');
       if (!token) throw new Error('缺少 token（请重新登录管理台）');
 
-      // Abort previous
       disconnect();
 
       const aborter = new AbortController();
@@ -168,7 +138,6 @@ export default function AdminMcpPage() {
             dataLines.push(line.slice('data:'.length).trimStart());
             continue;
           }
-          // ignore: id/retry/other fields
         }
       }
     } catch (e: unknown) {
@@ -199,7 +168,7 @@ export default function AdminMcpPage() {
     }
   };
 
-  const sendInitialize = async () => {
+  const handleInitialize = async (clientName: string, protocolVersion: string) => {
     const id = nextId;
     setNextId((v) => v + 1);
     await postMessage({
@@ -214,7 +183,7 @@ export default function AdminMcpPage() {
     });
   };
 
-  const sendInitialized = async () => {
+  const handleInitialized = async () => {
     await postMessage({
       jsonrpc: '2.0',
       method: 'notifications/initialized',
@@ -222,13 +191,13 @@ export default function AdminMcpPage() {
     });
   };
 
-  const sendListTools = async () => {
+  const handleListTools = async () => {
     const id = nextId;
     setNextId((v) => v + 1);
     await postMessage({ jsonrpc: '2.0', id, method: 'tools/list', params: {} });
   };
 
-  const sendCallTool = async (toolName: string, args: Record<string, unknown>) => {
+  const handleCallTool = async (toolName: string, args: Record<string, unknown>) => {
     const id = nextId;
     setNextId((v) => v + 1);
     await postMessage({
@@ -241,258 +210,62 @@ export default function AdminMcpPage() {
 
   useEffect(() => {
     void fetchStatus();
+    return () => disconnect();
   }, [fetchStatus]);
 
-  const fmtTs = (ts?: number) => {
-    if (!ts) return '-';
-    try {
-      return new Date(ts).toLocaleString('zh-CN');
-    } catch {
-      return String(ts);
-    }
-  };
+  // Derive available tools from tools/list response if possible, 
+  // but for now we rely on the status API or we just let it be empty initially.
+  // The original code used `status.tools`.
+  const availableTools = status?.tools || [];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">MCP</h2>
-          <p className="text-muted-foreground">可交互控制台：SSE 连接 + JSON-RPC（initialize/tools/list/tools/call）</p>
-        </div>
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="flex items-center justify-between">
+        <PageHeader
+          title="MCP 控制台"
+          description="模型上下文协议 (Model Context Protocol) 调试工具。支持 SSE 连接与 JSON-RPC 交互。"
+        />
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => void fetchStatus()} disabled={loading}>
-            刷新
+          <Button variant="outline" onClick={() => void fetchStatus()} disabled={loading} className="gap-2">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            刷新状态
           </Button>
         </div>
       </div>
 
-      {error ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>加载失败</CardTitle>
-            <CardDescription className="text-destructive">{error}</CardDescription>
-          </CardHeader>
-        </Card>
-      ) : null}
+      {error && <div className="p-4 rounded-md bg-red-50 text-red-600 border border-red-200">{error}</div>}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>连接</CardTitle>
-          <CardDescription>后端 SSE：`GET /api/admin/mcp/sse`；消息：`POST /api/admin/mcp/messages?sessionId=...`</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap gap-2 items-center">
-            <Badge variant={connected ? 'default' : 'secondary'}>{connected ? 'Connected' : 'Disconnected'}</Badge>
-            {messagesUrl ? <span className="font-mono text-xs text-muted-foreground break-all">{messagesUrl}</span> : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => void connect()} disabled={connecting || connected}>
-              连接
-            </Button>
-            <Button variant="outline" onClick={disconnect} disabled={!connected}>
-              断开
-            </Button>
-            <Button variant="outline" onClick={() => setEvents([])} disabled={events.length === 0}>
-              清空事件
-            </Button>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
-            <div className="grid gap-2">
-              <div className="text-sm text-muted-foreground">protocolVersion</div>
-              <Input value={protocolVersion} onChange={(e) => setProtocolVersion(e.target.value)} />
-            </div>
-            <div className="grid gap-2">
-              <div className="text-sm text-muted-foreground">clientInfo.name</div>
-              <Input value={clientName} onChange={(e) => setClientName(e.target.value)} />
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              onClick={() => void sendInitialize().catch((e) => setError(e?.message || String(e)))}
-              disabled={!connected || !messagesUrl}
-            >
-              initialize
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => void sendInitialized().catch((e) => setError(e?.message || String(e)))}
-              disabled={!connected || !messagesUrl}
-            >
-              notifications/initialized
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => void sendListTools().catch((e) => setError(e?.message || String(e)))}
-              disabled={!connected || !messagesUrl}
-            >
-              tools/list
-            </Button>
-          </div>
-          <div className="grid gap-2">
-            <div className="text-sm text-muted-foreground">tools/call（JSON args）</div>
-            <div className="flex flex-wrap gap-2">
-              {rows.map((r) => (
-                <Button
-                  key={`call-${r.name}`}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void sendCallTool(r.name, {}).catch((e) => setError(e?.message || String(e)))}
-                  disabled={!connected || !messagesUrl}
-                >
-                  {r.name}({})
-                </Button>
-              ))}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <StatusCards status={status} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>发送消息（raw JSON）</CardTitle>
-          <CardDescription>直接发送 JSON-RPC 消息体到 messages endpoint（用于调试）</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Textarea
-            value={sendText}
-            onChange={(e) => setSendText(e.target.value)}
-            placeholder='例如：{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-            className="min-h-[120px] font-mono text-xs"
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="space-y-6">
+          <ConnectorCard
+            connected={connected}
+            connecting={connecting}
+            messagesUrl={messagesUrl}
+            eventsCount={events.length}
+            onConnect={connect}
+            onDisconnect={disconnect}
+            onClearEvents={() => setEvents([])}
+            onInitialize={handleInitialize}
+            onSendInitialized={handleInitialized}
+            onListTools={handleListTools}
+            onCallTool={handleCallTool}
+            tools={availableTools}
           />
-          <div className="flex gap-2">
-            <Button
-              onClick={() =>
-                void (async () => {
-                  try {
-                    const payload = JSON.parse(sendText || '');
-                    await postMessage(payload);
-                  } catch (e: unknown) {
-                    setError(e instanceof Error ? e.message : String(e));
-                  }
-                })()
-              }
-              disabled={!connected || !messagesUrl}
-            >
-              发送
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setSendText(JSON.stringify({ jsonrpc: '2.0', id: nextId, method: 'tools/list', params: {} }, null, 2))}
-            >
-              填充 tools/list 模板
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+          <DebugConsole
+            onSend={postMessage}
+            connected={connected}
+            messagesUrl={messagesUrl}
+            nextId={nextId}
+          />
+          <ToolsTable status={status} loading={loading} />
+        </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle>服务</CardTitle>
-            <CardDescription>名称/版本</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="text-sm">
-              <span className="text-muted-foreground">Name：</span>
-              <span className="font-mono">{status?.name || '-'}</span>
-            </div>
-            <div className="text-sm">
-              <span className="text-muted-foreground">Version：</span>
-              <span className="font-mono">{status?.version || '-'}</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>连接</CardTitle>
-            <CardDescription>SSE Transport 状态</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Badge variant={status?.hasActiveTransport ? 'default' : 'secondary'}>
-                {status?.hasActiveTransport ? 'Active' : 'Inactive'}
-              </Badge>
-              <span className="text-xs text-muted-foreground">sessions={status?.activeSessions ?? '-'}</span>
-            </div>
-            <div className="text-sm text-muted-foreground">最近连接：{fmtTs(status?.lastConnectedAt)}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>调用</CardTitle>
-            <CardDescription>工具调用统计</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="text-sm">
-              <span className="text-muted-foreground">工具数：</span>
-              <span className="font-mono">{status?.tools?.length ?? '-'}</span>
-            </div>
-            <div className="text-sm text-muted-foreground">最近调用：{fmtTs(status?.lastToolCallAt)}</div>
-          </CardContent>
-        </Card>
+        <div className="h-full">
+          <EventsCard events={events} />
+        </div>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>工具列表</CardTitle>
-          <CardDescription>按调用次数排序</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="py-8 text-center text-muted-foreground">加载中...</div>
-          ) : rows.length === 0 ? (
-            <div className="py-8 text-center text-muted-foreground">暂无工具数据</div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Tool</TableHead>
-                  <TableHead className="text-right">Calls</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.name}>
-                    <TableCell className="font-mono">{r.name}</TableCell>
-                    <TableCell className="text-right font-mono">{r.count}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>事件（SSE）</CardTitle>
-          <CardDescription>只保留最近 500 条</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-[55vh] overflow-auto rounded-md border bg-background p-3 font-mono text-xs leading-5">
-            {events.length === 0 ? (
-              <div className="py-6 text-center text-muted-foreground">暂无事件</div>
-            ) : (
-              events.map((e, idx) => (
-                <div key={`${e.ts}-${idx}`} className="py-1 border-b last:border-b-0">
-                  <div className="flex gap-2 items-center">
-                    <span className="text-muted-foreground w-[180px]">
-                      {new Date(e.ts).toLocaleString('zh-CN')}
-                    </span>
-                    <Badge variant={e.event === 'message' ? 'default' : 'secondary'}>{e.event}</Badge>
-                  </div>
-                  <div className="mt-1 break-all whitespace-pre-wrap">
-                    {e.parsed ? JSON.stringify(e.parsed, null, 2) : e.data}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

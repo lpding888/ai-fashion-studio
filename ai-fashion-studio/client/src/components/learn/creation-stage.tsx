@@ -52,6 +52,11 @@ interface CreationStageProps {
     setSnippetRemark?: (v: string) => void;
     onClear?: () => void;
     clearDisabled?: boolean;
+    onOptimizePrompt?: () => void;
+    optimizeBusy?: boolean;
+    optimizeDisabled?: boolean;
+    onUndoOptimize?: () => void;
+    canUndoOptimize?: boolean;
 }
 
 export function CreationStage({
@@ -89,6 +94,11 @@ export function CreationStage({
     setSnippetRemark,
     onClear,
     clearDisabled = false,
+    onOptimizePrompt,
+    optimizeBusy = false,
+    optimizeDisabled = false,
+    onUndoOptimize,
+    canUndoOptimize = false,
 }: CreationStageProps) {
     const PROMPT_MIN_HEIGHT = 80;
     const PROMPT_MAX_HEIGHT = 240;
@@ -432,6 +442,32 @@ export function CreationStage({
                                 <span className="text-xs font-medium text-blue-800 truncate max-w-[150px]">
                                     {faceRemark}
                                 </span>
+                            </div>
+                        )}
+                        {onOptimizePrompt && (
+                            <div className="ml-auto flex items-center gap-2">
+                                {canUndoOptimize && (
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 px-2 text-xs"
+                                        onClick={onUndoOptimize}
+                                    >
+                                        撤销
+                                    </Button>
+                                )}
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 px-2 text-xs bg-white/70"
+                                    onClick={onOptimizePrompt}
+                                    disabled={optimizeDisabled || optimizeBusy}
+                                >
+                                    {optimizeBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Sparkles className="w-3.5 h-3.5 mr-1" />}
+                                    {optimizeBusy ? "优化中..." : "自动优化"}
+                                </Button>
                             </div>
                         )}
                     </div>

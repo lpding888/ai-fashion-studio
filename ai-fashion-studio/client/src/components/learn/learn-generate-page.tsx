@@ -19,6 +19,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { calculateRequiredCredits, requestCreditsRefresh, useCredits } from "@/hooks/use-credits";
 import { uploadFileToCosWithMeta, type CosUploadResult } from "@/lib/cos";
 import { registerUserAssets } from "@/lib/user-assets";
+import { batchUpdatePresetMeta, type BatchMetaAction, type PresetKind } from "@/lib/preset-meta";
+import { createPresetCollection, deletePresetCollection, listPresetCollections, renamePresetCollection, type PresetCollection } from "@/lib/preset-collections";
+import { optimizePrompt } from "@/lib/prompt-optimizer";
 
 import { useStylePresetStore, type StylePreset } from "@/store/style-preset-store";
 import { usePosePresetStore } from "@/store/pose-preset-store";
@@ -29,6 +32,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ImageLightbox, type LightboxItem } from "@/components/image-lightbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 import { QueueSidebar } from "@/components/learn/queue-sidebar";
 import { AssetLibrary } from "@/components/learn/asset-library";
@@ -127,6 +131,13 @@ function stripAutoStylePrompt(raw: string) {
   return userLines.join("\n").trim();
 }
 
+function isCosImageUrl(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (!/^https?:\/\//i.test(trimmed)) return false;
+  return trimmed.includes(".cos.") && trimmed.includes(".myqcloud.com/");
+}
+
 function hashString(input: string) {
   let hash = 0;
   for (let i = 0; i < input.length; i += 1) {
@@ -179,6 +190,12 @@ export function LearnGeneratePage() {
   const [promptSnippetsBusy, setPromptSnippetsBusy] = React.useState<"create" | "delete" | null>(null);
   const [selectedSnippetId, setSelectedSnippetId] = React.useState<string | null>(null);
   const [snippetRemark, setSnippetRemark] = React.useState<string>("");
+  const [promptOptimizeOpen, setPromptOptimizeOpen] = React.useState(false);
+  const [promptOptimizeBusy, setPromptOptimizeBusy] = React.useState(false);
+  const [promptOptimizeOriginal, setPromptOptimizeOriginal] = React.useState("");
+  const [promptOptimizeResult, setPromptOptimizeResult] = React.useState("");
+  const [promptUndoSnapshot, setPromptUndoSnapshot] = React.useState<string | null>(null);
+  const [collections, setCollections] = React.useState<PresetCollection[]>([]);
 
   const [resolution, setResolution] = React.useState<"1K" | "2K" | "4K">("2K");
   const [aspectRatio, setAspectRatio] = React.useState<"1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9">("3:4");
@@ -226,6 +243,7 @@ export function LearnGeneratePage() {
     selectedSnippetId ||
     snippetRemark.trim()
   );
+  const canOptimizePrompt = userPrompt.trim().length > 0;
   const activeStyleName =
     selectedStyleIds.length > 0
       ? String((stylePresetsAll || []).find((p) => p.id === selectedStyleIds[0])?.name || "").trim()
@@ -260,6 +278,171 @@ export function LearnGeneratePage() {
     }
   }, [isAuthenticated]);
 
+  const loadCollections = React.useCallback(async () => {
+    if (!isAuthenticated) return;
+    try {
+      const items = await listPresetCollections();
+      setCollections(items);
+    } catch (err) {
+      console.error("加载收藏夹失败:", err);
+      setCollections([]);
+    }
+  }, [isAuthenticated]);
+
+  const refreshPresetKind = React.useCallback(async (kind: PresetKind) => {
+    if (kind === "STYLE") {
+      await fetchStylePresets();
+      return;
+    }
+    if (kind === "POSE") {
+      await fetchPosePresets();
+      return;
+    }
+    await fetchFacePresets();
+  }, [fetchStylePresets, fetchPosePresets, fetchFacePresets]);
+
+  const handleBatchUpdateMeta = React.useCallback(async (input: {
+    kind: PresetKind;
+    ids: string[];
+    action: BatchMetaAction;
+    tags?: string[];
+    collectionIds?: string[];
+  }) => {
+    await batchUpdatePresetMeta({
+      kind: input.kind,
+      ids: input.ids,
+      action: input.action,
+      payload: {
+        tags: input.tags,
+        collectionIds: input.collectionIds,
+      },
+    });
+  }, []);
+
+  const handleCreateCollection = React.useCallback(async (name: string) => {
+    await createPresetCollection(name);
+    await loadCollections();
+  }, [loadCollections]);
+
+  const handleRenameCollection = React.useCallback(async (id: string, name: string) => {
+    await renamePresetCollection(id, name);
+    await loadCollections();
+  }, [loadCollections]);
+
+  const handleDeleteCollection = React.useCallback(async (id: string) => {
+    await deletePresetCollection(id);
+    await loadCollections();
+    await fetchStylePresets();
+    await fetchPosePresets();
+    await fetchFacePresets();
+  }, [loadCollections, fetchStylePresets, fetchPosePresets, fetchFacePresets]);
+
+  const handlePromptChange = React.useCallback((value: string) => {
+    setUserPrompt(value);
+    if (promptUndoSnapshot !== null) {
+      setPromptUndoSnapshot(null);
+    }
+  }, [promptUndoSnapshot]);
+
+  const handleOptimizePrompt = React.useCallback(async () => {
+    const basePrompt = userPrompt.trim();
+    if (!basePrompt) {
+      alert("请先输入提示词");
+      return;
+    }
+
+    setPromptOptimizeBusy(true);
+    try {
+      const styles = selectedStyleIds
+        .map((id) => stylePresetsAll.find((p) => p.id === id))
+        .filter(Boolean)
+        .map((p) => ({
+          id: p!.id,
+          name: p!.name,
+          description: p!.description,
+          tags: p!.tags,
+          styleHint: p!.styleHint,
+        }));
+      const poses = selectedPoseIds
+        .map((id) => posePresetsAll.find((p) => p.id === id))
+        .filter(Boolean)
+        .map((p) => ({
+          id: p!.id,
+          name: p!.name,
+          description: p!.description,
+          tags: p!.tags,
+        }));
+      const faces = selectedFaceIds
+        .map((id) => facePresetsAll.find((p) => p.id === id))
+        .filter(Boolean)
+        .map((p) => ({
+          id: p!.id,
+          name: p!.name,
+          description: p!.description,
+          tags: p!.tags,
+        }));
+
+      const res = await optimizePrompt({
+        prompt: basePrompt,
+        settings: {
+          layoutMode,
+          shotCount,
+          resolution,
+          aspectRatio,
+        },
+        presets: {
+          styles: styles.length ? styles : undefined,
+          poses: poses.length ? poses : undefined,
+          faces: faces.length ? faces : undefined,
+        },
+      });
+
+      const optimized = String(res?.optimizedPrompt || "").trim();
+      if (!optimized) {
+        throw new Error("优化结果为空");
+      }
+
+      setPromptOptimizeOriginal(basePrompt);
+      setPromptOptimizeResult(optimized);
+      setPromptOptimizeOpen(true);
+    } catch (e: unknown) {
+      console.error(e);
+      alert(getErrorMessage(e, "优化失败"));
+    } finally {
+      setPromptOptimizeBusy(false);
+    }
+  }, [
+    userPrompt,
+    selectedStyleIds,
+    selectedPoseIds,
+    selectedFaceIds,
+    stylePresetsAll,
+    posePresetsAll,
+    facePresetsAll,
+    layoutMode,
+    shotCount,
+    resolution,
+    aspectRatio,
+  ]);
+
+  const applyOptimizedPrompt = React.useCallback((mode: "replace" | "append") => {
+    const optimized = String(promptOptimizeResult || "").trim();
+    if (!optimized) return;
+    setPromptUndoSnapshot(userPrompt);
+    if (mode === "append") {
+      setUserPrompt((prev) => (prev.trim() ? `${prev.trim()}\n${optimized}` : optimized));
+    } else {
+      setUserPrompt(optimized);
+    }
+    setPromptOptimizeOpen(false);
+  }, [promptOptimizeResult, userPrompt]);
+
+  const handleUndoOptimize = React.useCallback(() => {
+    if (promptUndoSnapshot === null) return;
+    setUserPrompt(promptUndoSnapshot);
+    setPromptUndoSnapshot(null);
+  }, [promptUndoSnapshot]);
+
   const uploadGarmentFiles = async (files: File[]) => {
     if (!files.length) return [];
     const results: CosUploadResult[] = await Promise.all(files.map((f) => uploadFileToCosWithMeta(f)));
@@ -281,7 +464,8 @@ export function LearnGeneratePage() {
   React.useEffect(() => {
     if (!isAuthenticated) return;
     void loadPromptSnippets();
-  }, [isAuthenticated, loadPromptSnippets]);
+    void loadCollections();
+  }, [isAuthenticated, loadPromptSnippets, loadCollections]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -365,12 +549,23 @@ export function LearnGeneratePage() {
     setUserPrompt("");
     setSelectedSnippetId(null);
     setSnippetRemark("");
+    setPromptUndoSnapshot(null);
+    setPromptOptimizeOpen(false);
     flashNotice("已清空工作台");
   }, [flashNotice]);
 
   const applyTaskToWorkbench = React.useCallback(
     (task: TaskApi) => {
       const nextPromptRaw = String(task?.directPrompt || task?.requirements || "").trim();
+      const garmentPaths = Array.isArray(task?.garmentImagePaths) ? task.garmentImagePaths : [];
+      const cosGarments = Array.from(
+        new Set(
+          garmentPaths
+            .map((v) => String(v || "").trim())
+            .filter(Boolean)
+            .filter(isCosImageUrl),
+        ),
+      );
 
       const nextResolution = (task?.resolution || "2K") as "1K" | "2K" | "4K";
       const nextAspect = (task?.aspectRatio || "3:4") as "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
@@ -418,16 +613,23 @@ export function LearnGeneratePage() {
       setUserPrompt(resolvedUserPrompt);
       setSelectedSnippetId(null);
 
-      if (missingStyle.length || missingPose.length || missingFace.length) {
-        flashNotice(
-          `已回填设置；但有预设已不存在：` +
-          `${missingStyle.length ? `风格×${missingStyle.length} ` : ""}` +
-          `${missingPose.length ? `姿势×${missingPose.length} ` : ""}` +
-          `${missingFace.length ? `人脸×${missingFace.length}` : ""}`,
-        );
-      } else {
-        flashNotice("已把该任务的参数回填到工作台（衣服图片仍以当前上传为准）");
-      }
+      setGarmentFiles([]);
+      setGarmentAssetUrls(cosGarments);
+
+      const garmentNotice = cosGarments.length
+        ? `衣服图已回填（COS×${cosGarments.length}）`
+        : garmentPaths.length
+          ? "衣服图非 COS，需手动重传"
+          : "任务未记录衣服图，请手动重传";
+
+      const missingNotice = missingStyle.length || missingPose.length || missingFace.length
+        ? `；但有预设已不存在：` +
+        `${missingStyle.length ? `风格×${missingStyle.length} ` : ""}` +
+        `${missingPose.length ? `姿势×${missingPose.length} ` : ""}` +
+        `${missingFace.length ? `人脸×${missingFace.length}` : ""}`
+        : "";
+
+      flashNotice(`已回填设置；${garmentNotice}${missingNotice}`);
     },
     [facePresetsAll, posePresetsAll, stylePresetsAll, flashNotice],
   );
@@ -844,6 +1046,7 @@ export function LearnGeneratePage() {
         stylePresets={stylePresetsAll || []}
         posePresets={posePresetsAll || []}
         facePresets={facePresetsAll || []}
+        collections={collections}
         selectedStyleIds={selectedStyleIds}
         setSelectedStyleIds={setSelectedStyleIds}
         selectedPoseIds={selectedPoseIds}
@@ -858,6 +1061,11 @@ export function LearnGeneratePage() {
         onUpdateFace={updateFacePreset}
         onRelearnStyle={relearnStylePreset}
         onRelearnPose={relearnPosePreset}
+        onBatchUpdateMeta={handleBatchUpdateMeta}
+        onRefreshKind={refreshPresetKind}
+        onCreateCollection={handleCreateCollection}
+        onRenameCollection={handleRenameCollection}
+        onDeleteCollection={handleDeleteCollection}
       />
       <div className="p-3 border-t border-white/20 bg-white/30 space-y-2 backdrop-blur-sm">
         <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => styleInputRef.current?.click()} disabled={styleLearning}>
@@ -959,9 +1167,9 @@ export function LearnGeneratePage() {
       </div>
 
       {/* 1. Center Stage (Z-Index 10) */}
-      <div className="relative lg:absolute lg:inset-0 flex items-center justify-center p-4 md:p-8 z-10 pointer-events-none">
+      <div className="relative lg:absolute lg:inset-0 flex items-center justify-center p-4 md:p-8 xl:px-[calc(clamp(240px,20vw,320px)+1rem)] z-10 pointer-events-none">
         <div
-          className="pointer-events-auto w-full max-w-5xl lg:h-full transition-transform duration-500 ease-out"
+          className="pointer-events-auto w-full max-w-5xl xl:max-w-[clamp(640px,60vw,1024px)] lg:h-full transition-transform duration-500 ease-out"
           onMouseEnter={() => setIsFocused(true)}
           onMouseLeave={() => setIsFocused(false)}
         >
@@ -978,7 +1186,7 @@ export function LearnGeneratePage() {
               maxGarmentImages={MAX_GARMENT_IMAGES}
               prompt={userPrompt}
             setPrompt={(v) => {
-              setUserPrompt(v);
+              handlePromptChange(v);
               if (selectedSnippetId) setSelectedSnippetId(null);
             }}
             autoStylePrompt={autoStylePrompt}
@@ -1016,12 +1224,29 @@ export function LearnGeneratePage() {
             faceRemark={activeFace?.description || activeFace?.name}
             onClear={clearWorkbench}
             clearDisabled={!canClearWorkbench}
+            onOptimizePrompt={handleOptimizePrompt}
+            optimizeBusy={promptOptimizeBusy}
+            optimizeDisabled={!canOptimizePrompt}
+            onUndoOptimize={handleUndoOptimize}
+            canUndoOptimize={promptUndoSnapshot !== null}
           />
         </div>
       </div>
 
       {/* Mid Desktop Toggle (Queue/Settings) */}
-      <div className="hidden lg:flex xl:hidden absolute top-6 right-6 z-30">
+      <div className="hidden lg:flex xl:hidden absolute top-6 right-6 z-30 gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="h-8 px-3 text-xs"
+          onClick={() => {
+            setShowRightPanel(false);
+            setShowLeftPanel(true);
+          }}
+        >
+          素材库
+        </Button>
         <Button
           type="button"
           variant="secondary"
@@ -1039,7 +1264,7 @@ export function LearnGeneratePage() {
       {/* 2. Left Sidebar: Asset Library (Z-Index 20) */}
       <div
         className={cn(
-          "hidden lg:flex absolute top-4 left-4 bottom-4 w-[300px] z-20 flex-col pointer-events-none transition-all duration-500 ease-in-out",
+          "hidden xl:flex absolute top-4 left-4 bottom-4 w-[clamp(240px,20vw,320px)] z-20 flex-col pointer-events-none transition-all duration-500 ease-in-out",
           "opacity-100"
         )}
       >
@@ -1051,7 +1276,7 @@ export function LearnGeneratePage() {
       {/* 3. Right Sidebar: Queue & Settings (Z-Index 20) */}
       <div
         className={cn(
-          "hidden xl:flex absolute top-4 right-4 bottom-4 w-[320px] z-20 pointer-events-none flex-col gap-4 transition-all duration-500 ease-in-out",
+          "hidden xl:flex absolute top-4 right-4 bottom-4 w-[clamp(240px,20vw,320px)] z-20 pointer-events-none flex-col gap-4 transition-all duration-500 ease-in-out",
           "opacity-100"
         )}
       >
@@ -1064,12 +1289,12 @@ export function LearnGeneratePage() {
 
       {/* Mobile/Tablet Overlay: Asset Library */}
       {showLeftPanel && (
-        <div className="fixed inset-0 z-50 flex lg:hidden">
+        <div className="fixed inset-0 z-50 flex xl:hidden">
           <div
             className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             onClick={() => setShowLeftPanel(false)}
           />
-          <div className="relative m-4 w-[320px] max-w-[85vw] h-[calc(100%-2rem)]">
+          <div className="relative m-4 w-[340px] max-w-[90vw] h-[calc(100%-2rem)]">
             <GlassPanel className="flex flex-col pointer-events-auto h-full overflow-hidden shadow-2xl" intensity="medium">
               <div className="flex items-center justify-between px-3 py-2 border-b border-white/20 bg-white/70">
                 <span className="text-sm font-semibold text-slate-700">素材库</span>
@@ -1096,7 +1321,7 @@ export function LearnGeneratePage() {
             className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             onClick={() => setShowRightPanel(false)}
           />
-          <div className="relative ml-auto m-4 w-[360px] max-w-[90vw] h-[calc(100%-2rem)] flex flex-col gap-3">
+          <div className="relative ml-auto m-4 w-[340px] max-w-[90vw] h-[calc(100%-2rem)] flex flex-col gap-3">
             <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/70 border border-white/20 shadow-sm backdrop-blur">
               <span className="text-sm font-semibold text-slate-700">队列/设置</span>
               <Button
@@ -1152,6 +1377,34 @@ export function LearnGeneratePage() {
           </DialogHeader>
           <div className="max-h-[70vh] overflow-y-auto pr-2">
             <FacePresetSelector selectedIds={selectedFaceIds} onSelect={setSelectedFaceIds} maxSelection={3} />
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={promptOptimizeOpen} onOpenChange={setPromptOptimizeOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>提示词自动优化</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-muted-foreground">原始提示词</label>
+              <Textarea value={promptOptimizeOriginal} readOnly className="min-h-[160px]" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-muted-foreground">优化结果</label>
+              <Textarea value={promptOptimizeResult} readOnly className="min-h-[160px]" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setPromptOptimizeOpen(false)}>
+              取消
+            </Button>
+            <Button variant="secondary" onClick={() => applyOptimizedPrompt("append")}>
+              追加
+            </Button>
+            <Button onClick={() => applyOptimizedPrompt("replace")}>
+              替换
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

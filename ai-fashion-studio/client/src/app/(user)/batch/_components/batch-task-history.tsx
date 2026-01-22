@@ -70,7 +70,13 @@ export function BatchTaskHistory(props: BatchTaskHistoryProps) {
                                         className="relative w-12 h-12 rounded-lg overflow-hidden border border-white/10 bg-black/40 flex-shrink-0 hover:border-white/30"
                                         onClick={() => onOpenLightbox(t.taskId, idx)}
                                     >
-                                        <img src={toImgSrc(img)} className="w-full h-full object-cover" loading="lazy" />
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img
+                                            src={toImgSrc(img)}
+                                            alt={`任务预览 ${idx + 1}`}
+                                            className="w-full h-full object-cover"
+                                            loading="lazy"
+                                        />
                                     </button>
                                 ))}
                             </div>

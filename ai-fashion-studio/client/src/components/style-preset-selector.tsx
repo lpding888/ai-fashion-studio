@@ -174,6 +174,8 @@ export function StylePresetSelector({ selectedIds, onSelect, maxSelection = 3, m
                                                 src={getImageUrl(imgPath)}
                                                 alt=""
                                                 className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                                                loading="lazy"
+                                                decoding="async"
                                             />
                                         </div>
                                     );

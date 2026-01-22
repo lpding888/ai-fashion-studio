@@ -863,11 +863,15 @@ const ApprovalInterface = React.forwardRef<ApprovalInterfaceHandle, {
 
     // Initialize edited prompts
     React.useEffect(() => {
-        const initial: Record<string, string> = {};
-        shots.forEach(s => {
-            if (s.id || s.shot_id) initial[s.id || s.shot_id || ''] = s.prompt_en || s.prompt;
+        setEditedPrompts((prev) => {
+            const next = { ...prev };
+            shots.forEach((s) => {
+                const key = s.id || s.shot_id || '';
+                if (!key) return;
+                if (next[key] === undefined) next[key] = s.prompt_en || s.prompt;
+            });
+            return next;
         });
-        setEditedPrompts(initial);
     }, [shots]);
 
     const handlePromptChange = (id: string, val: string) => {
@@ -1056,6 +1060,8 @@ function ResultsGrid({
 
     const handleImageClick = (index: number) => {
         let images;
+        const clickedShot = shots[index];
+        const clickedShotId = clickedShot?.id || clickedShot?.shot_id || '';
 
         if (layoutMode === 'Grid') {
             // In Grid mode, we want to show ALL shots in the lightbox, even if they share the same 'contact sheet' image
@@ -1088,7 +1094,10 @@ function ResultsGrid({
         // If in Grid mode, we might need to adjust the initial index if the filtered list size differs (though with logic above it should match rendered count)
         // But if user clicks the Main Grid Image (index 0 passed), and we have 4 shots, we start at 0 (Shot 1). 
         // If they click a specific "download" button for shot 2 later, we might pass specific index.
-        setLightboxInitialIndex(index);
+        const resolvedIndex = clickedShotId
+            ? images.findIndex((img: { id: string }) => img.id === clickedShotId)
+            : -1;
+        setLightboxInitialIndex(resolvedIndex >= 0 ? resolvedIndex : 0);
         setLightboxOpen(true);
     };
 
@@ -1177,6 +1186,8 @@ function ResultsGrid({
                                 src={gridSrc}
                                 alt="Contact Sheet"
                                 className="w-full h-full object-contain transition-transform duration-700 group-hover:scale-105"
+                                loading="lazy"
+                                decoding="async"
                             />
                             {/* Zoom Hint Overlay */}
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-all duration-300 flex items-center justify-center">
@@ -1283,12 +1294,14 @@ function ResultsGrid({
                         >
                             {/* Image Container */}
                             <div className="aspect-[3/4] relative bg-slate-100 overflow-hidden cursor-pointer" onClick={() => pickShotImage(shot) && handleImageClick(idx)}>
-                                {shot.imagePath ? (
+                                {pickShotImage(shot) ? (
                                     <>
                                         <img
-                                            src={`${BACKEND_ORIGIN}/${shot.imagePath}`}
+                                            src={toImgSrc(pickShotImage(shot))}
                                             alt={`Shot ${idx + 1}`}
                                             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                                            loading="lazy"
+                                            decoding="async"
                                         />
                                         {/* Zoom Hint */}
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-300 flex items-center justify-center">

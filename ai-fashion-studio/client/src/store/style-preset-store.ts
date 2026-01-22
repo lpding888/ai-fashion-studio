@@ -11,6 +11,9 @@ export interface StylePreset {
     imagePaths: string[];
     thumbnailPath?: string;
     tags?: string[];
+    collectionIds?: string[];
+    favoriteAt?: number;
+    lastUsedAt?: number;
     styleHint?: string;
     promptBlock?: string;
     learnStatus?: 'SUCCESS' | 'FAILED';

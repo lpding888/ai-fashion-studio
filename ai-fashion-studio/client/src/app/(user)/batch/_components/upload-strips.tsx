@@ -3,10 +3,10 @@
 import * as React from 'react';
 import { UploadCloud, X, Plus } from 'lucide-react';
 import { toStaticImgSrc } from './types';
+import { processDropItems } from '@/lib/file-utils';
 
 export const MAX_GARMENT_IMAGES = 14;
 
-// 本地工具函数: 管理 File 对象的预览 URL
 function useObjectUrls(files: File[]) {
     const [urls, setUrls] = React.useState<string[]>([]);
 
@@ -20,14 +20,14 @@ function useObjectUrls(files: File[]) {
 
     return urls;
 }
-
 export function GarmentUploadStrip(props: {
     files: File[];
     onChange: (files: File[]) => void;
     maxFiles?: number;
     disabled?: boolean;
+    onFilesAdded?: (files: File[]) => void; // 新增：通知父组件有文件被添加
 }) {
-    const { files, onChange, maxFiles = MAX_GARMENT_IMAGES, disabled } = props;
+    const { files, onChange, maxFiles = MAX_GARMENT_IMAGES, disabled, onFilesAdded } = props;
     const inputRef = React.useRef<HTMLInputElement>(null);
     const [isDragOver, setIsDragOver] = React.useState(false);
     const urls = useObjectUrls(files);
@@ -37,15 +37,22 @@ export function GarmentUploadStrip(props: {
     const addFiles = (incoming: File[]) => {
         const images = incoming.filter((f) => f.type.startsWith('image/'));
         if (!images.length) return;
-        onChange([...files, ...images.slice(0, remaining)]);
+        const toAdd = images.slice(0, remaining);
+        onChange([...files, ...toAdd]);
+        onFilesAdded?.(toAdd); // 通知父组件新添加的文件
     };
 
-    const onDrop = (e: React.DragEvent) => {
+    const onDrop = async (e: React.DragEvent) => {
         e.preventDefault();
+        e.stopPropagation();
         if (disabled) return;
         setIsDragOver(false);
-        if (!e.dataTransfer.files?.length) return;
-        addFiles(Array.from(e.dataTransfer.files));
+
+        const { files: flatFiles, groups } = await processDropItems(e.dataTransfer.items, e.dataTransfer.files);
+        const allFiles = [...flatFiles];
+        groups.forEach(g => allFiles.push(...g.files));
+
+        addFiles(allFiles);
     };
 
     const removeAt = (idx: number) => {
@@ -184,12 +191,17 @@ export function ReferenceUploadStrip(props: {
 
     const showEmpty = totalCount === 0;
 
-    const onDrop = (e: React.DragEvent) => {
+    const onDrop = async (e: React.DragEvent) => {
         e.preventDefault();
+        e.stopPropagation();
         if (disabled) return;
         setIsDragOver(false);
-        if (!e.dataTransfer.files?.length) return;
-        addFiles(Array.from(e.dataTransfer.files));
+
+        const { files: flatFiles, groups } = await processDropItems(e.dataTransfer.items, e.dataTransfer.files);
+        const allFiles = [...flatFiles];
+        groups.forEach(g => allFiles.push(...g.files));
+
+        addFiles(allFiles);
     };
 
     return (

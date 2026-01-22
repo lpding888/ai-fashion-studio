@@ -137,7 +137,7 @@ export function UserAssetLibraryDialog({
                                             onClick={() => toggleSelect(item.url)}
                                             className="absolute inset-0"
                                         >
-                                            <img src={item.url} alt={item.fileName || 'asset'} className="h-full w-full object-cover" />
+                                            <img src={item.url} alt={item.fileName || 'asset'} className="h-full w-full object-cover" loading="lazy" decoding="async" />
                                         </button>
                                         <button
                                             type="button"

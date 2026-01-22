@@ -45,10 +45,10 @@ export function normalizeWatermarkStyle(style?: Partial<WatermarkStyle>): Waterm
   const raw = style || {};
   const position: WatermarkPosition =
     raw.position === 'top_left' ||
-    raw.position === 'top_right' ||
-    raw.position === 'bottom_left' ||
-    raw.position === 'bottom_right' ||
-    raw.position === 'center'
+      raw.position === 'top_right' ||
+      raw.position === 'bottom_left' ||
+      raw.position === 'bottom_right' ||
+      raw.position === 'center'
       ? raw.position
       : DEFAULT_WATERMARK_STYLE.position;
 
@@ -77,9 +77,9 @@ export function setTaskWatermark(taskId: string, payload: TaskWatermarkInput | n
   const normalized: TaskWatermark | null =
     payload && payload.text
       ? {
-          text: normalizeWatermarkText(payload.text),
-          style: normalizeWatermarkStyle(payload.style),
-        }
+        text: normalizeWatermarkText(payload.text),
+        style: normalizeWatermarkStyle(payload.style),
+      }
       : null;
 
   try {
@@ -321,3 +321,7 @@ export async function downloadImageWithOptionalTaskWatermark(params: { taskId: s
     window.open(safeUrl, '_blank', 'noopener,noreferrer');
   }
 }
+
+// 导出批量处理相关函数
+export { extractWatermarkFromFilename, addWatermarkToBlob, batchDownloadWithWatermarks, downloadAsZipWithWatermarks } from './watermark-batch';
+

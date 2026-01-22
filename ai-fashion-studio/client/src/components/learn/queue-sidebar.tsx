@@ -149,7 +149,7 @@ export function QueueSidebar(props: {
                               e.stopPropagation();
                               onReuseTask(q.taskId);
                             }}
-                            title="把该任务的参数回填到左侧工作台（不包含衣服文件本身）"
+                            title="把该任务的参数回填到左侧工作台（仅回填 COS 衣服图；非 COS 需手动重传）"
                           >
                             拉入工作台
                           </Button>

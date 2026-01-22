@@ -7,6 +7,10 @@ export interface FacePreset {
     imagePath: string;
     thumbnailPath?: string;
     // Metadata
+    tags?: string[];
+    collectionIds?: string[];
+    favoriteAt?: number;
+    lastUsedAt?: number;
     gender?: 'female' | 'male' | 'other';
     height?: number;
     weight?: number;

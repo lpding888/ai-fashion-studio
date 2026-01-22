@@ -1,59 +1,25 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useState, useMemo } from 'react';
+import useSWR from 'swr';
 import api from '@/lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { Copy, Plus, Trash2 } from 'lucide-react';
+import { Copy, Plus, Loader2, RefreshCw } from 'lucide-react';
+import { PageHeader } from '@/components/admin/shared/page-header';
+import { InviteTable, InviteCode } from './invite-table';
 
-type InviteCode = {
-    id: string;
-    createdAt: number;
-    createdByUserId?: string;
-    usedAt?: number;
-    usedByUserId?: string;
-    revokedAt?: number;
-    note?: string;
-};
-
-const getErrorMessage = (error: unknown, fallback: string) => {
-    const maybe = error as { response?: { data?: { message?: string } }; message?: string };
-    return maybe?.response?.data?.message || (error instanceof Error ? error.message : fallback);
-};
+const fetcher = (url: string) => api.get(url).then(res => res.data?.invites || []);
 
 export default function AdminInviteCodesPage() {
-    const [invites, setInvites] = useState<InviteCode[]>([]);
-    const [loading, setLoading] = useState(true);
+    const { data: invites = [], error, isLoading, mutate } = useSWR<InviteCode[]>('/auth/admin/invite-codes', fetcher);
+
     const [creating, setCreating] = useState(false);
     const [revokingId, setRevokingId] = useState<string | null>(null);
     const [note, setNote] = useState('');
     const [latestCode, setLatestCode] = useState<string | null>(null);
-
-    const fetchInvites = async () => {
-        try {
-            setLoading(true);
-            const res = await api.get('/auth/admin/invite-codes');
-            setInvites(res.data?.invites || []);
-        } catch (e) {
-            console.error('Failed to fetch invite codes', e);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchInvites();
-    }, []);
+    const [copySuccess, setCopySuccess] = useState(false);
 
     const stats = useMemo(() => {
         const total = invites.length;
@@ -70,10 +36,10 @@ export default function AdminInviteCodesPage() {
             const res = await api.post('/auth/admin/invite-codes', { note: note || undefined });
             setLatestCode(res.data?.code || null);
             setNote('');
-            await fetchInvites();
+            mutate();
         } catch (e: unknown) {
             console.error('Failed to create invite code', e);
-            alert(getErrorMessage(e, '生成邀请码失败'));
+            alert('生成邀请码失败');
         } finally {
             setCreating(false);
         }
@@ -82,8 +48,11 @@ export default function AdminInviteCodesPage() {
     const handleCopy = async (text: string) => {
         try {
             await navigator.clipboard.writeText(text);
+            setCopySuccess(true);
+            setTimeout(() => setCopySuccess(false), 2000);
         } catch (e) {
             console.error('Failed to copy', e);
+            alert('复制失败，请手动复制');
         }
     };
 
@@ -92,121 +61,88 @@ export default function AdminInviteCodesPage() {
         try {
             setRevokingId(inviteId);
             await api.delete(`/auth/admin/invite-codes/${inviteId}`);
-            await fetchInvites();
+            mutate();
         } catch (e: unknown) {
             console.error('Failed to revoke invite code', e);
-            alert(getErrorMessage(e, '撤销失败'));
+            alert('撤销失败');
         } finally {
             setRevokingId(null);
         }
     };
 
     return (
-        <div className="space-y-6">
-            <Card>
-                <CardHeader>
-                    <CardTitle>邀请码</CardTitle>
-                    <CardDescription>生成一次性邀请码用于内测注册（明文仅创建时返回一次）</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                        <Input
-                            placeholder="备注（可选）"
-                            value={note}
-                            onChange={(e) => setNote(e.target.value)}
-                            className="sm:max-w-sm"
-                        />
-                        <Button onClick={handleCreate} disabled={creating} className="sm:w-auto">
-                            <Plus className="h-4 w-4 mr-2" />
-                            {creating ? '生成中...' : '生成邀请码'}
-                        </Button>
-                    </div>
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center justify-between">
+                <PageHeader
+                    title="邀请码管理"
+                    description="生成一次性邀请码用于内测注册（明文仅创建时返回一次）。"
+                />
+                <Button variant="outline" onClick={() => mutate()} disabled={isLoading} className="gap-2">
+                    {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    刷新
+                </Button>
+            </div>
 
-                    {latestCode && (
-                        <div className="flex flex-col gap-2 rounded-lg border p-3 bg-muted/30">
-                            <div className="text-sm font-medium">最新邀请码（请立即复制保存）</div>
-                            <div className="flex gap-2">
-                                <Input value={latestCode} readOnly />
-                                <Button variant="outline" size="icon" onClick={() => handleCopy(latestCode)}>
-                                    <Copy className="h-4 w-4" />
+            {error && (
+                <div className="p-4 rounded-md bg-red-50 text-red-600 border border-red-200">
+                    加载失败：{error.message || '未知错误'}
+                </div>
+            )}
+
+            <div className="grid gap-6 md:grid-cols-3">
+                <Card className="md:col-span-2">
+                    <CardHeader>
+                        <CardTitle>邀请码列表</CardTitle>
+                        <CardDescription>
+                            总数: {stats.total} | 可用: <span className="text-emerald-600 font-bold">{stats.available}</span> | 已用: {stats.used} | 已撤销: {stats.revoked}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        <InviteTable
+                            invites={invites}
+                            loading={isLoading}
+                            revokingId={revokingId}
+                            onRevoke={handleRevoke}
+                        />
+                    </CardContent>
+                </Card>
+
+                <div className="space-y-6">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>生成邀请码</CardTitle>
+                            <CardDescription>创建新的注册凭证</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="space-y-2">
+                                <Input
+                                    placeholder="备注（可选，例如：给XX内测）"
+                                    value={note}
+                                    onChange={(e) => setNote(e.target.value)}
+                                />
+                                <Button onClick={handleCreate} disabled={creating} className="w-full">
+                                    {creating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
+                                    {creating ? '生成中...' : '立即生成'}
                                 </Button>
                             </div>
-                        </div>
-                    )}
 
-                    <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-                        <span>总数: {stats.total}</span>
-                        <span>可用: {stats.available}</span>
-                        <span>已用: {stats.used}</span>
-                        <span>已撤销: {stats.revoked}</span>
-                    </div>
-                </CardContent>
-            </Card>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle>列表</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    {loading ? (
-                        <div className="py-10 text-center text-muted-foreground">加载中...</div>
-                    ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>状态</TableHead>
-                                    <TableHead>备注</TableHead>
-                                    <TableHead>创建时间</TableHead>
-                                    <TableHead>使用情况</TableHead>
-                                    <TableHead className="text-right">操作</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {invites.map((i) => {
-                                    const isUsed = !!i.usedAt || !!i.usedByUserId;
-                                    const isRevoked = !!i.revokedAt;
-                                    const status = isRevoked ? '已撤销' : isUsed ? '已使用' : '可用';
-                                    return (
-                                        <TableRow key={i.id}>
-                                            <TableCell>
-                                                <Badge variant={isRevoked ? 'outline' : isUsed ? 'secondary' : 'default'}>
-                                                    {status}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell className="text-muted-foreground">{i.note || '-'}</TableCell>
-                                            <TableCell className="text-muted-foreground">
-                                                {new Date(i.createdAt).toLocaleString('zh-CN')}
-                                            </TableCell>
-                                            <TableCell className="text-muted-foreground">
-                                                {isUsed ? (
-                                                    <div className="space-y-1">
-                                                        <div>用户: {i.usedByUserId || '-'}</div>
-                                                        <div>时间: {i.usedAt ? new Date(i.usedAt).toLocaleString('zh-CN') : '-'}</div>
-                                                    </div>
-                                                ) : (
-                                                    '-'
-                                                )}
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    disabled={isUsed || isRevoked || revokingId === i.id}
-                                                    onClick={() => handleRevoke(i.id)}
-                                                    title="撤销"
-                                                >
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    );
-                                })}
-                            </TableBody>
-                        </Table>
-                    )}
-                </CardContent>
-            </Card>
+                            {latestCode && (
+                                <div className="flex flex-col gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 animate-in zoom-in-95 duration-200">
+                                    <div className="text-xs font-medium text-emerald-800">
+                                        🎉 生成成功（请立即复制）{copySuccess && ' · ✅ 已复制'}
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Input value={latestCode} readOnly className="font-mono text-emerald-900 bg-white" />
+                                        <Button variant="outline" size="icon" onClick={() => handleCopy(latestCode)} className="shrink-0 text-emerald-700 border-emerald-300 hover:bg-emerald-100">
+                                            <Copy className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                </div>
+            </div>
         </div>
     );
 }
-

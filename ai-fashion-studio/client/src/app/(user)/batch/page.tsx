@@ -1,12 +1,12 @@
 'use client';
 
 import * as React from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import api, { createDirectTaskFromUrls, directRegenerateTask } from '@/lib/api';
 import { useAuth } from '@/hooks/use-auth';
 import { useCredits, calculateRequiredCredits } from '@/hooks/use-credits';
 import { useFormHistory, type FormHistoryItem } from '@/hooks/useFormHistory';
-import { uploadFileToCosWithMeta, type CosUploadResult } from '@/lib/cos';
+import { uploadFileToCosWithMeta } from '@/lib/cos';
 import { registerUserAssets } from '@/lib/user-assets';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -16,6 +16,10 @@ import { setTaskWatermark } from '@/lib/watermark';
 import { useStylePresetStore } from '@/store/style-preset-store';
 import { usePosePresetStore } from '@/store/pose-preset-store';
 import { useFacePresetStore } from '@/store/face-preset-store';
+
+import { AuroraBackground } from '@/components/ui/aurora-background';
+import { GlassPanel } from '@/components/ui/glass-panel';
+import { NeonButton } from '@/components/ui/neon-button';
 
 import {
   BatchConfigPanel,
@@ -37,15 +41,12 @@ import {
   DirectTaskPayload,
   GroupRunStatus,
   MAX_GARMENT_IMAGES,
-  MAX_TOTAL_REF_IMAGES,
   MAX_DIRECT_SHOTS,
   DIRECT_STYLE_NONE,
   POLL_INTERVAL_MS,
   BATCH_STORAGE_KEY,
   createGroup,
   toImgSrc,
-  isDirectResolution,
-  isDirectAspectRatio,
 } from './_components/types';
 
 const GRID_PROMPT_LINE = "If multiple poses are selected, output ONE contact sheet with one panel per pose (max 4 panels). Same model + same garment across panels.";
@@ -82,11 +83,10 @@ function saveBatchSession(tasks: BatchTaskItem[]) {
 
 function BatchCreatePageInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
   const { balance, calculateRequired } = useCredits();
-  const { historyItems, saveHistory } = useFormHistory();
+  const { historyItems } = useFormHistory();
 
   // --- State: Config ---
   const [mode, setMode] = React.useState<BatchMode>('legacy');
@@ -135,7 +135,6 @@ function BatchCreatePageInner() {
   const [lightboxImages, setLightboxImages] = React.useState<LightboxItem[]>([]);
   const [lightboxInitialIndex, setLightboxInitialIndex] = React.useState(0);
   const [lightboxTaskId, setLightboxTaskId] = React.useState<string>('');
-  const [lightboxIsGrid, setLightboxIsGrid] = React.useState(false);
 
   // Refs
   const groupsRef = React.useRef<BatchGroup[]>(groups);
@@ -231,25 +230,48 @@ function BatchCreatePageInner() {
   }, [directShotCountEffective, mode, preset]);
 
   // --- Actions ---
-  const updateGroup = (id: string, patch: Partial<BatchGroup>) => {
+  const updateGroup = React.useCallback((id: string, patch: Partial<BatchGroup>) => {
     setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, ...patch } : g)));
-  };
+  }, []);
 
-  const updateGroupByTaskId = (taskId: string, patch: Partial<BatchGroup>) => {
+  const updateGroupByTaskId = React.useCallback((taskId: string, patch: Partial<BatchGroup>) => {
     const safeTaskId = String(taskId || '').trim();
     if (!safeTaskId) return;
     setGroups((prev) => prev.map((g) => (g.taskId === safeTaskId ? { ...g, ...patch } : g)));
+  }, []);
+
+  const addGroups = (newGroups: Partial<BatchGroup>[]) => {
+    setGroups((prev) => [
+      ...prev,
+      ...newGroups.map((g, idx) => ({
+        ...createGroup(prev.length + idx + 1),
+        ...g,
+      })),
+    ]);
+    toast({ title: `已添加 ${newGroups.length} 个分组` });
   };
 
-  const addGroup = () => {
-    setGroups((prev) => [...prev, createGroup(prev.length + 1)]);
+  const addGroup = (initial?: Partial<BatchGroup>) => {
+    setGroups((prev) => [...prev, { ...createGroup(prev.length + 1), ...initial }]);
+  };
+
+  const copyGroup = (id: string) => {
+    const source = groups.find((g) => g.id === id);
+    if (!source) return;
+    const newGroup = createGroup(groups.length + 1);
+    newGroup.name = `${source.name} (Copy)`;
+    newGroup.garmentFiles = [...source.garmentFiles];
+    newGroup.overrideRequirements = source.overrideRequirements;
+    newGroup.watermarkText = source.watermarkText;
+    setGroups((prev) => [...prev, newGroup]);
+    toast({ title: '分组已复制' });
   };
 
   const removeGroup = (id: string) => {
     setGroups((prev) => prev.filter((g) => g.id !== id));
   };
 
-  const upsertBatchTask = (next: BatchTaskItem) => {
+  const upsertBatchTask = React.useCallback((next: BatchTaskItem) => {
     setBatchTasks((prev) => {
       const idx = prev.findIndex((t) => t.taskId === next.taskId);
       if (idx === -1) return [...prev, next];
@@ -257,29 +279,29 @@ function BatchCreatePageInner() {
       copy[idx] = { ...copy[idx], ...next };
       return copy;
     });
-  };
+  }, []);
 
-  const statusFromTask = (task: TaskApi): GroupRunStatus => {
+  const statusFromTask = React.useCallback((task: TaskApi): GroupRunStatus => {
     if (task.status === 'QUEUED') return 'QUEUED';
     if (task.status === 'PLANNING' || task.status === 'AWAITING_APPROVAL') return 'PLANNING';
     if (task.status === 'RENDERING') return 'RENDERING';
     if (task.status === 'COMPLETED') return 'COMPLETED';
     if (task.status === 'FAILED') return 'FAILED';
     return 'PLANNING';
-  };
+  }, []);
 
-  const setRetryingKey = (key: string, v: boolean) => {
+  const setRetryingKey = React.useCallback((key: string, v: boolean) => {
     setRetryingKeys((prev) => ({ ...prev, [key]: v }));
-  };
+  }, []);
   // 使用 ref 版本避免闭包问题
-  const isRetryingKey = (key: string) => !!retryingKeysRef.current[key];
-  const isRetrying = (taskId: string) =>
-    isRetryingKey(`${taskId}:task`) || isRetryingKey(`${taskId}:direct-regenerate`) || isRetryingKey(`${taskId}:grid`);
+  const isRetryingKey = React.useCallback((key: string) => !!retryingKeysRef.current[key], []);
+  const isRetrying = React.useCallback((taskId: string) =>
+    isRetryingKey(`${taskId}:task`) || isRetryingKey(`${taskId}:direct-regenerate`) || isRetryingKey(`${taskId}:grid`), [isRetryingKey]);
 
-  const fetchTask = async (taskId: string) => {
+  const fetchTask = React.useCallback(async (taskId: string) => {
     const res = await api.get(`/tasks/${taskId}`);
     return res.data as TaskApi;
-  };
+  }, []);
 
   // --- Logic for Start ---
   const buildTaskFormData = (
@@ -562,7 +584,7 @@ function BatchCreatePageInner() {
   };
 
   // --- Polling & Sync ---
-  const syncOneTaskFromServer = async (taskId: string) => {
+  const syncOneTaskFromServer = React.useCallback(async (taskId: string) => {
     const safeTaskId = String(taskId || '').trim();
     if (!safeTaskId) return;
     const local = batchTasksRef.current.find((t) => t.taskId === safeTaskId);
@@ -581,13 +603,12 @@ function BatchCreatePageInner() {
       const group = groupsRef.current.find(g => g.taskId === safeTaskId);
       if (group) updateGroup(group.id, { status: nextStatus, images: normalizedImages, imageItems, error: latest.error });
     } catch { }
-  };
+  }, [fetchTask, statusFromTask, upsertBatchTask, updateGroup]);
 
   // Lightbox
   const openLightboxForTask = async (taskId: string, initialIndex = 0) => {
     const local = batchTasks.find(t => t.taskId === taskId);
     if (!local) return;
-    const isGrid = mode === 'direct' ? directLayoutMode === 'Grid' : preset?.layoutMode === 'Grid';
     // simplified grid check logic:
     const items: LightboxItem[] = local.imageItems.length > 0
       ? local.imageItems.map((it, idx) => ({ id: it.shotCode || `${idx}`, url: toImgSrc(it.url) }))
@@ -595,7 +616,6 @@ function BatchCreatePageInner() {
 
     if (items.length === 0) return;
     setLightboxTaskId(taskId);
-    setLightboxIsGrid(isGrid);
     setLightboxImages(items);
     setLightboxInitialIndex(Math.max(0, Math.min(items.length - 1, initialIndex)));
     setLightboxOpen(true);
@@ -653,7 +673,7 @@ function BatchCreatePageInner() {
     return () => {
       if (pollerTimerRef.current) clearTimeout(pollerTimerRef.current);
     };
-  }, [batchTasks.length]);
+  }, [batchTasks.length, isRetrying, syncOneTaskFromServer]);
 
   if (!isAuthenticated) return (
     <div className="min-h-screen flex items-center justify-center bg-black">
@@ -664,25 +684,31 @@ function BatchCreatePageInner() {
   );
 
   return (
-    <>
-      <div className="fixed inset-0 z-0 bg-slate-950">
-        <div className="absolute top-[-20%] right-[-10%] w-[70%] h-[70%] rounded-full bg-indigo-900/20 blur-[140px]" />
-        <div className="absolute bottom-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-purple-900/20 blur-[140px]" />
-        <div className="absolute inset-0 bg-[url('/grid.svg')] bg-center opacity-[0.03]" />
-      </div>
+    <AuroraBackground>
+      <div className="flex h-screen overflow-hidden p-4 gap-4 relative z-10">
 
-      <main className="relative z-10 w-full min-h-screen">
-        <div className="max-w-[1600px] mx-auto px-4 py-8 lg:px-8">
-          {/* Layout Content */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-            {/* Left Column (Config) - Sticky */}
-            <div className="lg:col-span-4 xl:col-span-3 order-1 lg:order-1">
+        {/* Left Config Panel - Glass Island */}
+        <aside className="w-[380px] shrink-0 flex flex-col z-20 h-full">
+          <GlassPanel className="flex-1 flex flex-col overflow-hidden" intensity="medium">
+            <div className="p-4 border-b border-white/10 shrink-0 bg-white/5 backdrop-blur-md">
+              <h1 className="text-xl font-black tracking-tight text-white flex items-center gap-2">
+                <span className="bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-400 drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]">
+                  AI Fashion
+                </span>
+                <span className="text-white/20 font-light">|</span>
+                <span className="text-white/80 font-medium tracking-wide">批量工坊 (Batch Studio)</span>
+              </h1>
+            </div>
+
+            <div className="flex-1 overflow-y-auto scrollbar-thin px-1 py-2">
               <BatchConfigPanel
                 mode={mode} setMode={setMode}
                 parallel={parallel} setParallel={setParallel}
                 autoApprove={autoApprove} setAutoApprove={setAutoApprove}
 
+                historyItems={historyItems}
                 presetId={presetId} setPresetId={setPresetId}
+                preset={preset}
                 legacyFaceRefFiles={legacyFaceRefFiles} setLegacyFaceRefFiles={setLegacyFaceRefFiles}
                 legacyFaceRefUrls={legacyFaceRefUrls} setLegacyFaceRefUrls={setLegacyFaceRefUrls}
                 legacyStyleRefFiles={legacyStyleRefFiles} setLegacyStyleRefFiles={setLegacyStyleRefFiles}
@@ -709,14 +735,28 @@ function BatchCreatePageInner() {
               />
             </div>
 
-            {/* Right Column (Workspace) */}
-            <div className="lg:col-span-8 xl:col-span-9 order-2 lg:order-2">
+            {/* Credit Status Footer */}
+            <div className="p-3 border-t border-white/10 bg-black/20 text-xs flex justify-between text-white/50">
+              <span>余额: {balance ?? '...'}</span>
+              <span>预估: ~{totalCost}</span>
+            </div>
+          </GlassPanel>
+        </aside>
+
+        {/* Right Workspace */}
+        <main className="flex-1 flex flex-col min-w-0 relative z-10 h-full">
+          <div className="flex-1 overflow-y-auto scrollbar-thin rounded-2xl pr-2 pb-24">
+            <div className="max-w-[1800px] mx-auto space-y-8">
+
+              {/* Batch Group List */}
               <BatchGroupList
                 groups={groups}
                 mode={mode}
                 updateGroup={updateGroup}
                 removeGroup={removeGroup}
-                addGroup={addGroup}
+                addGroup={() => addGroup()}
+                addGroups={addGroups}
+                copyGroup={copyGroup}
 
                 isRunning={isRunning}
                 isCreatingTasks={isCreatingTasks}
@@ -730,26 +770,63 @@ function BatchCreatePageInner() {
                 onViewTask={(tid) => router.push(`/tasks/${tid}`)}
               />
 
-              <BatchTaskHistory
-                tasks={batchTasks}
-                onClear={() => setBatchTasks([])}
-                onRetry={(tid) => handleRetryTask(tid)}
-                isRetrying={isRetrying}
-                onOpenLightbox={openLightboxForTask}
-                onViewTask={(tid) => router.push(`/tasks/${tid}`)}
-              />
+              {/* History Section (Using Glass Panel) */}
+              {batchTasks.length > 0 && (
+                <GlassPanel className="p-6" intensity="low">
+                  <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                    <span className="text-emerald-400">●</span> 任务历史 (History)
+                  </h2>
+                  <BatchTaskHistory
+                    tasks={batchTasks}
+                    onClear={() => setBatchTasks([])}
+                    onRetry={(tid) => handleRetryTask(tid)}
+                    isRetrying={isRetrying}
+                    onOpenLightbox={openLightboxForTask}
+                    onViewTask={(tid) => router.push(`/tasks/${tid}`)}
+                  />
+                </GlassPanel>
+              )}
             </div>
           </div>
-        </div>
-      </main>
+
+          {/* Floating Action Button (Start) */}
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50">
+            <GlassPanel className="p-1.5 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.5)] border-white/20" intensity="high">
+              <NeonButton
+                size="lg"
+                glowColor="fuchsia"
+                className={`rounded-full px-10 py-6 text-lg font-bold min-w-[240px] ${isRunning || isCreatingTasks
+                  ? 'opacity-80 cursor-not-allowed'
+                  : 'hover:scale-105 active:scale-95'
+                  }`}
+                disabled={isRunning || isCreatingTasks}
+                onClick={handleStart}
+              >
+                {isRunning || isCreatingTasks ? (
+                  <>
+                    <span className="mr-3 animate-spin text-2xl">⚡</span>
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="mr-3 text-2xl">✨</span>
+                    <span>Start Batch</span>
+                  </>
+                )}
+              </NeonButton>
+            </GlassPanel>
+          </div>
+
+        </main>
+      </div>
 
       <ImageLightbox
         images={lightboxImages} initialIndex={lightboxInitialIndex}
         open={lightboxOpen} onOpenChange={setLightboxOpen}
         watermarkTaskId={lightboxTaskId}
-        onRegenerate={(id) => handleRetryTask(lightboxTaskId)}
+        onRegenerate={() => handleRetryTask(lightboxTaskId)}
       />
-    </>
+    </AuroraBackground>
   );
 }
 

@@ -32,7 +32,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '@/lib/api';
 import { BACKEND_ORIGIN } from '@/lib/api';
-import { withTencentCi, smartWithTencentCi } from '@/lib/image-ci';
+import { smartWithTencentCi } from '@/lib/image-ci';
 import { useAuth } from '@/hooks/use-auth';
 
 interface Task {

@@ -19,6 +19,7 @@ export type TaskApi = {
   directStylePresetIds?: string[];
   directPosePresetIds?: string[];
   directFacePresetIds?: string[];
+  garmentImagePaths?: string[];
   shots?: Array<{
     id?: string;
     shotCode?: string;

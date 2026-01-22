@@ -155,3 +155,17 @@ export function createGroup(index: number): BatchGroup {
         autoRetryUsed: false,
     };
 }
+
+// 批量下载配置
+export const BATCH_DOWNLOAD_STORAGE_KEY = 'afs:batch:download-config:v1';
+
+export type BatchDownloadConfig = {
+    autoWatermark: boolean; // 自动使用文件名作为水印
+    downloadMode: 'individual' | 'zip'; // 下载方式
+};
+
+export const DEFAULT_BATCH_DOWNLOAD_CONFIG: BatchDownloadConfig = {
+    autoWatermark: true,
+    downloadMode: 'zip',
+};
+
