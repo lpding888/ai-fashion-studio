@@ -26,6 +26,10 @@ import { AdminAnalyticsModule } from './admin-analytics/admin-analytics.module';
 import { PromptSnippetModule } from './prompt-snippet/prompt-snippet.module';
 import { UserAssetModule } from './user-asset/user-asset.module';
 import { LearnPromptModule } from './learn-prompt/learn-prompt.module';
+import { PresetCollectionModule } from './preset-collection/preset-collection.module';
+import { PresetMetaModule } from './preset-meta/preset-meta.module';
+import { PromptOptimizerModule } from './prompt-optimizer/prompt-optimizer.module';
+import { BrainRoutingModule } from './brain-routing/brain-routing.module';
 
 @Module({
   imports: [
@@ -66,6 +70,10 @@ import { LearnPromptModule } from './learn-prompt/learn-prompt.module';
     PromptSnippetModule,
     UserAssetModule,
     LearnPromptModule,
+    PresetCollectionModule,
+    PresetMetaModule,
+    PromptOptimizerModule,
+    BrainRoutingModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

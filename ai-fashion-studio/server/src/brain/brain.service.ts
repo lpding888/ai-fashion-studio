@@ -1006,12 +1006,7 @@ export class BrainService {
       'https://api.vectorengine.ai/v1';
 
     // Convert to v1beta for Google Native format
-    let baseUrl = activeGateway;
-    if (baseUrl.endsWith('/v1')) {
-      baseUrl = baseUrl.replace('/v1', '/v1beta');
-    } else if (!baseUrl.includes('/v1beta')) {
-      baseUrl = baseUrl.replace(/\/$/, '') + '/v1beta';
-    }
+    const baseUrl = this.normalizeGatewayToV1beta(activeGateway);
 
     const buildEndpoint = (key: string) =>
       `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
@@ -1423,12 +1418,7 @@ export class BrainService {
       'https://api.vectorengine.ai/v1';
 
     // Convert to v1beta for Google Native format
-    let baseUrl = activeGateway;
-    if (baseUrl.endsWith('/v1')) {
-      baseUrl = baseUrl.replace('/v1', '/v1beta');
-    } else if (!baseUrl.includes('/v1beta')) {
-      baseUrl = baseUrl.replace(/\/$/, '') + '/v1beta';
-    }
+    const baseUrl = this.normalizeGatewayToV1beta(activeGateway);
 
     const buildEndpoint = (key: string) =>
       `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
@@ -1639,6 +1629,139 @@ export class BrainService {
     }
   }
 
+  private buildOpenAICompatEndpoint(gateway: string): string {
+    const baseUrl = String(gateway || '').trim().replace(/\/+$/, '');
+    if (!baseUrl) {
+      throw new Error('网关不能为空');
+    }
+    return `${baseUrl}/chat/completions`;
+  }
+
+  private normalizeGatewayToV1beta(gateway: string): string {
+    let baseUrl = String(gateway || '').trim().replace(/\/+$/, '');
+    if (baseUrl.endsWith('/v1')) {
+      baseUrl = baseUrl.replace('/v1', '/v1beta');
+    } else if (!baseUrl.includes('/v1beta')) {
+      baseUrl = `${baseUrl}/v1beta`;
+    }
+    return baseUrl;
+  }
+
+  private toOpenAIImageUrl(encoded: BrainEncodedImage): string {
+    if (encoded.kind === 'fileData') {
+      return encoded.fileUri;
+    }
+    return `data:${encoded.mimeType};base64,${encoded.data}`;
+  }
+
+  private describeOpenAIImageUrl(encoded: BrainEncodedImage): string {
+    if (encoded.kind === 'fileData') {
+      return encoded.fileUri;
+    }
+    const mime = encoded.mimeType || 'unknown';
+    const len = encoded.data ? encoded.data.length : 0;
+    return `inlineData: mime=${mime} base64Len=${len}`;
+  }
+
+  private async postOpenAIWithKeyFailover(params: {
+    keyPool: string[];
+    endpoint: string;
+    requestBody: any;
+    axiosConfig: any;
+    logLabel: string;
+  }): Promise<any> {
+    const { keyPool, endpoint, requestBody, axiosConfig, logLabel } = params;
+    const keys = this.pickKeyPair(keyPool);
+    if (keys.length === 0) {
+      throw new Error('Brain密钥未配置，请在设置页面配置Brain Key');
+    }
+
+    const safeEndpoint = endpoint.replace(/([?&]key=)[^&]+/gi, '$1***');
+    this.logger.log(`📤 [${logLabel}] Endpoint: ${safeEndpoint}`);
+    this.logger.log(`🔑 [${logLabel}] Key pool size: ${keyPool.length}`);
+
+    const buildConfig = (apiKey: string) => ({
+      ...axiosConfig,
+      headers: {
+        ...(axiosConfig?.headers || {}),
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    try {
+      return await axios.post(endpoint, requestBody, buildConfig(keys[0]));
+    } catch (e: any) {
+      if (keys.length < 2 || !this.isFailoverableError(e)) {
+        throw e;
+      }
+      this.logger.warn(
+        `⚠️ [${logLabel}] 上游失败（可切换 key 重试 1 次），正在切换到下一把 key...`,
+      );
+      return axios.post(endpoint, requestBody, buildConfig(keys[1]));
+    }
+  }
+
+  private async runWithRetries<T>(params: {
+    logLabel: string;
+    maxRetries?: number;
+    action: (attempt: number) => Promise<T>;
+  }): Promise<T> {
+    const maxRetries = Number.isFinite(params.maxRetries)
+      ? Math.max(0, params.maxRetries || 0)
+      : 2;
+    let lastError: any;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await params.action(attempt + 1);
+      } catch (e: any) {
+        lastError = e;
+        if (attempt >= maxRetries) break;
+        this.logger.warn(
+          `⚠️ [${params.logLabel}] 请求失败，准备重试（${attempt + 1}/${maxRetries}）`,
+        );
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async runWithFallback<T>(params: {
+    logLabel: string;
+    primary?: ModelConfig;
+    fallback?: ModelConfig;
+    maxRetries?: number;
+    action: (config: ModelConfig) => Promise<T>;
+  }): Promise<T> {
+    if (!params.primary) {
+      throw new Error('未提供主模型配置');
+    }
+
+    const primaryId = params.primary?.brainProfileId;
+    const fallbackId = params.fallback?.brainProfileId;
+    const fallbackAvailable =
+      params.fallback && (!primaryId || primaryId !== fallbackId);
+
+    try {
+      return await this.runWithRetries({
+        logLabel: `${params.logLabel}:primary`,
+        maxRetries: params.maxRetries,
+        action: () => params.action(params.primary as ModelConfig),
+      });
+    } catch (e: any) {
+      if (!fallbackAvailable) throw e;
+      this.logger.warn(
+        `⚠️ [${params.logLabel}] 主模型失败，开始回退默认大脑`,
+      );
+      return this.runWithRetries({
+        logLabel: `${params.logLabel}:fallback`,
+        maxRetries: params.maxRetries,
+        action: () => params.action(params.fallback as ModelConfig),
+      });
+    }
+  }
+
   /**
    * Translate Chinese fix feedback into an English prompt for Painter
    */
@@ -1669,7 +1792,7 @@ export class BrainService {
       config?.brainGateway ||
       config?.gatewayUrl ||
       'https://api.vectorengine.ai/v1';
-    const baseUrl = activeGateway.replace('/v1', '/v1beta');
+    const baseUrl = this.normalizeGatewayToV1beta(activeGateway);
     const buildEndpoint = (key: string) =>
       `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
@@ -1747,96 +1870,163 @@ Please output the modified English prompt that incorporates the user's requested
       };
     }
   }
+
+  async optimizePromptText(params: {
+    systemPrompt: string;
+    userMessage: string;
+    fallbackPrompt: string;
+    config?: ModelConfig;
+    fallbackConfig?: ModelConfig;
+    logLabel?: string;
+  }): Promise<string> {
+    const {
+      systemPrompt,
+      userMessage,
+      fallbackPrompt,
+      config,
+      fallbackConfig,
+      logLabel,
+    } = params;
+
+    const safeFallback = String(fallbackPrompt || '').trim();
+
+    const runOnce = async (runtime: ModelConfig) => {
+      const keyPool = this.getBrainKeyPool(runtime);
+      const shouldMock =
+        process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
+
+      if (shouldMock) {
+        this.logger.warn('USING MOCK PROMPT OPTIMIZER');
+        return safeFallback;
+      }
+
+      const model = runtime?.brainModel;
+      if (!model) {
+        throw new Error('Brain模型未配置，无法执行提示词优化');
+      }
+
+      const provider = runtime?.brainProvider || 'GEMINI';
+      const cleanedSystem = String(
+        systemPrompt || 'You are a helpful assistant.',
+      );
+      const cleanedUser = String(userMessage || '').trim();
+
+      if (provider === 'OPENAI_COMPAT') {
+        const gateway =
+          runtime?.brainGateway ||
+          runtime?.gatewayUrl ||
+          'https://api.vectorengine.ai/v1';
+        const endpoint = this.buildOpenAICompatEndpoint(gateway);
+        const requestBody = {
+          model,
+          messages: [
+            { role: 'system', content: cleanedSystem },
+            { role: 'user', content: cleanedUser },
+          ],
+          temperature: 0.3,
+          max_tokens: 2048,
+        };
+
+        const response = await this.postOpenAIWithKeyFailover({
+          keyPool,
+          endpoint,
+          requestBody,
+          axiosConfig: { timeout: 30000 },
+          logLabel: logLabel || 'prompt_optimizer',
+        });
+
+        const content = String(
+          response.data?.choices?.[0]?.message?.content || '',
+        );
+        const cleaned = content
+          .replace(/```[\s\S]*?```/g, (m) =>
+            m.replace(/```[\w-]*\n?/g, '').replace(/```/g, ''),
+          )
+          .replace(/^优化后的提示词[:：]\s*/i, '')
+          .trim();
+        return cleaned || safeFallback;
+      }
+
+      const activeGateway =
+        runtime?.brainGateway ||
+        runtime?.gatewayUrl ||
+        'https://api.vectorengine.ai/v1';
+      const baseUrl = this.normalizeGatewayToV1beta(activeGateway);
+      const buildEndpoint = (key: string) =>
+        `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+      const requestBody = {
+        systemInstruction: {
+          parts: [{ text: cleanedSystem }],
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: cleanedUser }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 2048,
+        },
+      };
+
+      const response = await this.postWithKeyFailover({
+        keyPool,
+        buildEndpoint,
+        requestBody,
+        axiosConfig: {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          timeout: 30000,
+        },
+        logLabel: logLabel || 'prompt_optimizer',
+      });
+
+      const candidate = response.data.candidates?.[0];
+      if (!candidate) {
+        throw new Error('No candidates in prompt optimizer response');
+      }
+
+      let optimized = '';
+      for (const part of candidate.content?.parts || []) {
+        if (part.text) optimized += part.text;
+      }
+
+      const cleaned = optimized
+        .replace(/```[\s\S]*?```/g, (m) =>
+          m.replace(/```[\w-]*\n?/g, '').replace(/```/g, ''),
+        )
+        .replace(/^优化后的提示词[:：]\s*/i, '')
+        .trim();
+
+      return cleaned || safeFallback;
+    };
+
+    try {
+      return await this.runWithFallback({
+        logLabel: logLabel || 'prompt_optimizer',
+        primary: config,
+        fallback: fallbackConfig,
+        maxRetries: 2,
+        action: runOnce,
+      });
+    } catch (error: any) {
+      this.logger.error(
+        'Prompt optimization failed',
+        error.response?.data || error.message,
+      );
+      return safeFallback;
+    }
+  }
   async analyzeStyleImage(
     imagePaths: string | string[],
     config?: ModelConfig,
+    fallbackConfig?: ModelConfig,
     trace?: { traceId?: string },
   ): Promise<any> {
-    // Normalize to array
     const paths = Array.isArray(imagePaths) ? imagePaths : [imagePaths];
-
-    // MOCK MODE
-    const keyPool = this.getBrainKeyPool(config);
-    const shouldMock =
-      process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
-
-    if (shouldMock) {
-      this.logger.warn('USING MOCK STYLE ANALYSIS');
-      return normalizeStyleLearnV1({
-        schema: 'afs_style_v1',
-        name: 'Rainy Cyberpunk Noir',
-        description:
-          'Moody high-contrast neon-on-wet-streets fashion photo style.',
-        lighting: {
-          environment: 'night / mixed',
-          key_light: {
-            type: 'neon practicals',
-            direction: 'side/back',
-            softness: 'hard',
-            color_temperature_k: 3200,
-          },
-          fill_light: {
-            type: 'ambient bounce',
-            softness: 'soft',
-            intensity: 'low',
-          },
-          rim_light: {
-            type: 'streetlight rim',
-            direction: 'back',
-            intensity: 'medium',
-          },
-          shadow_character:
-            'high contrast, crisp shadows with soft ambient lift',
-        },
-        camera: {
-          shot_type: 'three-quarter',
-          camera_height: 'eye level',
-          camera_angle: 'three-quarter',
-          lens_focal_length_mm: 35,
-          aperture: 'f/2.0',
-          focus: 'sharp subject, shallow DOF bokeh highlights',
-        },
-        composition: {
-          orientation: 'portrait',
-          subject_placement: 'centered',
-          crop_notes: 'keep full garment silhouette readable',
-        },
-        scene: {
-          location: 'urban street',
-          background: 'wet pavement, neon signs',
-          time_of_day: 'night',
-          weather: 'rainy',
-        },
-        color_grading: {
-          white_balance: 'cool shadows / warm highlights',
-          palette: ['teal', 'magenta', 'amber'],
-          contrast: 'high',
-          saturation: 'medium-high',
-        },
-        quality: {
-          realism: 'photorealistic',
-          texture_detail: 'high',
-          grain: 'subtle',
-        },
-      });
-    }
-
-    const model = config?.brainModel || 'gemini-2.0-flash-exp'; // Use a fast vision model
-    const activeGateway =
-      config?.brainGateway ||
-      config?.gatewayUrl ||
-      'https://api.vectorengine.ai/v1';
-
-    // Convert to v1beta for Google Native format
-    let baseUrl = activeGateway;
-    if (baseUrl.endsWith('/v1')) {
-      baseUrl = baseUrl.replace('/v1', '/v1beta');
-    } else if (!baseUrl.includes('/v1beta')) {
-      baseUrl = baseUrl.replace(/\/$/, '') + '/v1beta';
-    }
-
-    const buildEndpoint = (key: string) =>
-      `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
     const prompt = `You are a world-class fashion photographer and art director.
 Task: learn a reusable PHOTOGRAPHIC STYLE blueprint from the input image set.
@@ -1922,32 +2112,103 @@ You MUST fill every field with a best-guess; never return null or empty strings.
   ]
 }`;
 
-    const imageParts: any[] = [];
-    // Encode all images once to avoid duplicate uploads on retry.
-    for (const path of paths) {
-      const encoded = await this.encodeImageForBrain(path);
-      imageParts.push(this.toBrainImagePart(encoded));
-      this.logger.log(
-        `🌐 Using image reference (${encoded.kind}): ${encoded.kind === 'fileData' ? encoded.fileUri : '[inlineData]'}`,
-      );
-    }
+    const runOnce = async (runtime: ModelConfig) => {
+      const keyPool = this.getBrainKeyPool(runtime);
+      const shouldMock =
+        process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
 
-    const maxAttempts = 2;
-    let lastError: any;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const contentParts: any[] = [{ text: prompt }, ...imageParts];
-
-        const requestBody = {
-          contents: [{ role: 'user', parts: contentParts }],
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: 'application/json',
+      if (shouldMock) {
+        this.logger.warn('USING MOCK STYLE ANALYSIS');
+        return normalizeStyleLearnV1({
+          schema: 'afs_style_v1',
+          name: 'Rainy Cyberpunk Noir',
+          description:
+            'Moody high-contrast neon-on-wet-streets fashion photo style.',
+          lighting: {
+            environment: 'night / mixed',
+            key_light: {
+              type: 'neon practicals',
+              direction: 'side/back',
+              softness: 'hard',
+              color_temperature_k: 3200,
+            },
+            fill_light: {
+              type: 'ambient bounce',
+              softness: 'soft',
+              intensity: 'low',
+            },
+            rim_light: {
+              type: 'streetlight rim',
+              direction: 'back',
+              intensity: 'medium',
+            },
+            shadow_character:
+              'high contrast, crisp shadows with soft ambient lift',
           },
+          camera: {
+            shot_type: 'three-quarter',
+            camera_height: 'eye level',
+            camera_angle: 'three-quarter',
+            lens_focal_length_mm: 35,
+            aperture: 'f/2.0',
+            focus: 'sharp subject, shallow DOF bokeh highlights',
+          },
+          composition: {
+            orientation: 'portrait',
+            subject_placement: 'centered',
+            crop_notes: 'keep full garment silhouette readable',
+          },
+          scene: {
+            location: 'urban street',
+            background: 'wet pavement, neon signs',
+            time_of_day: 'night',
+            weather: 'rainy',
+          },
+          color_grading: {
+            white_balance: 'cool shadows / warm highlights',
+            palette: ['teal', 'magenta', 'amber'],
+            contrast: 'high',
+            saturation: 'medium-high',
+          },
+          quality: {
+            realism: 'photorealistic',
+            texture_detail: 'high',
+            grain: 'subtle',
+          },
+        });
+      }
+
+      const model = runtime?.brainModel || 'gemini-2.0-flash-exp';
+      const provider = runtime?.brainProvider || 'GEMINI';
+
+      const encodedImages: BrainEncodedImage[] = [];
+      for (const path of paths) {
+        const encoded = await this.encodeImageForBrain(path);
+        encodedImages.push(encoded);
+        this.logger.log(
+          `🌐 Using image reference (${encoded.kind}): ${encoded.kind === 'fileData' ? encoded.fileUri : '[inlineData]'}`,
+        );
+      }
+
+      if (provider === 'OPENAI_COMPAT') {
+        const gateway =
+          runtime?.brainGateway ||
+          runtime?.gatewayUrl ||
+          'https://api.vectorengine.ai/v1';
+        const endpoint = this.buildOpenAICompatEndpoint(gateway);
+        const contentParts: any[] = [
+          { type: 'text', text: prompt },
+          ...encodedImages.map((encoded) => ({
+            type: 'image_url',
+            image_url: { url: this.toOpenAIImageUrl(encoded) },
+          })),
+        ];
+        const requestBody = {
+          model,
+          messages: [{ role: 'user', content: contentParts }],
+          temperature: 0.2,
         };
 
-        // Dump exact outgoing prompt (no base64; only text + file URIs / inlineData placeholder)
         try {
           const refId = String(trace?.traceId || '').trim() || undefined;
           const lines: string[] = [];
@@ -1956,25 +2217,12 @@ You MUST fill every field with a best-guess; never return null or empty strings.
           lines.push(prompt);
           lines.push('');
           lines.push('[IMAGE_PARTS]');
-          for (const p of contentParts) {
-            if (typeof p?.text === 'string') continue;
-            if (p?.fileData?.fileUri) {
-              lines.push(`- fileData: ${String(p.fileData.fileUri)}`);
-              continue;
-            }
-            if (p?.inlineData?.data) {
-              const mime = String(p?.inlineData?.mimeType || '');
-              const len = String(p?.inlineData?.data || '').length;
-              lines.push(
-                `- inlineData: mime=${mime || 'unknown'} base64Len=${len}`,
-              );
-              continue;
-            }
-            lines.push(`- part: ${JSON.stringify(Object.keys(p || {}))}`);
+          for (const encoded of encodedImages) {
+            lines.push(`- image_url: ${this.describeOpenAIImageUrl(encoded)}`);
           }
           lines.push('');
           lines.push('[GENERATION_CONFIG]');
-          lines.push(JSON.stringify(requestBody.generationConfig));
+          lines.push(JSON.stringify({ temperature: 0.2 }));
 
           const dumped = await dumpPromptText({
             kind: 'BRAIN',
@@ -1994,15 +2242,14 @@ You MUST fill every field with a best-guess; never return null or empty strings.
           // ignore dump failures
         }
 
-        this.logger.log(`🔍 Analyzing style image with ${model}...`);
-        const response = await this.postWithKeyFailover({
+        this.logger.log(
+          `🔍 Analyzing style image with ${model} (OpenAI compat)...`,
+        );
+        const response = await this.postOpenAIWithKeyFailover({
           keyPool,
-          buildEndpoint,
+          endpoint,
           requestBody,
-          axiosConfig: {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 300000,
-          },
+          axiosConfig: { timeout: 300000 },
           logLabel: 'analyze_style_image',
         });
 
@@ -2013,19 +2260,13 @@ You MUST fill every field with a best-guess; never return null or empty strings.
           responseData: response.data,
         });
 
-        const candidate = response.data.candidates?.[0];
-        if (!candidate) throw new Error('No candidates in analysis response');
-
-        let rawContent = '';
-        for (const part of candidate.content?.parts || []) {
-          if (part?.thought) continue;
-          if (typeof part?.text === 'string') rawContent += part.text;
-        }
-        rawContent = String(rawContent || '').trim();
-        if (!rawContent)
+        const rawContent = String(
+          response.data?.choices?.[0]?.message?.content || '',
+        ).trim();
+        if (!rawContent) {
           throw new Error('No text content in analysis response');
+        }
 
-        // Dump raw response text (what model returned as text parts)
         try {
           const refId = String(trace?.traceId || '').trim() || undefined;
           const dumped = await dumpPromptText({
@@ -2048,20 +2289,8 @@ You MUST fill every field with a best-guess; never return null or empty strings.
 
         const cleanContent = this.extractLastCompleteJSON(rawContent);
         const json = JSON.parse(cleanContent);
-
-        // Translate values to Chinese for consistency
-        // Note: For now we keep English as internal style signals are often better in English,
-        // BUT user requested Chinese UI.
-        // Let's translate values to Chinese using TranslationService if needed,
-        // but for technical prompts, English is often better for re-generation.
-        // Compromise: We store English parameters for generation, but maybe frontend shows translated?
-        // User Rule: "所有对话回复、步骤说明...一律使用中文" -> But these are technical params for the AI itself.
-        // Decision: Keep English for precision, as these are "Tech Specs".
-        // If user wants to see them, we can translate on read.
-
         const normalized = normalizeStyleLearnV1(json);
 
-        // Dump final parsed JSON (what we store as promptBlock)
         try {
           const refId = String(trace?.traceId || '').trim() || undefined;
           const dumped = await dumpPromptText({
@@ -2083,19 +2312,161 @@ You MUST fill every field with a best-guess; never return null or empty strings.
         }
 
         return normalized;
-      } catch (error: any) {
-        lastError = error;
-        this.logger.error(
-          `Style Analysis Failed (attempt ${attempt}/${maxAttempts})`,
-          error?.response?.data || error?.message || error,
-        );
-        if (attempt < maxAttempts) {
-          this.logger.warn('🔁 Retrying style analysis once...');
-        }
       }
-    }
 
-    throw lastError || new Error('Style Analysis Failed');
+      const activeGateway =
+        runtime?.brainGateway ||
+        runtime?.gatewayUrl ||
+        'https://api.vectorengine.ai/v1';
+
+      const baseUrl = this.normalizeGatewayToV1beta(activeGateway);
+
+      const buildEndpoint = (key: string) =>
+        `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+      const imageParts = encodedImages.map((encoded) =>
+        this.toBrainImagePart(encoded),
+      );
+      const contentParts: any[] = [{ text: prompt }, ...imageParts];
+
+      const requestBody = {
+        contents: [{ role: 'user', parts: contentParts }],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+        },
+      };
+
+      try {
+        const refId = String(trace?.traceId || '').trim() || undefined;
+        const lines: string[] = [];
+        lines.push('[BRAIN_REQUEST] analyze_style_image');
+        lines.push('[TEXT]');
+        lines.push(prompt);
+        lines.push('');
+        lines.push('[IMAGE_PARTS]');
+        for (const p of contentParts) {
+          if (typeof p?.text === 'string') continue;
+          if (p?.fileData?.fileUri) {
+            lines.push(`- fileData: ${String(p.fileData.fileUri)}`);
+            continue;
+          }
+          if (p?.inlineData?.data) {
+            const mime = String(p?.inlineData?.mimeType || '');
+            const len = String(p?.inlineData?.data || '').length;
+            lines.push(
+              `- inlineData: mime=${mime || 'unknown'} base64Len=${len}`,
+            );
+            continue;
+          }
+          lines.push(`- part: ${JSON.stringify(Object.keys(p || {}))}`);
+        }
+        lines.push('');
+        lines.push('[GENERATION_CONFIG]');
+        lines.push(JSON.stringify(requestBody.generationConfig));
+
+        const dumped = await dumpPromptText({
+          kind: 'BRAIN',
+          stage: 'analyze_style_image_request',
+          refId,
+          content: lines.join('\n'),
+        });
+
+        logLargeText({
+          log: (m) => this.logger.log(m),
+          header: `🧾 Brain Style Learn REQUEST (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+          text: lines.join('\n'),
+          chunkSize: 3200,
+          maxLen: 120_000,
+        });
+      } catch {
+        // ignore dump failures
+      }
+
+      this.logger.log(`🔍 Analyzing style image with ${model}...`);
+      const response = await this.postWithKeyFailover({
+        keyPool,
+        buildEndpoint,
+        requestBody,
+        axiosConfig: {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 300000,
+        },
+        logLabel: 'analyze_style_image',
+      });
+
+      await dumpModelResponseIfEnabled({
+        kind: 'BRAIN',
+        stage: 'analyze_style_image',
+        model,
+        responseData: response.data,
+      });
+
+      const candidate = response.data.candidates?.[0];
+      if (!candidate) throw new Error('No candidates in analysis response');
+
+      let rawContent = '';
+      for (const part of candidate.content?.parts || []) {
+        if (part?.thought) continue;
+        if (typeof part?.text === 'string') rawContent += part.text;
+      }
+      rawContent = String(rawContent || '').trim();
+      if (!rawContent) throw new Error('No text content in analysis response');
+
+      try {
+        const refId = String(trace?.traceId || '').trim() || undefined;
+        const dumped = await dumpPromptText({
+          kind: 'BRAIN',
+          stage: 'analyze_style_image_response_text',
+          refId,
+          content: rawContent,
+        });
+
+        logLargeText({
+          log: (m) => this.logger.log(m),
+          header: `🧾 Brain Style Learn RESPONSE_TEXT (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+          text: rawContent,
+          chunkSize: 3200,
+          maxLen: 120_000,
+        });
+      } catch {
+        // ignore
+      }
+
+      const cleanContent = this.extractLastCompleteJSON(rawContent);
+      const json = JSON.parse(cleanContent);
+      const normalized = normalizeStyleLearnV1(json);
+
+      try {
+        const refId = String(trace?.traceId || '').trim() || undefined;
+        const dumped = await dumpPromptText({
+          kind: 'BRAIN',
+          stage: 'analyze_style_image_response_json',
+          refId,
+          content: JSON.stringify(normalized, null, 2),
+        });
+
+        logLargeText({
+          log: (m) => this.logger.log(m),
+          header: `🧾 Brain Style Learn RESPONSE_JSON (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+          text: JSON.stringify(normalized, null, 2),
+          chunkSize: 3200,
+          maxLen: 120_000,
+        });
+      } catch {
+        // ignore
+      }
+
+      return normalized;
+    };
+
+    return this.runWithFallback({
+      logLabel: 'analyze_style_image',
+      primary: config,
+      fallback: fallbackConfig,
+      maxRetries: 2,
+      action: runOnce,
+    });
   }
 
   /**
@@ -2105,61 +2476,13 @@ You MUST fill every field with a best-guess; never return null or empty strings.
   async analyzePoseImage(
     imagePath: string,
     config?: ModelConfig,
+    fallbackConfig?: ModelConfig,
     trace?: { traceId?: string },
   ): Promise<any> {
     const input = String(imagePath || '').trim();
     if (!input) {
       throw new Error('imagePath 不能为空');
     }
-
-    const keyPool = this.getBrainKeyPool(config);
-    const shouldMock =
-      process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
-    if (shouldMock) {
-      this.logger.warn('USING MOCK POSE ANALYSIS');
-      return normalizePoseLearnV1({
-        schema: 'afs_pose_v1',
-        name: 'Auto Pose 001',
-        description: 'A clean standing pose with slight contrapposto.',
-        framing: {
-          shot_type: 'full body',
-          camera_angle: 'eye level',
-          camera_height: 'eye level',
-          lens_hint: '50mm',
-          crop_notes: 'Keep full silhouette visible.',
-        },
-        pose: {
-          head: 'Head slightly turned to camera-left.',
-          gaze: 'Eyes to camera or slightly off-camera.',
-          shoulders: 'Relaxed shoulders, chest open.',
-          torso: 'Slight S-curve, natural posture.',
-          arms_hands: 'One hand near hip, the other relaxed.',
-          legs_feet: 'Weight on one leg, other leg slightly forward.',
-        },
-        must_keep_visible: ['garment front panel', 'face'],
-        occlusion_no_go: [
-          'Do not cover the garment front panel with hands.',
-          'No props blocking the torso.',
-        ],
-      });
-    }
-
-    const model = config?.brainModel || 'gemini-2.0-flash-exp';
-    const activeGateway =
-      config?.brainGateway ||
-      config?.gatewayUrl ||
-      'https://api.vectorengine.ai/v1';
-
-    // Convert to v1beta for Google Native format
-    let baseUrl = activeGateway;
-    if (baseUrl.endsWith('/v1')) {
-      baseUrl = baseUrl.replace('/v1', '/v1beta');
-    } else if (!baseUrl.includes('/v1beta')) {
-      baseUrl = baseUrl.replace(/\/$/, '') + '/v1beta';
-    }
-
-    const buildEndpoint = (key: string) =>
-      `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
     const prompt = `You are a world-class fashion pose director.
 Task: learn a reusable POSE blueprint from the input image.
@@ -2200,26 +2523,59 @@ You MUST fill every field with a best-guess; never return null.
   ]
 }`;
 
-    const encoded = await this.encodeImageForBrain(input);
-    const requestBody = {
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }, this.toBrainImagePart(encoded)],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: 'application/json',
-      },
-    };
+    const runOnce = async (runtime: ModelConfig) => {
+      const keyPool = this.getBrainKeyPool(runtime);
+      const shouldMock =
+        process.env.MOCK_BRAIN === 'true' && keyPool.length === 0;
+      if (shouldMock) {
+        this.logger.warn('USING MOCK POSE ANALYSIS');
+        return normalizePoseLearnV1({
+          schema: 'afs_pose_v1',
+          name: 'Auto Pose 001',
+          description: 'A clean standing pose with slight contrapposto.',
+          framing: {
+            shot_type: 'full body',
+            camera_angle: 'eye level',
+            camera_height: 'eye level',
+            lens_hint: '50mm',
+            crop_notes: 'Keep full silhouette visible.',
+          },
+          pose: {
+            head: 'Head slightly turned to camera-left.',
+            gaze: 'Eyes to camera or slightly off-camera.',
+            shoulders: 'Relaxed shoulders, chest open.',
+            torso: 'Slight S-curve, natural posture.',
+            arms_hands: 'One hand near hip, the other relaxed.',
+            legs_feet: 'Weight on one leg, other leg slightly forward.',
+          },
+          must_keep_visible: ['garment front panel', 'face'],
+          occlusion_no_go: [
+            'Do not cover the garment front panel with hands.',
+            'No props blocking the torso.',
+          ],
+        });
+      }
 
-    const maxAttempts = 2;
-    let lastError: any;
+      const model = runtime?.brainModel || 'gemini-2.0-flash-exp';
+      const provider = runtime?.brainProvider || 'GEMINI';
+      const encoded = await this.encodeImageForBrain(input);
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        // Dump outgoing prompt (no base64)
+      if (provider === 'OPENAI_COMPAT') {
+        const gateway =
+          runtime?.brainGateway ||
+          runtime?.gatewayUrl ||
+          'https://api.vectorengine.ai/v1';
+        const endpoint = this.buildOpenAICompatEndpoint(gateway);
+        const contentParts = [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: this.toOpenAIImageUrl(encoded) } },
+        ];
+        const requestBody = {
+          model,
+          messages: [{ role: 'user', content: contentParts }],
+          temperature: 0.2,
+        };
+
         try {
           const refId = String(trace?.traceId || '').trim() || undefined;
           const lines: string[] = [];
@@ -2228,16 +2584,10 @@ You MUST fill every field with a best-guess; never return null.
           lines.push(prompt);
           lines.push('');
           lines.push('[IMAGE_PART]');
-          if (encoded.kind === 'fileData') {
-            lines.push(`fileData: ${encoded.fileUri}`);
-          } else {
-            lines.push(
-              `inlineData: mime=${encoded.mimeType} base64Len=${encoded.data.length}`,
-            );
-          }
+          lines.push(`image_url: ${this.describeOpenAIImageUrl(encoded)}`);
           lines.push('');
           lines.push('[GENERATION_CONFIG]');
-          lines.push(JSON.stringify(requestBody.generationConfig));
+          lines.push(JSON.stringify({ temperature: 0.2 }));
           const dumped = await dumpPromptText({
             kind: 'BRAIN',
             stage: 'analyze_pose_image_request',
@@ -2255,14 +2605,11 @@ You MUST fill every field with a best-guess; never return null.
           // ignore
         }
 
-        const response = await this.postWithKeyFailover({
+        const response = await this.postOpenAIWithKeyFailover({
           keyPool,
-          buildEndpoint,
+          endpoint,
           requestBody,
-          axiosConfig: {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 300000,
-          },
+          axiosConfig: { timeout: 300000 },
           logLabel: 'analyze_pose_image',
         });
 
@@ -2273,20 +2620,13 @@ You MUST fill every field with a best-guess; never return null.
           responseData: response.data,
         });
 
-        const candidate = response.data.candidates?.[0];
-        if (!candidate)
-          throw new Error('No candidates in pose analysis response');
-
-        let rawContent = '';
-        for (const part of candidate.content?.parts || []) {
-          if (part?.thought) continue;
-          if (typeof part?.text === 'string') rawContent += part.text;
-        }
-        rawContent = String(rawContent || '').trim();
-        if (!rawContent)
+        const rawContent = String(
+          response.data?.choices?.[0]?.message?.content || '',
+        ).trim();
+        if (!rawContent) {
           throw new Error('No text content in pose analysis response');
+        }
 
-        // Dump raw response text
         try {
           const refId = String(trace?.traceId || '').trim() || undefined;
           const dumped = await dumpPromptText({
@@ -2309,7 +2649,6 @@ You MUST fill every field with a best-guess; never return null.
         const cleanContent = this.extractLastCompleteJSON(rawContent);
         const normalized = normalizePoseLearnV1(JSON.parse(cleanContent));
 
-        // Dump final parsed JSON (what we store as promptBlock)
         try {
           const refId = String(trace?.traceId || '').trim() || undefined;
           const dumped = await dumpPromptText({
@@ -2330,18 +2669,145 @@ You MUST fill every field with a best-guess; never return null.
         }
 
         return normalized;
-      } catch (e: any) {
-        lastError = e;
-        this.logger.error(
-          `Pose Analysis Failed (attempt ${attempt}/${maxAttempts})`,
-          e?.response?.data || e?.message || e,
-        );
-        if (attempt < maxAttempts) {
-          this.logger.warn('🔁 Retrying pose analysis once...');
-        }
       }
-    }
 
-    throw lastError || new Error('Pose Analysis Failed');
+      const activeGateway =
+        runtime?.brainGateway ||
+        runtime?.gatewayUrl ||
+        'https://api.vectorengine.ai/v1';
+
+      const baseUrl = this.normalizeGatewayToV1beta(activeGateway);
+
+      const buildEndpoint = (key: string) =>
+        `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+      const requestBody = {
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }, this.toBrainImagePart(encoded)],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+        },
+      };
+
+      try {
+        const refId = String(trace?.traceId || '').trim() || undefined;
+        const lines: string[] = [];
+        lines.push('[BRAIN_REQUEST] analyze_pose_image');
+        lines.push('[TEXT]');
+        lines.push(prompt);
+        lines.push('');
+        lines.push('[IMAGE_PART]');
+        if (encoded.kind === 'fileData') {
+          lines.push(`fileData: ${encoded.fileUri}`);
+        } else {
+          lines.push(
+            `inlineData: mime=${encoded.mimeType} base64Len=${encoded.data.length}`,
+          );
+        }
+        lines.push('');
+        lines.push('[GENERATION_CONFIG]');
+        lines.push(JSON.stringify(requestBody.generationConfig));
+        const dumped = await dumpPromptText({
+          kind: 'BRAIN',
+          stage: 'analyze_pose_image_request',
+          refId,
+          content: lines.join('\n'),
+        });
+        logLargeText({
+          log: (m) => this.logger.log(m),
+          header: `🧾 Brain Pose Learn REQUEST (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+          text: lines.join('\n'),
+          chunkSize: 3200,
+          maxLen: 120_000,
+        });
+      } catch {
+        // ignore
+      }
+
+      const response = await this.postWithKeyFailover({
+        keyPool,
+        buildEndpoint,
+        requestBody,
+        axiosConfig: {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 300000,
+        },
+        logLabel: 'analyze_pose_image',
+      });
+
+      await dumpModelResponseIfEnabled({
+        kind: 'BRAIN',
+        stage: 'analyze_pose_image',
+        model,
+        responseData: response.data,
+      });
+
+      const candidate = response.data.candidates?.[0];
+      if (!candidate) throw new Error('No candidates in pose analysis response');
+
+      let rawContent = '';
+      for (const part of candidate.content?.parts || []) {
+        if (part?.thought) continue;
+        if (typeof part?.text === 'string') rawContent += part.text;
+      }
+      rawContent = String(rawContent || '').trim();
+      if (!rawContent) throw new Error('No text content in pose analysis response');
+
+      try {
+        const refId = String(trace?.traceId || '').trim() || undefined;
+        const dumped = await dumpPromptText({
+          kind: 'BRAIN',
+          stage: 'analyze_pose_image_response_text',
+          refId,
+          content: rawContent,
+        });
+        logLargeText({
+          log: (m) => this.logger.log(m),
+          header: `🧾 Brain Pose Learn RESPONSE_TEXT (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+          text: rawContent,
+          chunkSize: 3200,
+          maxLen: 120_000,
+        });
+      } catch {
+        // ignore
+      }
+
+      const cleanContent = this.extractLastCompleteJSON(rawContent);
+      const normalized = normalizePoseLearnV1(JSON.parse(cleanContent));
+
+      try {
+        const refId = String(trace?.traceId || '').trim() || undefined;
+        const dumped = await dumpPromptText({
+          kind: 'BRAIN',
+          stage: 'analyze_pose_image_response_json',
+          refId,
+          content: JSON.stringify(normalized, null, 2),
+        });
+        logLargeText({
+          log: (m) => this.logger.log(m),
+          header: `🧾 Brain Pose Learn RESPONSE_JSON (ref=${refId || '-'}) saved=${dumped.filePath.replace(/\\\\/g, '/')} sha256=${dumped.sha256.slice(0, 12)}`,
+          text: JSON.stringify(normalized, null, 2),
+          chunkSize: 3200,
+          maxLen: 120_000,
+        });
+      } catch {
+        // ignore
+      }
+
+      return normalized;
+    };
+
+    return this.runWithFallback({
+      logLabel: 'analyze_pose_image',
+      primary: config,
+      fallback: fallbackConfig,
+      maxRetries: 2,
+      action: runOnce,
+    });
   }
 }

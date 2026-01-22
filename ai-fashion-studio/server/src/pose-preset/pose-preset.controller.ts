@@ -23,9 +23,9 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { DbService } from '../db/db.service';
 import { BrainService } from '../brain/brain.service';
-import { ModelConfigResolverService } from '../model-profile/model-config-resolver.service';
 import { CosService } from '../cos/cos.service';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { BrainRoutingService } from '../brain-routing/brain-routing.service';
 
 const POSE_PRESETS_DIR = './uploads/pose-presets';
 
@@ -45,7 +45,7 @@ export class PosePresetController {
   constructor(
     private readonly db: DbService,
     private readonly brain: BrainService,
-    private readonly modelConfigResolver: ModelConfigResolverService,
+    private readonly brainRouting: BrainRoutingService,
     private readonly cos: CosService,
   ) {
     fs.ensureDirSync(POSE_PRESETS_DIR);
@@ -135,13 +135,13 @@ export class PosePresetController {
       }
     }
 
-    const brainRuntime =
-      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+    const routing = await this.brainRouting.resolveForTask('POSE_LEARN');
     let analysis: any;
     try {
       analysis = await this.brain.analyzePoseImage(
         imageUrlOrPath,
-        brainRuntime,
+        routing.primary,
+        routing.fallback,
         { traceId: presetId },
       );
     } catch (error: any) {
@@ -263,13 +263,13 @@ export class PosePresetController {
       `🧠 Relearning Pose preset ${id} from ${imagePaths.length} image(s)...`,
     );
 
-    const brainRuntime =
-      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+    const routing = await this.brainRouting.resolveForTask('POSE_LEARN');
     let analysis: any;
     try {
       analysis = await this.brain.analyzePoseImage(
         imagePaths[0],
-        brainRuntime,
+        routing.primary,
+        routing.fallback,
         { traceId: `${id}:relearn:${Date.now()}` },
       );
     } catch (error: any) {

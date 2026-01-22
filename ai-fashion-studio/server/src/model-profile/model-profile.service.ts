@@ -3,8 +3,10 @@ import axios from 'axios';
 import * as crypto from 'crypto';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import { ModelProvider } from '../common/model-config';
 
 export type ModelProfileKind = 'BRAIN' | 'PAINTER';
+export type ModelProfileProvider = ModelProvider;
 
 export type EncryptedPayload = {
   ivB64: string;
@@ -15,6 +17,7 @@ export type EncryptedPayload = {
 export type ModelProfilePublic = {
   id: string;
   kind: ModelProfileKind;
+  provider: ModelProfileProvider;
   name: string;
   gateway: string;
   model: string;
@@ -37,9 +40,17 @@ type StoreFileV1 = {
   profiles: ModelProfileStored[];
 };
 
+type StoreFileV2 = {
+  version: 2;
+  // Backward compatible: can be a single id or a pool of ids
+  active: { BRAIN?: string | string[]; PAINTER?: string | string[] };
+  profiles: ModelProfileStored[];
+};
+
 export type ModelProfileRuntime = {
   id: string;
   kind: ModelProfileKind;
+  provider: ModelProfileProvider;
   name: string;
   gateway: string;
   model: string;
@@ -119,27 +130,64 @@ export class ModelProfileService {
     return plaintext.toString('utf8');
   }
 
-  private async readStore(): Promise<StoreFileV1> {
+  private normalizeProvider(value?: string): ModelProfileProvider {
+    const raw = String(value || '').trim().toUpperCase();
+    if (raw === 'OPENAI_COMPAT') return 'OPENAI_COMPAT';
+    return 'GEMINI';
+  }
+
+  private ensureProviderAllowed(
+    kind: ModelProfileKind,
+    provider: ModelProfileProvider,
+  ) {
+    if (kind === 'PAINTER' && provider !== 'GEMINI') {
+      throw new Error('PAINTER 仅支持 GEMINI Provider');
+    }
+  }
+
+  private async readStore(): Promise<StoreFileV2> {
     await fs.ensureDir(this.secretsDir);
     if (!(await fs.pathExists(this.storePath))) {
-      const empty: StoreFileV1 = { version: 1, active: {}, profiles: [] };
+      const empty: StoreFileV2 = { version: 2, active: {}, profiles: [] };
       await fs.writeJson(this.storePath, empty, { spaces: 2 });
       return empty;
     }
 
     const raw = await fs.readJson(this.storePath);
-    if (
-      !raw ||
-      raw.version !== 1 ||
-      !Array.isArray(raw.profiles) ||
-      typeof raw.active !== 'object'
-    ) {
+    if (!raw || !Array.isArray(raw.profiles) || typeof raw.active !== 'object') {
       throw new Error('model-profiles.json 格式无效');
     }
-    return raw as StoreFileV1;
+
+    if (raw.version === 1) {
+      const migrated: StoreFileV2 = {
+        version: 2,
+        active: raw.active || {},
+        profiles: (raw.profiles || []).map((p: any) => ({
+          ...p,
+          provider: this.normalizeProvider(p?.provider || 'GEMINI'),
+        })),
+      };
+      await this.writeStore(migrated);
+      return migrated;
+    }
+
+    if (raw.version !== 2) {
+      throw new Error('model-profiles.json 版本不支持');
+    }
+
+    const normalized: StoreFileV2 = {
+      version: 2,
+      active: raw.active || {},
+      profiles: (raw.profiles || []).map((p: any) => ({
+        ...p,
+        provider: this.normalizeProvider(p?.provider || 'GEMINI'),
+      })),
+    };
+
+    return normalized;
   }
 
-  private async writeStore(next: StoreFileV1) {
+  private async writeStore(next: StoreFileV2) {
     await fs.ensureDir(this.secretsDir);
     await fs.writeJson(this.storePath, next, { spaces: 2 });
   }
@@ -170,6 +218,7 @@ export class ModelProfileService {
   async create(
     input: {
       kind: ModelProfileKind;
+      provider?: ModelProfileProvider;
       name: string;
       gateway: string;
       model: string;
@@ -181,11 +230,13 @@ export class ModelProfileService {
     const gateway = (input.gateway ?? '').trim();
     const model = (input.model ?? '').trim();
     const apiKey = (input.apiKey ?? '').trim();
+    const provider = this.normalizeProvider(input.provider);
 
     if (!name) throw new Error('name 不能为空');
     if (!gateway) throw new Error('gateway 不能为空');
     if (!model) throw new Error('model 不能为空');
     if (!apiKey) throw new Error('apiKey 不能为空');
+    this.ensureProviderAllowed(input.kind, provider);
 
     const store = await this.readStore();
     const id = crypto.randomUUID();
@@ -195,6 +246,7 @@ export class ModelProfileService {
     const stored: ModelProfileStored = {
       id,
       kind: input.kind,
+      provider,
       name,
       gateway,
       model,
@@ -216,6 +268,7 @@ export class ModelProfileService {
   async update(
     id: string,
     patch: Partial<{
+      provider: ModelProfileProvider;
       name: string;
       gateway: string;
       model: string;
@@ -227,6 +280,12 @@ export class ModelProfileService {
     const store = await this.readStore();
     const profile = store.profiles.find((p) => p.id === id);
     if (!profile) throw new Error('profile 不存在');
+
+    if (patch.provider !== undefined) {
+      const nextProvider = this.normalizeProvider(patch.provider);
+      this.ensureProviderAllowed(profile.kind, nextProvider);
+      profile.provider = nextProvider;
+    }
 
     if (patch.name !== undefined) {
       const v = patch.name.trim();
@@ -375,6 +434,7 @@ export class ModelProfileService {
     return {
       id: profile.id,
       kind: profile.kind,
+      provider: profile.provider ?? 'GEMINI',
       name: profile.name,
       gateway: profile.gateway,
       model: profile.model,
@@ -495,9 +555,37 @@ export class ModelProfileService {
 
   async testProfile(id: string): Promise<{ ok: boolean; message: string }> {
     const runtime = await this.getRuntimeById(id);
-    const payload = this.buildTestPayload(runtime.kind);
     const timeout = this.getTestTimeoutMs();
 
+    if (runtime.provider === 'OPENAI_COMPAT') {
+      const baseUrl = String(runtime.gateway || '').trim().replace(/\/+$/, '');
+      if (!baseUrl) {
+        return { ok: false, message: 'gateway 不能为空' };
+      }
+      const endpoint = `${baseUrl}/chat/completions`;
+      const res = await axios.post(
+        endpoint,
+        {
+          model: runtime.model,
+          messages: [{ role: 'user', content: 'Ping' }],
+          max_tokens: 16,
+          temperature: 0,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${runtime.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout,
+        },
+      );
+      if (res.data?.choices?.length) {
+        return { ok: true, message: '连接成功（OpenAI 兼容）' };
+      }
+      return { ok: false, message: '上游返回不符合预期（OpenAI 兼容）' };
+    }
+
+    const payload = this.buildTestPayload(runtime.kind);
     const tryOnce = async (baseUrl: string, label: 'v1beta' | 'v1') => {
       const endpoint = `${baseUrl}/models/${encodeURIComponent(runtime.model)}:generateContent?key=${encodeURIComponent(runtime.apiKey)}`;
       const res = await axios.post(endpoint, payload, {

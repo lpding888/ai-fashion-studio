@@ -11,7 +11,42 @@ import {
 } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
 import { UserDbService } from '../db/user-db.service';
-import { ModelProfileKind, ModelProfileService } from './model-profile.service';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { z } from 'zod';
+import { ModelProfileService } from './model-profile.service';
+
+const ProviderSchema = z.enum(['GEMINI', 'OPENAI_COMPAT']);
+
+const CreateModelProfileBodySchema = z
+  .object({
+    kind: z.enum(['BRAIN', 'PAINTER']),
+    provider: ProviderSchema.optional(),
+    name: z.string().trim().min(1),
+    gateway: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+    apiKey: z.string().trim().min(1),
+  })
+  .strict();
+
+const UpdateModelProfileBodySchema = z
+  .object({
+    provider: ProviderSchema.optional(),
+    name: z.string().trim().min(1).optional(),
+    gateway: z.string().trim().min(1).optional(),
+    model: z.string().trim().min(1).optional(),
+    apiKey: z.string().trim().min(1).optional(),
+    disabled: z.boolean().optional(),
+  })
+  .strict();
+
+const SetActiveBodySchema = z
+  .object({
+    brainProfileId: z.string().trim().min(1).optional(),
+    painterProfileId: z.string().trim().min(1).optional(),
+    brainProfileIds: z.array(z.string().trim().min(1)).optional(),
+    painterProfileIds: z.array(z.string().trim().min(1)).optional(),
+  })
+  .strict();
 
 @Controller('admin/model-profiles')
 export class ModelProfileController {
@@ -53,14 +88,8 @@ export class ModelProfileController {
   @Post()
   async create(
     @Headers('authorization') authorization: string,
-    @Body()
-    body: {
-      kind: ModelProfileKind;
-      name: string;
-      gateway: string;
-      model: string;
-      apiKey: string;
-    },
+    @Body(new ZodValidationPipe(CreateModelProfileBodySchema))
+    body: z.infer<typeof CreateModelProfileBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
@@ -75,14 +104,8 @@ export class ModelProfileController {
   async update(
     @Headers('authorization') authorization: string,
     @Param('id') id: string,
-    @Body()
-    body: Partial<{
-      name: string;
-      gateway: string;
-      model: string;
-      apiKey: string;
-      disabled: boolean;
-    }>,
+    @Body(new ZodValidationPipe(UpdateModelProfileBodySchema))
+    body: z.infer<typeof UpdateModelProfileBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
@@ -110,13 +133,8 @@ export class ModelProfileController {
   @Post('set-active')
   async setActive(
     @Headers('authorization') authorization: string,
-    @Body()
-    body: {
-      brainProfileId?: string;
-      painterProfileId?: string;
-      brainProfileIds?: string[];
-      painterProfileIds?: string[];
-    },
+    @Body(new ZodValidationPipe(SetActiveBodySchema))
+    body: z.infer<typeof SetActiveBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {

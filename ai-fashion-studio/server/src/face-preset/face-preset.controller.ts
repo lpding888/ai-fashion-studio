@@ -23,8 +23,33 @@ import * as path from 'path';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { z } from 'zod';
 
 const FACE_PRESETS_DIR = './uploads/face-presets';
+const FacePresetGenderSchema = z.enum(['female', 'male', 'other']);
+
+const CreateFacePresetBodySchema = z
+  .object({
+    name: z.string().trim().min(1),
+    gender: FacePresetGenderSchema.optional(),
+    height: z.string().trim().optional(),
+    weight: z.string().trim().optional(),
+    measurements: z.string().trim().optional(),
+    description: z.string().trim().optional(),
+  })
+  .strict();
+
+const UpdateFacePresetBodySchema = z
+  .object({
+    name: z.string().trim().min(1).optional(),
+    gender: FacePresetGenderSchema.optional(),
+    height: z.union([z.string().trim(), z.number()]).optional(),
+    weight: z.union([z.string().trim(), z.number()]).optional(),
+    measurements: z.string().trim().optional(),
+    description: z.string().trim().optional(),
+  })
+  .strict();
 
 @Controller('face-presets')
 export class FacePresetController {
@@ -73,25 +98,14 @@ export class FacePresetController {
   async create(
     @CurrentUser() user: UserModel,
     @UploadedFile() file: Express.Multer.File,
-    @Body()
-    body: {
-      name: string;
-      gender?: 'female' | 'male' | 'other';
-      height?: string;
-      weight?: string;
-      measurements?: string;
-      description?: string;
-    },
+    @Body(new ZodValidationPipe(CreateFacePresetBodySchema))
+    body: z.infer<typeof CreateFacePresetBodySchema>,
   ) {
     if (!file) {
       throw new BadRequestException('Image file is required');
     }
 
     const { name, gender, measurements, description } = body;
-
-    if (!name || name.trim() === '') {
-      throw new BadRequestException('Preset name is required');
-    }
 
     // 辅助函数：安全转换数字（空字符串返回 undefined）
     const parseNumber = (value?: string): number | undefined => {
@@ -191,15 +205,8 @@ export class FacePresetController {
   async update(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body()
-    body: Partial<{
-      name: string;
-      gender: 'female' | 'male' | 'other';
-      height: string | number;
-      weight: string | number;
-      measurements: string;
-      description: string;
-    }>,
+    @Body(new ZodValidationPipe(UpdateFacePresetBodySchema))
+    body: z.infer<typeof UpdateFacePresetBodySchema>,
   ) {
     const existing = await this.db.getFacePreset(id);
     if (!existing) throw new BadRequestException('Preset not found');

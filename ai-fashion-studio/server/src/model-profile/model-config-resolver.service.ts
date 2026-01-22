@@ -115,6 +115,7 @@ export class ModelConfigResolverService {
       brainProfileIds: snapshot?.brainProfileIds,
       brainGateway: brainRuntime.gateway,
       brainModel: brainRuntime.model,
+      brainProvider: brainRuntime.provider,
       brainKey: brainRuntime.apiKey,
       brainKeys: brainPool.keys.length > 0 ? brainPool.keys : undefined,
 
@@ -122,6 +123,7 @@ export class ModelConfigResolverService {
       painterProfileIds: snapshot?.painterProfileIds,
       painterGateway: painterRuntime.gateway,
       painterModel: painterRuntime.model,
+      painterProvider: painterRuntime.provider,
       painterKey: painterRuntime.apiKey,
       painterKeys: painterPool.keys.length > 0 ? painterPool.keys : undefined,
     };
@@ -146,6 +148,7 @@ export class ModelConfigResolverService {
       brainProfileIds: snapshot?.brainProfileIds,
       brainGateway: brainRuntime.gateway,
       brainModel: brainRuntime.model,
+      brainProvider: brainRuntime.provider,
       brainKey: brainRuntime.apiKey,
       brainKeys: pool.keys.length > 0 ? pool.keys : undefined,
     };
@@ -170,6 +173,7 @@ export class ModelConfigResolverService {
       painterProfileIds: snapshot?.painterProfileIds,
       painterGateway: painterRuntime.gateway,
       painterModel: painterRuntime.model,
+      painterProvider: painterRuntime.provider,
       painterKey: painterRuntime.apiKey,
       painterKeys: pool.keys.length > 0 ? pool.keys : undefined,
     };

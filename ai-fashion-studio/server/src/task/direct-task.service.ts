@@ -24,6 +24,7 @@ import type {
 } from '../painter/painter.service';
 import { PainterService } from '../painter/painter.service';
 import { CosService } from '../cos/cos.service';
+import { PresetMetaService } from '../preset-meta/preset-meta.service';
 import { TaskCommonService } from './task-common.service';
 import { TaskBillingService } from './task-billing.service';
 import { MAX_DIRECT_SHOTS, MAX_TOTAL_IMAGES } from './task.constants';
@@ -69,6 +70,7 @@ export class DirectTaskService {
     private readonly cos: CosService,
     private readonly directPrompt: DirectPromptService,
     private readonly common: TaskCommonService,
+    private readonly presetMeta: PresetMetaService,
   ) {}
 
   private resolveErrorMessage(err: unknown, fallback: string) {
@@ -92,6 +94,39 @@ export class DirectTaskService {
       'If there is any conflict between style/pose and garment/face fidelity, ALWAYS prioritize garment/face fidelity.',
       'Output must be an IMAGE only. No extra text.',
     ].join('\n');
+  }
+
+  private async touchPresetUsage(args: {
+    user: UserModel;
+    stylePresetIds: string[];
+    posePresetIds: string[];
+    facePresetIds: string[];
+  }) {
+    const tasks: Array<Promise<void>> = [];
+    if (args.stylePresetIds.length) {
+      tasks.push(
+        this.presetMeta.touchLastUsed(
+          args.user,
+          'STYLE',
+          args.stylePresetIds,
+        ),
+      );
+    }
+    if (args.posePresetIds.length) {
+      tasks.push(
+        this.presetMeta.touchLastUsed(args.user, 'POSE', args.posePresetIds),
+      );
+    }
+    if (args.facePresetIds.length) {
+      tasks.push(
+        this.presetMeta.touchLastUsed(args.user, 'FACE', args.facePresetIds),
+      );
+    }
+    if (!tasks.length) return;
+    const results = await Promise.allSettled(tasks);
+    if (results.some((r) => r.status === 'rejected')) {
+      this.logger.warn('更新预设最近使用时间失败');
+    }
   }
 
   private buildDirectContactSheetAppendix(): string {
@@ -411,6 +446,11 @@ export class DirectTaskService {
     };
 
     await this.db.saveTask(task);
+    void this
+      .touchPresetUsage({ user, stylePresetIds, posePresetIds, facePresetIds })
+      .catch((err) => {
+        this.logger.warn('更新预设最近使用时间失败', err);
+      });
 
     // 异步执行（不阻塞接口返回）
     void this.startDirectRendering(taskId, { useSession: true }).catch(
@@ -660,6 +700,11 @@ export class DirectTaskService {
     };
 
     await this.db.saveTask(task);
+    void this
+      .touchPresetUsage({ user, stylePresetIds, posePresetIds, facePresetIds })
+      .catch((err) => {
+        this.logger.warn('更新预设最近使用时间失败', err);
+      });
 
     // 异步执行（不阻塞接口返回）
     void this.startDirectRendering(taskId, { useSession: true }).catch(

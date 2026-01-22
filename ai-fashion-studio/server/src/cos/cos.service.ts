@@ -199,6 +199,19 @@ export class CosService {
     return validDomains.some((domain) => url.includes(domain));
   }
 
+  private isImmutableCacheKey(key: string): boolean {
+    return /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(
+      key,
+    );
+  }
+
+  private buildCacheControl(key: string): string {
+    if (this.isImmutableCacheKey(key)) {
+      return 'public, max-age=31536000, immutable';
+    }
+    return 'public, max-age=300';
+  }
+
   /**
    * 上传文件到COS
    * @param key COS上的文件路径
@@ -214,6 +227,7 @@ export class CosService {
 
     const bucket = process.env.COS_BUCKET;
     const region = process.env.COS_REGION;
+    const cacheControl = this.buildCacheControl(key);
 
     return new Promise((resolve, reject) => {
       // 读取文件内容
@@ -225,13 +239,18 @@ export class CosService {
           Region: region,
           Key: key,
           Body: fileStream,
+          Headers: {
+            'Cache-Control': cacheControl,
+          },
         },
         (err, data) => {
           if (err) {
             this.logger.error(`上传文件失败: ${key}`, err);
             reject(err);
           } else {
-            this.logger.log(`文件上传成功: ${key}`);
+            this.logger.log(
+              `文件上传成功: ${key} (Cache-Control: ${cacheControl})`,
+            );
             resolve(data);
           }
         },

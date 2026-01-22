@@ -21,9 +21,9 @@ import * as path from 'path';
 import { diskStorage } from 'multer';
 
 import { BrainService } from '../brain/brain.service';
-import { ModelConfigResolverService } from '../model-profile/model-config-resolver.service';
 import { StylePresetMigrationService } from './style-preset-migration.service';
 import { CosService } from '../cos/cos.service';
+import { BrainRoutingService } from '../brain-routing/brain-routing.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
@@ -50,7 +50,7 @@ export class StylePresetController {
   constructor(
     private db: DbService,
     private brainService: BrainService,
-    private readonly modelConfigResolver: ModelConfigResolverService,
+    private readonly brainRouting: BrainRoutingService,
     private readonly migrationService: StylePresetMigrationService,
     private readonly cosService: CosService,
   ) {
@@ -443,11 +443,11 @@ export class StylePresetController {
       this.logger.log(`🧠 AI Learning Style from ${files.length} images...`);
 
       // 1. AI Analysis
-      const config =
-        await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+      const routing = await this.brainRouting.resolveForTask('STYLE_LEARN');
       const analysis = await this.brainService.analyzeStyleImage(
         filePaths,
-        config,
+        routing.primary,
+        routing.fallback,
         { traceId: presetId },
       );
       if (this.isEmptyAnalysis(analysis)) {
@@ -567,11 +567,11 @@ export class StylePresetController {
       `🧠 Relearning Style preset ${id} from ${filePaths.length} images...`,
     );
 
-    const config =
-      await this.modelConfigResolver.resolveBrainRuntimeFromSnapshot();
+    const routing = await this.brainRouting.resolveForTask('STYLE_LEARN');
     const analysis = await this.brainService.analyzeStyleImage(
       filePaths,
-      config,
+      routing.primary,
+      routing.fallback,
       { traceId: `${id}:relearn:${Date.now()}` },
     );
     if (this.isEmptyAnalysis(analysis)) {

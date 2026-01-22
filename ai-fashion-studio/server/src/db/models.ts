@@ -293,6 +293,10 @@ export interface FacePreset {
   thumbnailPath?: string; // 缩略图路径（可选优化）
 
   // Metadata
+  tags?: string[]; // 自定义标签
+  collectionIds?: string[]; // 收藏夹 ID 列表
+  favoriteAt?: number; // 收藏时间戳
+  lastUsedAt?: number; // 最近使用时间戳（仅在生成时更新）
   gender?: 'female' | 'male' | 'other';
   height?: number; // cm
   weight?: number; // kg
@@ -349,6 +353,9 @@ export interface StylePreset {
   imagePaths: string[]; // 图片路径数组（1-3张）
   thumbnailPath?: string; // 封面缩略图（取第一张）
   tags?: string[]; // 标签（例如：["复古", "暖色调"]）
+  collectionIds?: string[]; // 收藏夹 ID 列表
+  favoriteAt?: number; // 收藏时间戳
+  lastUsedAt?: number; // 最近使用时间戳（仅在生成时更新）
   styleHint?: string; // 风格提示（例如："Retro 1980s fashion editorial with Kodak Portra 400 aesthetic"）
   promptBlock?: string; // 可复用提示词块（风格/姿势统一使用）
 

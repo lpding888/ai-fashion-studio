@@ -1,3 +1,5 @@
+export type ModelProvider = 'GEMINI' | 'OPENAI_COMPAT';
+
 export interface ModelConfig {
   // Snapshot-only identifiers (no secrets)
   brainProfileId?: string;
@@ -14,9 +16,11 @@ export interface ModelConfig {
   brainKey?: string;
   brainKeys?: string[]; // 运行时注入（不落库）：用于同一网关多 Key
   brainModel?: string;
+  brainProvider?: ModelProvider;
 
   painterGateway?: string;
   painterKey?: string;
   painterKeys?: string[]; // 运行时注入（不落库）：用于同一网关多 Key
   painterModel?: string;
+  painterProvider?: ModelProvider;
 }

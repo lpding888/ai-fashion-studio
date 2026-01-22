@@ -71,6 +71,14 @@ export class TaskCommonService {
     try {
       const u = new URL(input);
       const host = (u.hostname || '').toLowerCase();
+      const cdnDomain = String(process.env.COS_CDN_DOMAIN || '')
+        .trim()
+        .replace(/^https?:\/\//, '')
+        .replace(/\/+$/, '')
+        .toLowerCase();
+      if (cdnDomain && host === cdnDomain) {
+        return u.protocol === 'https:';
+      }
       // 最小约束：只接受腾讯云 COS 域名（与前端直传 COS 的 URL 形态一致）
       return (
         u.protocol === 'https:' &&
