@@ -5,6 +5,7 @@ export type PresetKind = 'STYLE' | 'POSE' | 'FACE';
 export type BatchMetaAction =
   | 'favorite'
   | 'unfavorite'
+  | 'delete'
   | 'add-tags'
   | 'remove-tags'
   | 'set-tags'
