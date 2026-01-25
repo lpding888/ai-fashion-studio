@@ -1,74 +1,84 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
-import { UploadCloud, Loader2, UserRound } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
 import api from "@/lib/api";
 import {
   createDirectTaskFromUrls,
   createPromptSnippet,
   deletePromptSnippet,
-  directMessageTask,
   directRegenerateTask,
   learnPose,
   learnStyle,
   listPromptSnippets,
+  toggleTaskFavorite,
 } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { calculateRequiredCredits, requestCreditsRefresh, useCredits } from "@/hooks/use-credits";
 import { uploadFileToCosWithMeta, type CosUploadResult } from "@/lib/cos";
-import { registerUserAssets } from "@/lib/user-assets";
+import { registerUserAssets, listUserAssets, type UserAsset } from "@/lib/user-assets";
 import { batchUpdatePresetMeta, type BatchMetaAction, type PresetKind } from "@/lib/preset-meta";
 import { createPresetCollection, deletePresetCollection, listPresetCollections, renamePresetCollection, type PresetCollection } from "@/lib/preset-collections";
 import { optimizePrompt } from "@/lib/prompt-optimizer";
 
 import { useStylePresetStore, type StylePreset } from "@/store/style-preset-store";
 import { usePosePresetStore } from "@/store/pose-preset-store";
-import { FacePresetSelector } from "@/components/face-preset-selector";
-import { useFacePresetStore } from "@/store/face-preset-store";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useFacePresetStore } from "@/store/face-preset-store";
 import { Button } from "@/components/ui/button";
 import { ImageLightbox, type LightboxItem } from "@/components/image-lightbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 
-import { QueueSidebar } from "@/components/learn/queue-sidebar";
-import { AssetLibrary } from "@/components/learn/asset-library";
-import { AdvancedSettings } from "@/components/learn/advanced-settings";
-import { toImgSrc } from "@/components/learn/learn-utils";
-import { GlassPanel } from "@/components/learn/glass-panel";
 import { FluidBackground } from "@/components/learn/layout/fluid-background";
-import { CreationStage } from "@/components/learn/creation-stage";
-import { UserAssetLibraryDialog } from "@/components/user-asset-library-dialog";
-import type { PromptSnippet, QueueItem, TaskApi } from "@/components/learn/types";
+
+// New Layout Components
+import { StudioLayout } from "@/components/learn/layout/studio-layout";
+import { ResourcePanel } from "@/components/learn/layout/resource-panel";
+import { StudioCanvas } from "@/components/learn/layout/studio-canvas";
+import { ControlHub } from "@/components/learn/layout/control-hub";
+import { ParameterSection } from "@/components/learn/controls/parameter-section";
+import { QueueSection } from "@/components/learn/controls/queue-section";
+import { WorkspaceSnapshotManager } from "@/components/learn/workspace-snapshot-manager";
+
+import { useStudioSound } from "@/hooks/use-studio-sound";
+import { useStudioShortcuts } from "@/hooks/use-studio-shortcuts";
+
+import type { GarmentItem, PromptSnippet, QueueItem, Task, TaskApi } from "@/components/learn/types";
+import { toImgSrc } from "@/components/learn/learn-utils";
 import { cn } from "@/lib/utils";
 
 const MAX_GARMENT_IMAGES = 6;
-const MAX_STYLE_LEARN_IMAGES = 5;
 const MAX_POSE_SELECT = 4;
 const MAX_FACE_SELECT = 3;
 const POLL_INTERVAL_MS = 1500;
+const DIRECT_QUEUE_PAGE_SIZE = 30;
+const DIRECT_QUEUE_MAX_LIMIT = 200;
 const GRID_PROMPT_LINE = "If multiple poses are selected, output ONE contact sheet with one panel per pose (max 4 panels). Same model + same garment across panels.";
 const SINGLE_PROMPT_LINE = "只能有一个人、一个姿势。不要拼图/拼接/多宫格/多分屏。";
 
 const STORAGE_QUEUE_KEY = "afs:learn:queue:v1";
+const STORAGE_QUEUE_FAVORITES_KEY = "afs:learn:queue:favorites:v1";
+const STORAGE_PREFS_KEY = "afs:learn:prefs:v1";
 type BackgroundVariant = "default" | "warm" | "cool" | "cyber" | "mint" | "sunset";
-
-function useObjectUrls(files: File[]) {
-  const [urls, setUrls] = React.useState<string[]>([]);
-
-  React.useEffect(() => {
-    const next = files.map((f) => URL.createObjectURL(f));
-    setUrls(next);
-    return () => {
-      for (const u of next) URL.revokeObjectURL(u);
-    };
-  }, [files]);
-
-  return urls;
-}
+type AspectRatio = "1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
+type Resolution = "1K" | "2K" | "4K";
+type WorkspaceSnapshotPayload = {
+  selectedStyleIds?: string[];
+  selectedPoseIds?: string[];
+  selectedFaceIds?: string[];
+  userPrompt?: string;
+  garmentItems?: GarmentItem[];
+  garmentAssetUrls?: string[];
+  shotCount?: number;
+  layoutMode?: "Individual" | "Grid";
+  resolution?: Resolution;
+  aspectRatio?: AspectRatio;
+  seedRaw?: string;
+  seedAuto?: boolean;
+  includeThoughts?: boolean;
+  temperatureRaw?: string;
+};
 
 function buildAutoStylePrompt(stylePresets: StylePreset[], styleId?: string | null, layoutMode: "Individual" | "Grid" = "Individual") {
   if (!styleId) return "";
@@ -91,6 +101,7 @@ const AUTO_STYLE_PROMPT_LINES = [
   "Face must match selected face reference (if provided).",
   "Photorealistic, high detail, clean commercial composition.",
   GRID_PROMPT_LINE,
+  SINGLE_PROMPT_LINE,
 ];
 const AUTO_STYLE_PROMPT_PREFIX = "Apply the learned style:";
 const AUTO_STYLE_PROMPT_JSON_LINE = "Apply the learned style JSON strictly.";
@@ -105,6 +116,15 @@ function appendModeHint(text: string, layoutMode: "Individual" | "Grid") {
 
 function normalizePromptLine(value: string) {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isAspectRatio(value: string): value is AspectRatio {
+  return value === "1:1"
+    || value === "4:3"
+    || value === "3:4"
+    || value === "16:9"
+    || value === "9:16"
+    || value === "21:9";
 }
 
 function stripAutoStylePrompt(raw: string) {
@@ -138,6 +158,15 @@ function isCosImageUrl(value: string) {
   return trimmed.includes(".cos.") && trimmed.includes(".myqcloud.com/");
 }
 
+function isDirectTask(task: TaskApi) {
+  const shots = Array.isArray(task?.shots) ? task.shots : [];
+  return (
+    !!task?.directPrompt ||
+    task?.scene === "Direct" ||
+    shots.some((shot) => String(shot?.type || "").toLowerCase() === "directprompt")
+  );
+}
+
 function hashString(input: string) {
   let hash = 0;
   for (let i = 0; i < input.length; i += 1) {
@@ -152,7 +181,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export function LearnGeneratePage() {
-  const router = useRouter();
+  const { play } = useStudioSound();
   const { isAuthenticated } = useAuth();
   const { balance, isLoaded: creditsLoaded } = useCredits();
 
@@ -172,15 +201,75 @@ export function LearnGeneratePage() {
   const [selectedStyleIds, setSelectedStyleIds] = React.useState<string[]>([]);
   const [selectedPoseIds, setSelectedPoseIds] = React.useState<string[]>([]);
   const [selectedFaceIds, setSelectedFaceIds] = React.useState<string[]>([]);
-  const [faceDialogOpen, setFaceDialogOpen] = React.useState(false);
 
-  const [styleLearning, setStyleLearning] = React.useState(false);
-  const [poseLearning, setPoseLearning] = React.useState(false);
 
-  const [garmentFiles, setGarmentFiles] = React.useState<File[]>([]);
-  const garmentUrls = useObjectUrls(garmentFiles);
-  const [garmentAssetUrls, setGarmentAssetUrls] = React.useState<string[]>([]);
-  const [assetDialogOpen, setAssetDialogOpen] = React.useState(false);
+  // Garment State (Unified for Drag & Drop)
+  const [garmentItems, setGarmentItems] = React.useState<GarmentItem[]>([]);
+  // Use a derived ref to keep track of current items for imperative code if needed, 
+  // but state is usually enough.
+
+  const addGarmentFiles = (incoming: File[]) => {
+    const images = incoming.filter((f) => f.type.startsWith("image/"));
+    if (!images.length) return;
+    setGarmentItems((prev) => {
+      const remaining = Math.max(0, MAX_GARMENT_IMAGES - prev.length);
+      if (remaining <= 0) return prev;
+      const newItems: GarmentItem[] = images.slice(0, remaining).map(f => ({
+        id: crypto.randomUUID(),
+        type: "file",
+        file: f
+      }));
+      return [...prev, ...newItems];
+    });
+  };
+
+  const removeGarmentItem = (id: string) => {
+    setGarmentItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const clearGarmentImages = () => {
+    setGarmentItems([]);
+  };
+
+  const reorderGarmentItems = (newItems: GarmentItem[]) => {
+    setGarmentItems(newItems);
+  };
+
+  // User Assets (Bind to API)
+  const [userAssets, setUserAssets] = React.useState<UserAsset[]>([]);
+  const [userAssetsLoading, setUserAssetsLoading] = React.useState(false);
+  const [userAssetsPage, setUserAssetsPage] = React.useState(1);
+  const [userAssetsHasMore, setUserAssetsHasMore] = React.useState(true);
+
+  const loadUserAssets = React.useCallback(async (page: number) => {
+    if (!isAuthenticated) return;
+    setUserAssetsLoading(true);
+    try {
+      const res = await listUserAssets(page, 20); // Limit 20 per page
+      const newItems = res.items || [];
+      setUserAssets((prev) => page === 1 ? newItems : [...prev, ...newItems]);
+      setUserAssetsHasMore(page < res.totalPages);
+      setUserAssetsPage(page);
+    } catch (err) {
+      console.error("Load user assets failed:", err);
+    } finally {
+      setUserAssetsLoading(false);
+    }
+  }, [isAuthenticated]);
+
+  const handleLoadMoreUserAssets = React.useCallback(() => {
+    if (!userAssetsLoading && userAssetsHasMore) {
+      loadUserAssets(userAssetsPage + 1);
+    }
+  }, [userAssetsLoading, userAssetsHasMore, userAssetsPage, loadUserAssets]);
+
+  // Initial load of user assets
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      loadUserAssets(1);
+    }
+  }, [isAuthenticated, loadUserAssets]);
+
   // Dual prompt system: auto-filled style prompt + user custom prompt
   const [autoStylePrompt, setAutoStylePrompt] = React.useState<string>(""); // Auto-filled from style selection
   const [userPrompt, setUserPrompt] = React.useState<string>(""); // User's custom additions
@@ -192,13 +281,12 @@ export function LearnGeneratePage() {
   const [snippetRemark, setSnippetRemark] = React.useState<string>("");
   const [promptOptimizeOpen, setPromptOptimizeOpen] = React.useState(false);
   const [promptOptimizeBusy, setPromptOptimizeBusy] = React.useState(false);
-  const [promptOptimizeOriginal, setPromptOptimizeOriginal] = React.useState("");
   const [promptOptimizeResult, setPromptOptimizeResult] = React.useState("");
   const [promptUndoSnapshot, setPromptUndoSnapshot] = React.useState<string | null>(null);
   const [collections, setCollections] = React.useState<PresetCollection[]>([]);
 
   const [resolution, setResolution] = React.useState<"1K" | "2K" | "4K">("2K");
-  const [aspectRatio, setAspectRatio] = React.useState<"1:1" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9">("3:4");
+  const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("3:4");
   const [layoutMode, setLayoutMode] = React.useState<"Individual" | "Grid">("Individual");
   const [shotCount, setShotCount] = React.useState<number>(1);
   const [includeThoughts, setIncludeThoughts] = React.useState(false);
@@ -211,6 +299,12 @@ export function LearnGeneratePage() {
   const [queue, setQueue] = React.useState<QueueItem[]>([]);
   const [tasksById, setTasksById] = React.useState<Record<string, TaskApi>>({});
   const [queueRetryingTaskId, setQueueRetryingTaskId] = React.useState<string | null>(null);
+  const [queueTotal, setQueueTotal] = React.useState(0);
+  const [queueViewAll, setQueueViewAll] = React.useState(false);
+  const [favoriteTaskIds, setFavoriteTaskIds] = React.useState<string[]>([]);
+  const [favoriteTasks, setFavoriteTasks] = React.useState<TaskApi[]>([]);
+  const [queueTab, setQueueTab] = React.useState<"queue" | "favorites">("queue");
+  const [parameterCollapsed, setParameterCollapsed] = React.useState(true);
   const [showLeftPanel, setShowLeftPanel] = React.useState(false);
   const [showRightPanel, setShowRightPanel] = React.useState(false);
   const [workbenchNotice, setWorkbenchNotice] = React.useState<string>("");
@@ -219,13 +313,13 @@ export function LearnGeneratePage() {
   const [lightboxImages, setLightboxImages] = React.useState<LightboxItem[]>([]);
   const [lightboxInitialIndex, setLightboxInitialIndex] = React.useState(0);
   const [lightboxTaskId, setLightboxTaskId] = React.useState<string | undefined>(undefined);
-  const [lightboxRegenerating, setLightboxRegenerating] = React.useState(false);
-  const [chatMessage, setChatMessage] = React.useState<string>("");
+  const [taskDetailOpen, setTaskDetailOpen] = React.useState(false);
+  const [taskDetailLoading, setTaskDetailLoading] = React.useState(false);
+  const [taskDetailError, setTaskDetailError] = React.useState<string | null>(null);
+  const [taskDetail, setTaskDetail] = React.useState<TaskApi | null>(null);
 
   // New Interactive States for Redesign
-  const [isFocused, setIsFocused] = React.useState(false);
   const [backgroundVariant, setBackgroundVariant] = React.useState<BackgroundVariant>("default");
-  const isOverlayOpen = showLeftPanel || showRightPanel;
 
   // 口径对齐后端：1K=1，2K=2，4K=4
   const estimatedCreditsCost = calculateRequiredCredits({
@@ -233,24 +327,26 @@ export function LearnGeneratePage() {
     layoutMode,
     resolution,
   });
-  const canClearWorkbench = !!(
-    garmentFiles.length ||
-    garmentAssetUrls.length ||
-    selectedStyleIds.length ||
-    selectedPoseIds.length ||
-    selectedFaceIds.length ||
-    userPrompt.trim() ||
-    selectedSnippetId ||
-    snippetRemark.trim()
-  );
-  const canOptimizePrompt = userPrompt.trim().length > 0;
-  const activeStyleName =
-    selectedStyleIds.length > 0
-      ? String((stylePresetsAll || []).find((p) => p.id === selectedStyleIds[0])?.name || "").trim()
-      : "";
 
-  const styleInputRef = React.useRef<HTMLInputElement>(null);
-  const poseInputRef = React.useRef<HTMLInputElement>(null);
+  const activeStyle = (stylePresetsAll || []).find((p) => p.id === selectedStyleIds[0]);
+  const activeStyleName = activeStyle?.name ? String(activeStyle.name).trim() : "";
+  const activeStylePrompt = activeStyle?.promptBlock || "";
+  const hasWorkbenchState =
+    garmentItems.length > 0 ||
+    userPrompt.trim().length > 0 ||
+    selectedSnippetId !== null ||
+    snippetRemark.trim().length > 0 ||
+    selectedStyleIds.length > 0 ||
+    selectedPoseIds.length > 0 ||
+    selectedFaceIds.length > 0 ||
+    shotCount !== 1 ||
+    layoutMode !== "Individual" ||
+    resolution !== "2K" ||
+    aspectRatio !== "3:4" ||
+    includeThoughts ||
+    !seedAuto ||
+    seedRaw.trim().length > 0 ||
+    temperatureRaw.trim().length > 0;
 
   const facePresetsAll = useFacePresetStore((s) => s.presets);
   const fetchFacePresets = useFacePresetStore((s) => s.fetchPresets);
@@ -289,6 +385,111 @@ export function LearnGeneratePage() {
     }
   }, [isAuthenticated]);
 
+  const fetchDirectQueuePage = React.useCallback(async (page: number, limit: number) => {
+    const res = await api.get("/tasks", {
+      params: {
+        page,
+        limit,
+        scope: "mine",
+        directOnly: true,
+      },
+    });
+    const tasks = Array.isArray(res.data?.tasks) ? (res.data.tasks as TaskApi[]) : [];
+    return {
+      tasks,
+      total: Number(res.data?.total || 0),
+      totalPages: Number(res.data?.totalPages || 1),
+    };
+  }, []);
+
+  const fetchFavoriteTasksPage = React.useCallback(async (page: number, limit: number) => {
+    const res = await api.get("/tasks", {
+      params: {
+        page,
+        limit,
+        scope: "mine",
+        directOnly: true,
+        favoriteOnly: true,
+      },
+    });
+    const tasks = Array.isArray(res.data?.tasks) ? (res.data.tasks as TaskApi[]) : [];
+    return {
+      tasks,
+      total: Number(res.data?.total || 0),
+      totalPages: Number(res.data?.totalPages || 1),
+    };
+  }, []);
+
+  const syncDirectQueue = React.useCallback(async (options?: { all?: boolean }) => {
+    if (!isAuthenticated) return;
+    try {
+      const wantAll = !!options?.all;
+      const pageLimit = wantAll ? DIRECT_QUEUE_MAX_LIMIT : DIRECT_QUEUE_PAGE_SIZE;
+      const first = await fetchDirectQueuePage(1, pageLimit);
+      let allTasks = first.tasks;
+
+      if (wantAll && first.totalPages > 1) {
+        for (let page = 2; page <= first.totalPages; page += 1) {
+          const next = await fetchDirectQueuePage(page, pageLimit);
+          allTasks = [...allTasks, ...next.tasks];
+        }
+      }
+
+      const directTasks = allTasks.filter(isDirectTask);
+      const maxItems = wantAll ? DIRECT_QUEUE_MAX_LIMIT : DIRECT_QUEUE_PAGE_SIZE;
+      const queueTasks = directTasks.slice(0, maxItems);
+      setQueueTotal(first.total || directTasks.length);
+      setQueue(queueTasks.map((task) => ({ taskId: task.id, createdAt: task.createdAt })));
+      setTasksById((prev) => {
+        const next = { ...prev };
+        queueTasks.forEach((task) => {
+          next[task.id] = task;
+        });
+        return next;
+      });
+      setFavoriteTaskIds((prev) => {
+        const next = new Set(prev);
+        queueTasks.forEach((task) => {
+          if (task.favoriteAt) next.add(task.id);
+          else next.delete(task.id);
+        });
+        return Array.from(next);
+      });
+    } catch (err) {
+      console.error("Sync direct queue failed:", err);
+    }
+  }, [isAuthenticated, fetchDirectQueuePage]);
+
+  const syncFavoriteTasks = React.useCallback(async () => {
+    if (!isAuthenticated) return;
+    try {
+      const pageLimit = DIRECT_QUEUE_MAX_LIMIT;
+      const first = await fetchFavoriteTasksPage(1, pageLimit);
+      let allTasks = first.tasks;
+
+      if (first.totalPages > 1) {
+        for (let page = 2; page <= first.totalPages; page += 1) {
+          const next = await fetchFavoriteTasksPage(page, pageLimit);
+          allTasks = [...allTasks, ...next.tasks];
+          if (allTasks.length >= DIRECT_QUEUE_MAX_LIMIT) break;
+        }
+      }
+
+      const directTasks = allTasks.filter(isDirectTask).slice(0, DIRECT_QUEUE_MAX_LIMIT);
+      setFavoriteTasks(directTasks);
+      setTasksById((prev) => {
+        const next = { ...prev };
+        directTasks.forEach((task) => {
+          next[task.id] = task;
+        });
+        return next;
+      });
+      setFavoriteTaskIds(directTasks.map((task) => task.id));
+    } catch (err) {
+      console.error("Sync favorite tasks failed:", err);
+    }
+  }, [isAuthenticated, fetchFavoriteTasksPage]);
+
   const refreshPresetKind = React.useCallback(async (kind: PresetKind) => {
     if (kind === "STYLE") {
       await fetchStylePresets();
@@ -308,6 +509,19 @@ export function LearnGeneratePage() {
     tags?: string[];
     collectionIds?: string[];
   }) => {
+    if (input.action === "delete") {
+      const deleteFn =
+        input.kind === "STYLE"
+          ? deleteStylePreset
+          : input.kind === "POSE"
+            ? deletePosePreset
+            : deleteFacePreset;
+
+      // Parallel delete
+      await Promise.all(input.ids.map(id => deleteFn(id).catch(err => console.error(`Batch delete failed for ${id}:`, err))));
+      return;
+    }
+
     await batchUpdatePresetMeta({
       kind: input.kind,
       ids: input.ids,
@@ -317,7 +531,7 @@ export function LearnGeneratePage() {
         collectionIds: input.collectionIds,
       },
     });
-  }, []);
+  }, [deleteStylePreset, deletePosePreset, deleteFacePreset]);
 
   const handleCreateCollection = React.useCallback(async (name: string) => {
     await createPresetCollection(name);
@@ -402,7 +616,6 @@ export function LearnGeneratePage() {
         throw new Error("优化结果为空");
       }
 
-      setPromptOptimizeOriginal(basePrompt);
       setPromptOptimizeResult(optimized);
       setPromptOptimizeOpen(true);
     } catch (e: unknown) {
@@ -468,20 +681,99 @@ export function LearnGeneratePage() {
   }, [isAuthenticated, loadPromptSnippets, loadCollections]);
 
   React.useEffect(() => {
+    if (!isAuthenticated) return;
+    void syncDirectQueue({ all: queueViewAll });
+  }, [isAuthenticated, queueViewAll, syncDirectQueue]);
+
+  React.useEffect(() => {
+    if (!isAuthenticated) return;
+    if (queueTab !== "favorites") return;
+    void syncFavoriteTasks();
+  }, [isAuthenticated, queueTab, syncFavoriteTasks]);
+
+  React.useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       const raw = localStorage.getItem(STORAGE_QUEUE_KEY);
       const parsed = raw ? (JSON.parse(raw) as QueueItem[]) : [];
-      setQueue(Array.isArray(parsed) ? parsed.slice(0, 30) : []);
+      setQueue(Array.isArray(parsed) ? parsed.slice(0, DIRECT_QUEUE_MAX_LIMIT) : []);
     } catch {
       setQueue([]);
+    }
+    try {
+      const rawFavorites = localStorage.getItem(STORAGE_QUEUE_FAVORITES_KEY);
+      const parsedFavorites = rawFavorites ? (JSON.parse(rawFavorites) as string[]) : [];
+      setFavoriteTaskIds(Array.isArray(parsedFavorites) ? parsedFavorites : []);
+    } catch {
+      setFavoriteTaskIds([]);
     }
   }, []);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    localStorage.setItem(STORAGE_QUEUE_KEY, JSON.stringify(queue.slice(0, 30)));
+    localStorage.setItem(STORAGE_QUEUE_KEY, JSON.stringify(queue.slice(0, DIRECT_QUEUE_MAX_LIMIT)));
   }, [queue]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(STORAGE_QUEUE_FAVORITES_KEY, JSON.stringify(favoriteTaskIds.slice(0, DIRECT_QUEUE_MAX_LIMIT)));
+  }, [favoriteTaskIds]);
+
+  // 偏好设置：恢复上次选择与参数（不包含用户补充提示词与本地文件）
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(STORAGE_PREFS_KEY);
+      if (!raw) return;
+      const prefs = JSON.parse(raw);
+      if (prefs.resolution) setResolution(prefs.resolution);
+      if (prefs.aspectRatio) setAspectRatio(prefs.aspectRatio);
+      if (prefs.layoutMode) setLayoutMode(prefs.layoutMode);
+      if (Number.isFinite(prefs.shotCount)) setShotCount(Math.max(1, Math.floor(prefs.shotCount)));
+      if (typeof prefs.temperature === "string") setTemperatureRaw(prefs.temperature);
+      if (typeof prefs.includeThoughts === "boolean") setIncludeThoughts(prefs.includeThoughts);
+      if (typeof prefs.seedRaw === "string") setSeedRaw(prefs.seedRaw);
+      if (typeof prefs.seedAuto === "boolean") setSeedAuto(prefs.seedAuto);
+      if (Array.isArray(prefs.selectedStyleIds)) setSelectedStyleIds(prefs.selectedStyleIds);
+      if (Array.isArray(prefs.selectedPoseIds)) setSelectedPoseIds(prefs.selectedPoseIds);
+      if (Array.isArray(prefs.selectedFaceIds)) setSelectedFaceIds(prefs.selectedFaceIds);
+      if (typeof prefs.parameterCollapsed === "boolean") setParameterCollapsed(prefs.parameterCollapsed);
+    } catch (e) {
+      console.error("Failed to load prefs", e);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const prefs = {
+      resolution,
+      aspectRatio,
+      layoutMode,
+      shotCount,
+      temperature: temperatureRaw,
+      includeThoughts,
+      seedRaw,
+      seedAuto,
+      selectedStyleIds,
+      selectedPoseIds,
+      selectedFaceIds,
+      parameterCollapsed,
+    };
+    localStorage.setItem(STORAGE_PREFS_KEY, JSON.stringify(prefs));
+  }, [
+    resolution,
+    aspectRatio,
+    layoutMode,
+    shotCount,
+    temperatureRaw,
+    includeThoughts,
+    seedRaw,
+    seedAuto,
+    selectedStyleIds,
+    selectedPoseIds,
+    selectedFaceIds,
+    parameterCollapsed,
+  ]);
 
   React.useEffect(() => {
     if (selectedStyleIds.length === 0) {
@@ -501,7 +793,7 @@ export function LearnGeneratePage() {
   React.useEffect(() => {
     if (selectedStyleIds.length > 0) {
       const id = selectedStyleIds[0];
-      const variants: BackgroundVariant[] = ["default", "warm", "cool", "cyber", "mint", "sunset"];
+      const variants: BackgroundVariant[] = ["warm", "cool", "cyber", "mint", "sunset"];
       const index = hashString(id) % variants.length;
       setBackgroundVariant(variants[index]);
       return;
@@ -524,13 +816,15 @@ export function LearnGeneratePage() {
         // 任务进入终态后刷新余额：失败退款/成功扣费都能及时反映在 UI 上
         if (prevStatus !== task.status && (task.status === "COMPLETED" || task.status === "FAILED")) {
           requestCreditsRefresh();
+          if (task.status === "COMPLETED") play('success');
+          else play('error');
         }
         return next;
       });
     } catch {
       // ignore (auth / transient)
     }
-  }, []);
+  }, [play]);
 
   const flashNotice = React.useCallback((msg: string) => {
     const text = String(msg || "").trim();
@@ -541,8 +835,7 @@ export function LearnGeneratePage() {
   }, []);
 
   const clearWorkbench = React.useCallback(() => {
-    setGarmentFiles([]);
-    setGarmentAssetUrls([]);
+    setGarmentItems([]);
     setSelectedStyleIds([]);
     setSelectedPoseIds([]);
     setSelectedFaceIds([]);
@@ -551,8 +844,23 @@ export function LearnGeneratePage() {
     setSnippetRemark("");
     setPromptUndoSnapshot(null);
     setPromptOptimizeOpen(false);
+    setPromptOptimizeBusy(false);
+    setPromptOptimizeResult("");
+    setAutoStylePrompt("");
+    setResolution("2K");
+    setAspectRatio("3:4");
+    setLayoutMode("Individual");
+    setShotCount(1);
+    setIncludeThoughts(false);
+    setSeedRaw("");
+    setSeedAuto(true);
+    setTemperatureRaw("");
     flashNotice("已清空工作台");
   }, [flashNotice]);
+
+  const onClearStyle = React.useCallback(() => setSelectedStyleIds([]), []);
+  const onClearPoses = React.useCallback(() => setSelectedPoseIds([]), []);
+  const onClearFace = React.useCallback(() => setSelectedFaceIds([]), []);
 
   const applyTaskToWorkbench = React.useCallback(
     (task: TaskApi) => {
@@ -613,23 +921,23 @@ export function LearnGeneratePage() {
       setUserPrompt(resolvedUserPrompt);
       setSelectedSnippetId(null);
 
-      setGarmentFiles([]);
-      setGarmentAssetUrls(cosGarments);
+      setGarmentItems(cosGarments.map(url => ({ id: url, type: 'url', url })));
 
       const garmentNotice = cosGarments.length
-        ? `衣服图已回填（COS×${cosGarments.length}）`
+        ? `衣服图已回填（已接入 ${cosGarments.length} 张云端素材）`
         : garmentPaths.length
           ? "衣服图非 COS，需手动重传"
           : "任务未记录衣服图，请手动重传";
 
       const missingNotice = missingStyle.length || missingPose.length || missingFace.length
-        ? `；但有预设已不存在：` +
-        `${missingStyle.length ? `风格×${missingStyle.length} ` : ""}` +
-        `${missingPose.length ? `姿势×${missingPose.length} ` : ""}` +
-        `${missingFace.length ? `人脸×${missingFace.length}` : ""}`
+        ? `；但部分预设（${[
+          missingStyle.length && "风格",
+          missingPose.length && "姿势",
+          missingFace.length && "人脸"
+        ].filter(Boolean).join("/")}）已从库中删除，无法回填。`
         : "";
 
-      flashNotice(`已回填设置；${garmentNotice}${missingNotice}`);
+      flashNotice(`设置已推送到工作区；${garmentNotice}${missingNotice}`);
     },
     [facePresetsAll, posePresetsAll, stylePresetsAll, flashNotice],
   );
@@ -652,6 +960,30 @@ export function LearnGeneratePage() {
     },
     [tasksById, applyTaskToWorkbench, flashNotice],
   );
+
+  const loadTaskDetail = React.useCallback(async (taskId: string) => {
+    const cached = tasksById[taskId];
+    if (cached) return cached;
+    const res = await api.get(`/tasks/${taskId}`);
+    const task = res.data as TaskApi;
+    setTasksById((prev) => ({ ...prev, [taskId]: task }));
+    return task;
+  }, [tasksById]);
+
+  const handleViewDetail = React.useCallback(async (task: Task) => {
+    setTaskDetailOpen(true);
+    setTaskDetailLoading(true);
+    setTaskDetailError(null);
+    try {
+      const detail = await loadTaskDetail(task.id);
+      setTaskDetail(detail);
+    } catch (e: unknown) {
+      setTaskDetail(null);
+      setTaskDetailError(getErrorMessage(e, "任务详情加载失败"));
+    } finally {
+      setTaskDetailLoading(false);
+    }
+  }, [loadTaskDetail]);
 
   const retryQueueTask = React.useCallback(
     async (taskId: string) => {
@@ -676,14 +1008,53 @@ export function LearnGeneratePage() {
     [queueRetryingTaskId, pollOne, flashNotice],
   );
 
+  const toggleQueueFavorite = React.useCallback(async (taskId: string) => {
+    if (!taskId) return;
+    const current = tasksById[taskId];
+    const nextFavorite = current ? !current.favoriteAt : !favoriteTaskIds.includes(taskId);
+    try {
+      const updated = await toggleTaskFavorite(taskId, nextFavorite);
+      const updatedTask = updated as TaskApi;
+      setTasksById((prev) => ({ ...prev, [taskId]: updatedTask }));
+      setFavoriteTaskIds((prev) => {
+        const next = new Set(prev);
+        if (updatedTask?.favoriteAt) next.add(taskId);
+        else next.delete(taskId);
+        return Array.from(next);
+      });
+      setFavoriteTasks((prev) => {
+        if (!updatedTask) return prev;
+        if (updatedTask.favoriteAt) {
+          const exists = prev.some((task) => task.id === taskId);
+          if (exists) {
+            return prev.map((task) => (task.id === taskId ? updatedTask : task));
+          }
+          return [updatedTask, ...prev];
+        }
+        return prev.filter((task) => task.id !== taskId);
+      });
+      flashNotice(nextFavorite ? "已收藏" : "已取消收藏");
+    } catch (e: unknown) {
+      console.error(e);
+      flashNotice(getErrorMessage(e, "收藏操作失败"));
+    }
+  }, [tasksById, favoriteTaskIds, flashNotice]);
+
   React.useEffect(() => {
     if (!isAuthenticated) return;
     if (!queue.length) return;
 
+    const activeQueue = queue.filter((q) => {
+      const task = tasksById[q.taskId];
+      if (!task) return true;
+      return task.status !== "COMPLETED" && task.status !== "FAILED";
+    });
+    if (!activeQueue.length) return;
+
     let alive = true;
     const tick = async () => {
       if (!alive) return;
-      await Promise.all(queue.map((q) => pollOne(q.taskId)));
+      await Promise.all(activeQueue.map((q) => pollOne(q.taskId)));
     };
 
     void tick();
@@ -692,14 +1063,48 @@ export function LearnGeneratePage() {
       alive = false;
       clearInterval(t);
     };
-  }, [isAuthenticated, queue, pollOne]);
+  }, [isAuthenticated, queue, tasksById, pollOne]);
 
   const addToQueue = (taskId: string, createdAt: number) => {
     setQueue((prev) => {
+      const exists = prev.some((item) => item.taskId === taskId);
       const next = [{ taskId, createdAt }, ...prev.filter((x) => x.taskId !== taskId)];
-      return next.slice(0, 30);
+      const limit = queueViewAll ? DIRECT_QUEUE_MAX_LIMIT : DIRECT_QUEUE_PAGE_SIZE;
+      if (!exists) {
+        setQueueTotal((total) => total + 1);
+      }
+      return next.slice(0, limit);
     });
   };
+
+  const buildTaskCard = React.useCallback(
+    (task: TaskApi | undefined, fallback: { id: string; createdAt: number }) => {
+      const resultUrl = task?.resultImages?.[0];
+      return {
+        id: task?.id ?? fallback.id,
+        status: task?.status || "PENDING",
+        createdAt: task?.createdAt || fallback.createdAt,
+        progress: task?.progress,
+        resultUrl: resultUrl ? toImgSrc(resultUrl) : undefined,
+        prompt: task?.directPrompt || task?.requirements || "正在生成任务...",
+      };
+    },
+    [],
+  );
+
+  const queueTaskCards = React.useMemo(
+    () => queue.map((item) => buildTaskCard(tasksById[item.taskId], { id: item.taskId, createdAt: item.createdAt })),
+    [queue, tasksById, buildTaskCard],
+  );
+
+  const favoriteTaskCards = React.useMemo(() => {
+    const source = favoriteTasks.length
+      ? favoriteTasks
+      : favoriteTaskIds
+          .map((id) => tasksById[id])
+          .filter(Boolean) as TaskApi[];
+    return source.map((task) => buildTaskCard(task, { id: task.id, createdAt: task.createdAt }));
+  }, [favoriteTasks, favoriteTaskIds, tasksById, buildTaskCard]);
 
   const togglePoseSelect = (id: string) => {
     setSelectedPoseIds((prev) => {
@@ -727,7 +1132,6 @@ export function LearnGeneratePage() {
 
   const onLearnStyle = async (files: File[]) => {
     if (!files.length) return;
-    setStyleLearning(true);
     try {
       const res = await learnStyle(files);
       const failed = res?.success === false || res?.preset?.learnStatus === "FAILED";
@@ -739,13 +1143,11 @@ export function LearnGeneratePage() {
       flashNotice(getErrorMessage(e, "风格学习失败，请稍后重试"));
     } finally {
       await fetchStylePresets();
-      setStyleLearning(false);
     }
   };
 
   const onLearnPose = async (file: File) => {
     if (!file) return;
-    setPoseLearning(true);
     try {
       const res = await learnPose(file);
       const failed = res?.success === false || res?.preset?.learnStatus === "FAILED";
@@ -757,40 +1159,10 @@ export function LearnGeneratePage() {
       flashNotice(getErrorMessage(e, "姿势学习失败，请稍后重试"));
     } finally {
       await fetchPosePresets();
-      setPoseLearning(false);
     }
   };
 
-  const addGarmentFiles = (incoming: File[]) => {
-    const images = incoming.filter((f) => f.type.startsWith("image/"));
-    if (!images.length) return;
-    setGarmentFiles((prev) => {
-      const remaining = Math.max(0, MAX_GARMENT_IMAGES - garmentAssetUrls.length - prev.length);
-      if (remaining <= 0) return prev;
-      return [...prev, ...images.slice(0, remaining)];
-    });
-  };
 
-  const removeGarmentAt = (idx: number) => {
-    setGarmentFiles((prev) => {
-      const next = [...prev];
-      next.splice(idx, 1);
-      return next;
-    });
-  };
-
-  const removeGarmentAssetUrl = (url: string) => {
-    setGarmentAssetUrls((prev) => prev.filter((item) => item !== url));
-  };
-
-  const clearGarmentImages = () => {
-    setGarmentFiles([]);
-    setGarmentAssetUrls([]);
-  };
-
-  const openAssetDialog = () => {
-    setAssetDialogOpen(true);
-  };
 
   const savePromptSnippet = async (nameOverride?: string) => {
     const text = userPrompt.trim();
@@ -798,624 +1170,508 @@ export function LearnGeneratePage() {
       alert("请先填写用户补充内容");
       return;
     }
+
     setPromptSnippetsBusy("create");
     try {
-      const trimmedName = String(nameOverride || "").trim();
-      const name = trimmedName || text.slice(0, 24).replace(/\s+/g, " ");
-      const created = await createPromptSnippet({
-        text,
-        ...(name ? { name } : {}),
-      });
-      if (created?.id) {
-        setPromptSnippets((prev) => [created, ...prev.filter((p) => p.id !== created.id)].slice(0, 50));
+      // 1. 生成并保存
+      const res = await createPromptSnippet({ text: text, name: nameOverride });
+      const created = res?.status === 201 || res?.data ? (res.data as PromptSnippet) : null;
+      if (created) {
+        setPromptSnippets((prev) => [created, ...prev]);
         setSelectedSnippetId(created.id);
+        setSnippetRemark(""); // 清空输入框
+        flashNotice("已保存为常用词条");
       } else {
-        await loadPromptSnippets();
+        throw new Error("保存失败：未返回数据");
       }
-      setSnippetRemark("");
-      flashNotice("已保存到云端模板");
     } catch (e: unknown) {
       console.error(e);
-      alert(getErrorMessage(e, "保存失败"));
+      flashNotice(getErrorMessage(e, "保存失败"));
     } finally {
       setPromptSnippetsBusy(null);
     }
   };
 
-  const removePromptSnippet = async (id: string) => {
-    if (!id) return;
+  const handleDeleteSnippet = async () => {
+    if (!selectedSnippetId) return;
     setPromptSnippetsBusy("delete");
     try {
-      await deletePromptSnippet(id);
-      setPromptSnippets((prev) => prev.filter((p) => p.id !== id));
-      if (selectedSnippetId === id) setSelectedSnippetId(null);
-      setSnippetRemark("");
-      flashNotice("已删除模板");
+      await deletePromptSnippet(selectedSnippetId);
+      setPromptSnippets((prev) => prev.filter((x) => x.id !== selectedSnippetId));
+      setSelectedSnippetId(null);
+      flashNotice("已删除该词条");
     } catch (e: unknown) {
       console.error(e);
-      alert(getErrorMessage(e, "删除失败"));
+      flashNotice(getErrorMessage(e, "删除失败"));
     } finally {
       setPromptSnippetsBusy(null);
     }
   };
 
-  const onGenerate = async () => {
-    const combinedPrompt = [autoStylePrompt, userPrompt].map((text) => text.trim()).filter(Boolean).join("\n");
-    if (!combinedPrompt) {
-      alert("请先输入提示词");
-      return;
-    }
-    const finalPrompt = appendModeHint(combinedPrompt, layoutMode);
-    if (!garmentFiles.length && !garmentAssetUrls.length) {
-      alert("请先上传至少 1 张衣服图片");
-      return;
-    }
-    if (creditsLoaded && balance < estimatedCreditsCost) {
-      alert(`积分不足：需要 ${estimatedCreditsCost} 积分，当前余额 ${balance} 积分。`);
+  const handleGenerateTask = async () => {
+    if (!userPrompt.trim()) {
+      alert("请填写提示词");
       return;
     }
 
     setCreating(true);
     try {
-      let seed: number | undefined;
-      if (seedAuto) {
-        const generated = Math.floor(Math.random() * 1_000_000_000);
-        seed = generated;
-        setSeedRaw(String(generated));
-        setSeedAuto(true);
-      } else {
-        const parsed = Number(seedRaw.trim());
-        seed = Number.isFinite(parsed) ? Math.abs(Math.floor(parsed)) : undefined;
+      if (garmentItems.length === 0) {
+        const confirmNoGarment = window.confirm("当前未上传衣服图。是否继续生成？（通常需要衣服图）");
+        if (!confirmNoGarment) {
+          setCreating(false);
+          return;
+        }
       }
-      const effectiveShotCount = layoutMode === "Grid" ? 1 : shotCount;
-      const temperature = temperatureRaw.trim() ? Number(temperatureRaw) : undefined;
-      const uploadedUrls = await uploadGarmentFiles(garmentFiles);
-      const mergedGarmentUrls = Array.from(
-        new Set(
-          [...garmentAssetUrls, ...uploadedUrls]
-            .map((v) => String(v || "").trim())
-            .filter(Boolean)
-        )
-      );
-      const res = await createDirectTaskFromUrls({
-        garmentUrls: mergedGarmentUrls,
-        prompt: finalPrompt,
-        shotCount: effectiveShotCount,
-        resolution,
-        aspectRatio,
-        layoutMode,
-        stylePresetIds: selectedStyleIds,
-        posePresetIds: selectedPoseIds,
-        facePresetIds: selectedFaceIds,
-        includeThoughts,
-        ...(Number.isFinite(seed) ? { seed: seed as number } : {}),
-        ...(Number.isFinite(temperature) ? { temperature: temperature as number } : {}),
-      });
+      play('start');
 
-      const taskId = String(res?.id || res?.task?.id || "").trim();
-      const createdAt = Number(res?.createdAt || Date.now());
+      // 1. Separate items for upload
+      const fileItems = garmentItems.filter(i => i.type === 'file' && i.file).map(i => i.file!);
+
+      // 2. Upload files
+      const uploadedUrls = await uploadGarmentFiles(fileItems);
+
+      // 3. Reconstruct ordered list
+      let uploadPtr = 0;
+      const allGarments = garmentItems.map(item => {
+        if (item.type === 'url') return item.url!;
+        if (item.type === 'file') return uploadedUrls[uploadPtr++] || "";
+        return "";
+      }).filter(Boolean).slice(0, MAX_GARMENT_IMAGES);
+
+      const finalPrompt = appendModeHint(
+        `${autoStylePrompt ? `${autoStylePrompt}\n` : ""}${userPrompt.trim()}`,
+        layoutMode,
+      );
+
+      const res = await createDirectTaskFromUrls({ garmentUrls: allGarments, prompt: finalPrompt, shotCount, layoutMode, resolution, aspectRatio, stylePresetIds: selectedStyleIds.slice(0, 1), posePresetIds: selectedPoseIds.slice(0, MAX_POSE_SELECT), facePresetIds: selectedFaceIds.slice(0, MAX_FACE_SELECT), includeThoughts, seed: seedAuto ? undefined : parseInt(seedRaw || "0", 10), temperature: temperatureRaw ? parseFloat(temperatureRaw) : undefined });
+      const taskId = res?.task_id ?? res?.taskId ?? res?.id ?? res?.task?.id;
       if (taskId) {
-        addToQueue(taskId, createdAt);
-        await pollOne(taskId);
+        addToQueue(taskId, Date.now());
+        pollOne(taskId); // 立即查一次
+        flashNotice("任务已提交，请在右侧排队列表查看");
+        // Don't auto-clear for better UX, user can clear manually
+      } else {
+        throw new Error("API 未返回 Task ID");
       }
     } catch (e: unknown) {
       console.error(e);
-      alert(getErrorMessage(e, "生成失败"));
+      alert(getErrorMessage(e, "任务提交失败"));
     } finally {
       setCreating(false);
     }
   };
 
-  const openTaskLightbox = (taskId: string) => {
-    const task = tasksById[taskId];
-    if (!task) return;
+  // Keyboard Shortcuts
+  useStudioShortcuts({
+    onGenerate: handleGenerateTask,
+    onToggleLeftPanel: () => setShowLeftPanel((prev) => !prev),
+    onToggleRightPanel: () => setShowRightPanel((prev) => !prev),
+    onClosePanels: () => {
+      setShowLeftPanel(false);
+      setShowRightPanel(false);
+      setPromptOptimizeOpen(false);
+    },
+    onUndoOptimize: handleUndoOptimize,
+    canUndoOptimize: promptUndoSnapshot !== null,
+  });
 
-    const directImages = task.directPrompt
-      ? (Array.isArray(task.resultImages) ? task.resultImages : [])
-        .map((src) => String(src || "").trim())
-        .filter(Boolean)
-      : [];
-
-    if (task.directPrompt && directImages.length > 1) {
-      const images: LightboxItem[] = directImages.map((src, idx) => ({
-        id: `${taskId}:${idx + 1}`,
-        url: toImgSrc(src),
-        prompt: task.directPrompt,
-      }));
-
-      setLightboxTaskId(taskId);
-      setLightboxImages(images);
-      setLightboxInitialIndex(0);
-      setLightboxOpen(true);
-      return;
-    }
-
-    const s0 = task?.shots?.[0];
-    const versions = Array.isArray(s0?.versions) ? s0!.versions! : [];
-
-    const images: LightboxItem[] = [];
-    if (versions.length) {
-      for (const v of versions.slice().sort((a, b) => a.versionId - b.versionId)) {
-        images.push({
-          id: `${taskId}:${v.versionId}`,
-          url: toImgSrc(v.imagePath),
-          prompt: v.prompt,
-        });
-      }
-    } else {
-      const single = String(s0?.imageUrl || s0?.imagePath || task.resultImages?.[0] || "").trim();
-      if (single) images.push({ id: taskId, url: toImgSrc(single), prompt: s0?.prompt || s0?.promptEn || task.directPrompt });
-    }
-
-    if (!images.length) return;
-    const current = Math.max(1, Number(s0?.currentVersion || versions[versions.length - 1]?.versionId || 1));
-    const initialIndex = Math.max(0, images.findIndex((it) => it.id === `${taskId}:${current}`));
-
-    setLightboxTaskId(taskId);
-    setLightboxImages(images);
-    setLightboxInitialIndex(initialIndex);
-    setLightboxOpen(true);
-  };
-
-  const onRegenerateInLightbox = async () => {
-    if (!lightboxTaskId) return;
-    setLightboxRegenerating(true);
-    try {
-      const msg = chatMessage.trim();
-      if (msg) {
-        await directMessageTask(lightboxTaskId, msg);
-        setChatMessage("");
-      } else {
-        await directRegenerateTask(lightboxTaskId);
-      }
-      await pollOne(lightboxTaskId);
-      openTaskLightbox(lightboxTaskId);
-    } catch (e: unknown) {
-      console.error(e);
-      alert(getErrorMessage(e, "重绘失败"));
-    } finally {
-      setLightboxRegenerating(false);
-    }
-  };
-
-  // Persistence logic
-  const STORAGE_PREFS_KEY = "afs:learn:prefs:v1";
-
-  // Load prefs on mount
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const raw = localStorage.getItem(STORAGE_PREFS_KEY);
-      if (raw) {
-        const prefs = JSON.parse(raw);
-        if (prefs.resolution) setResolution(prefs.resolution);
-        if (prefs.aspectRatio) setAspectRatio(prefs.aspectRatio);
-        if (Number.isFinite(prefs.shotCount)) setShotCount(Math.max(1, Math.floor(prefs.shotCount)));
-        if (prefs.temperature) setTemperatureRaw(prefs.temperature);
-        if (prefs.includeThoughts !== undefined) setIncludeThoughts(prefs.includeThoughts);
-        // 注意：用户补充不自动恢复，仅手动模板可回填
-        // Load selected presets if they still exist in the list (checked inside the render or just trust the ID)
-        if (Array.isArray(prefs.selectedStyleIds)) setSelectedStyleIds(prefs.selectedStyleIds);
-        if (Array.isArray(prefs.selectedPoseIds)) setSelectedPoseIds(prefs.selectedPoseIds);
-      }
-    } catch (e) {
-      console.error("Failed to load prefs", e);
-    }
-  }, []); // Run once on mount
-
-  // Save prefs on change
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    const prefs = {
-      resolution,
-      aspectRatio,
-      shotCount,
-      temperature: temperatureRaw,
-      includeThoughts,
+  // Snapshot Logic
+  const getCurrentState = React.useCallback((): WorkspaceSnapshotPayload => {
+    return {
       selectedStyleIds,
       selectedPoseIds,
-      // 注意：用户补充不自动保存，仅手动模板可回填
+      selectedFaceIds,
+      userPrompt,
+      garmentItems, // Use unifying items
+      shotCount,
+      layoutMode,
+      resolution,
+      aspectRatio,
+      seedRaw,
+      seedAuto,
+      includeThoughts,
+      temperatureRaw,
     };
-    localStorage.setItem(STORAGE_PREFS_KEY, JSON.stringify(prefs));
-  }, [resolution, aspectRatio, shotCount, temperatureRaw, includeThoughts, selectedStyleIds, selectedPoseIds]);
+  }, [
+    selectedStyleIds,
+    selectedPoseIds,
+    selectedFaceIds,
+    userPrompt,
+    garmentItems,
+    shotCount,
+    layoutMode,
+    resolution,
+    aspectRatio,
+    seedRaw,
+    seedAuto,
+    includeThoughts,
+    temperatureRaw,
+  ]);
 
+  const handleRestoreState = React.useCallback((data: WorkspaceSnapshotPayload) => {
+    if (!data) return;
+    if (data.selectedStyleIds) setSelectedStyleIds(data.selectedStyleIds);
+    if (data.selectedPoseIds) setSelectedPoseIds(data.selectedPoseIds);
+    if (data.selectedFaceIds) setSelectedFaceIds(data.selectedFaceIds);
+    if (typeof data.userPrompt === 'string') setUserPrompt(data.userPrompt);
 
-  if (!isAuthenticated) {
-    return (
-      <div className="container max-w-4xl py-12">
-        <Card>
-          <CardHeader>
-            <CardTitle>学习与生成</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="text-sm text-muted-foreground">该页面需要登录后使用（学习卡片/生成任务需要写入你的账号资源）。</div>
-            <Button onClick={() => router.push("/login")}>去登录</Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+    // Restore garments
+    if (data.garmentItems) {
+      // Need to ensure types are correct? Snapshot usually stores POJOs.
+      // Files can't be stored in localStorage comfortably.
+      // WorkspaceSnapshot hook uses JSON.stringify.
+      // Files are lost on persist. Only URLs persist.
+      // We should warn or handle files -> maybe we can't persist files.
+      // For now, restore what we can. Ideally we only snapshot URLs.
+      // If snapshot has 'file', it will likely be broken on restore unless we ignore it or it was converted to base64 (too heavy).
+      // Best practice: Only persist URLs. Filter out files or warn.
+      // For this refactor, let's assume we filter.
+      const validItems = data.garmentItems.filter((item) => item.type === "url");
+      setGarmentItems(validItems);
+    } else if (data.garmentAssetUrls) {
+      // Legacy snapshot support
+      const legacyUrls = data.garmentAssetUrls as string[];
+      setGarmentItems(legacyUrls.map(url => ({ id: url, type: 'url', url })));
+    }
 
-  const activeFace = selectedFaceIds.length > 0
-    ? (facePresetsAll || []).find(p => p.id === selectedFaceIds[0])
-    : null;
-  const assetDialogMaxSelection = Math.max(0, MAX_GARMENT_IMAGES - garmentFiles.length);
-  const assetPanelContent = (
-    <>
-      <AssetLibrary
-        stylePresets={stylePresetsAll || []}
-        posePresets={posePresetsAll || []}
-        facePresets={facePresetsAll || []}
-        collections={collections}
-        selectedStyleIds={selectedStyleIds}
-        setSelectedStyleIds={setSelectedStyleIds}
-        selectedPoseIds={selectedPoseIds}
-        togglePoseSelect={togglePoseSelect}
-        selectedFaceIds={selectedFaceIds}
-        toggleFaceSelect={toggleFaceSelect}
-        onDeleteStyle={deleteStylePreset}
-        onDeletePose={deletePosePreset}
-        onDeleteFace={deleteFacePreset}
-        onUpdateStyle={updateStylePreset}
-        onUpdatePose={updatePosePreset}
-        onUpdateFace={updateFacePreset}
-        onRelearnStyle={relearnStylePreset}
-        onRelearnPose={relearnPosePreset}
-        onBatchUpdateMeta={handleBatchUpdateMeta}
-        onRefreshKind={refreshPresetKind}
-        onCreateCollection={handleCreateCollection}
-        onRenameCollection={handleRenameCollection}
-        onDeleteCollection={handleDeleteCollection}
-      />
-      <div className="p-3 border-t border-white/20 bg-white/30 space-y-2 backdrop-blur-sm">
-        <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => styleInputRef.current?.click()} disabled={styleLearning}>
-          {styleLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-          上传风格图学习
-        </Button>
-        <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => poseInputRef.current?.click()} disabled={poseLearning}>
-          {poseLearning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-          上传姿势图学习
-        </Button>
-        <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-white/40" onClick={() => setFaceDialogOpen(true)}>
-          <UserRound className="w-4 h-4" />
-          管理人脸模特
-        </Button>
-      </div>
-    </>
-  );
-  const queuePanel = (
-    <GlassPanel className="flex-1 pointer-events-auto overflow-hidden flex flex-col shadow-2xl" intensity="medium">
-      <QueueSidebar
-        queue={queue}
-        tasksById={tasksById}
-        onOpenTask={openTaskLightbox}
-        onReuseTask={(taskId) => void reuseFromTaskId(taskId)}
-        onRetryTask={(taskId) => void retryQueueTask(taskId)}
-        retryingTaskId={queueRetryingTaskId}
-        onClear={() => {
-          setQueue([]);
-          setTasksById({});
-        }}
-      />
-    </GlassPanel>
-  );
-  const settingsPanel = (
-    <div className="pointer-events-auto">
-      <AdvancedSettings
-        resolution={resolution}
-        setResolution={setResolution}
-        aspectRatio={aspectRatio}
-        setAspectRatio={setAspectRatio}
-        layoutMode={layoutMode}
-        setLayoutMode={setLayoutMode}
-        shotCount={shotCount}
-        setShotCount={setShotCount}
-        seed={seedRaw}
-        setSeed={(value) => {
-          const next = String(value ?? "");
-          setSeedRaw(next);
-          setSeedAuto(next.trim() === "");
-        }}
-        temperature={temperatureRaw}
-        setTemperature={setTemperatureRaw}
-        includeThoughts={includeThoughts}
-        setIncludeThoughts={setIncludeThoughts}
-      />
+    if (data.shotCount) setShotCount(data.shotCount);
+    if (data.layoutMode) setLayoutMode(data.layoutMode);
+    if (data.resolution) setResolution(data.resolution);
+    if (data.aspectRatio && isAspectRatio(data.aspectRatio)) setAspectRatio(data.aspectRatio);
+    if (data.seedRaw) setSeedRaw(data.seedRaw);
+    if (typeof data.seedAuto === 'boolean') setSeedAuto(data.seedAuto);
+    if (typeof data.includeThoughts === "boolean") setIncludeThoughts(data.includeThoughts);
+    if (typeof data.temperatureRaw === "string") setTemperatureRaw(data.temperatureRaw);
+    flashNotice("已恢复工作区状态");
+  }, [flashNotice]);
+
+  const LayoutModeToggle = (
+    <div className="flex bg-slate-100/80 p-0.5 rounded-lg border border-slate-200/50 shadow-inner">
+      <button
+        onClick={() => setLayoutMode("Individual")}
+        className={cn(
+          "px-3 py-1 text-[11px] font-bold rounded-md transition-all duration-200",
+          layoutMode === "Individual"
+            ? "bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200"
+            : "text-slate-500 hover:text-slate-700"
+        )}
+      >
+        单图模式
+      </button>
+      <button
+        onClick={() => setLayoutMode("Grid")}
+        className={cn(
+          "px-3 py-1 text-[11px] font-bold rounded-md transition-all duration-200",
+          layoutMode === "Grid"
+            ? "bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200"
+            : "text-slate-500 hover:text-slate-700"
+        )}
+      >
+        拼图模式
+      </button>
     </div>
   );
+
+  const detailLayoutMode = taskDetail?.layout_mode || taskDetail?.layoutMode;
+  const detailPrompt = String(taskDetail?.directPrompt || taskDetail?.requirements || "").trim();
+  const detailSeed = typeof taskDetail?.directSeed === "number" && Number.isFinite(taskDetail.directSeed)
+    ? String(Math.floor(taskDetail.directSeed))
+    : "随机";
+  const detailTemperature = typeof taskDetail?.directTemperature === "number" && Number.isFinite(taskDetail.directTemperature)
+    ? taskDetail.directTemperature.toFixed(2)
+    : "默认";
+  const detailRows = [
+    { label: "状态", value: taskDetail?.status || "-" },
+    { label: "创建时间", value: taskDetail?.createdAt ? new Date(taskDetail.createdAt).toLocaleString() : "-" },
+    { label: "提示词", value: detailPrompt || "-" },
+    { label: "模式", value: detailLayoutMode === "Grid" ? "拼图模式" : detailLayoutMode === "Individual" ? "单图模式" : "-" },
+    { label: "生成数量", value: typeof taskDetail?.shotCount === "number" ? String(taskDetail.shotCount) : "-" },
+    { label: "分辨率", value: taskDetail?.resolution || "-" },
+    { label: "画面比例", value: taskDetail?.aspectRatio || "-" },
+    { label: "Seed", value: detailSeed },
+    { label: "创造性", value: detailTemperature },
+    { label: "思维链", value: taskDetail?.directIncludeThoughts === undefined ? "-" : (taskDetail.directIncludeThoughts ? "是" : "否") },
+    { label: "风格数量", value: String(taskDetail?.directStylePresetIds?.length ?? 0) },
+    { label: "姿势数量", value: String(taskDetail?.directPosePresetIds?.length ?? 0) },
+    { label: "人脸数量", value: String(taskDetail?.directFacePresetIds?.length ?? 0) },
+    { label: "衣服图数量", value: String(taskDetail?.garmentImagePaths?.length ?? 0) },
+  ];
 
   return (
-    <div
-      className={cn(
-        "relative min-h-[calc(100vh-3.5rem)] w-full bg-slate-50 overflow-x-hidden",
-        isOverlayOpen ? "overflow-hidden" : "overflow-y-auto",
-        "lg:h-[calc(100vh-3.5rem)] lg:overflow-hidden",
-      )}
-    >
-      {/* 0. Ambient Background */}
-      <FluidBackground variant={backgroundVariant} />
+    <>
+      <FluidBackground key={backgroundVariant} variant={backgroundVariant} />
 
-      {/* Mobile Toolbar */}
-      <div className="sticky top-0 z-30 flex items-center justify-between gap-2 px-3 py-2 bg-white/70 backdrop-blur border-b border-white/40 lg:hidden">
-        <div className="text-sm font-semibold text-slate-700">学习与生成</div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs"
-            onClick={() => {
-              setShowRightPanel(false);
-              setShowLeftPanel(true);
-            }}
-          >
-            素材库
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs"
-            onClick={() => {
-              setShowLeftPanel(false);
-              setShowRightPanel(true);
-            }}
-          >
-            队列/设置
-          </Button>
-        </div>
-      </div>
+      <StudioLayout
+        header={
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 mr-4 border-r border-slate-200 pr-4 max-sm:hidden">
+              <div className="text-[10px] text-slate-400 font-medium">当前余额:</div>
+              <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                <span className="text-[11px] font-bold text-amber-700">{balance}</span>
+              </div>
+            </div>
+          </div>
+        }
+        // Left Panel: Resource Explorer
+        resourcePanel={
+          <ResourcePanel
+            isOpen={showLeftPanel}
+            onClose={() => setShowLeftPanel(false)}
+            // Snapshot Manager
+            headerActions={
+              <WorkspaceSnapshotManager
+                getCurrentState={getCurrentState}
+                onRestoreState={handleRestoreState}
+              />
+            }
+            // Data
+            stylePresets={stylePresetsAll}
+            posePresets={posePresetsAll}
+            facePresets={facePresetsAll}
+            collections={collections}
+            // Selection
+            selectedStyleIds={selectedStyleIds}
+            setSelectedStyleIds={setSelectedStyleIds}
+            selectedPoseIds={selectedPoseIds}
+            togglePoseSelect={togglePoseSelect}
+            selectedFaceIds={selectedFaceIds}
+            toggleFaceSelect={toggleFaceSelect}
+            // Actions
+            onDeleteStyle={deleteStylePreset}
+            onDeletePose={deletePosePreset}
+            onDeleteFace={deleteFacePreset}
+            onUpdateStyle={updateStylePreset}
+            onUpdatePose={updatePosePreset}
+            onUpdateFace={updateFacePreset}
+            onRelearnStyle={relearnStylePreset}
+            onRelearnPose={relearnPosePreset}
+            onBatchUpdateMeta={handleBatchUpdateMeta}
+            onRefreshKind={refreshPresetKind}
+            onCreateCollection={handleCreateCollection}
+            onRenameCollection={handleRenameCollection}
+            onDeleteCollection={handleDeleteCollection}
+            onUploadStyle={onLearnStyle}
+            onUploadPose={onLearnPose}
+          />
+        }
 
-      {/* 1. Center Stage (Z-Index 10) */}
-      <div className="relative lg:absolute lg:inset-0 flex items-center justify-center p-4 md:p-8 xl:px-[calc(clamp(240px,20vw,320px)+1rem)] z-10 pointer-events-none">
-        <div
-          className="pointer-events-auto w-full max-w-5xl xl:max-w-[clamp(640px,60vw,1024px)] lg:h-full transition-transform duration-500 ease-out"
-          onMouseEnter={() => setIsFocused(true)}
-          onMouseLeave={() => setIsFocused(false)}
-        >
-          {/* CreationStage Wrapper to ensure pointer events are correct */}
-            <CreationStage
-              garmentFiles={garmentFiles}
-              garmentUrls={garmentUrls}
-              garmentAssetUrls={garmentAssetUrls}
-              addGarmentFiles={addGarmentFiles}
-              removeGarmentAt={removeGarmentAt} // Fix: Ensure this prop name matches
-              removeGarmentAssetUrl={removeGarmentAssetUrl}
-              onClearGarments={clearGarmentImages}
-              onOpenAssetLibrary={openAssetDialog}
-              maxGarmentImages={MAX_GARMENT_IMAGES}
-              prompt={userPrompt}
-            setPrompt={(v) => {
-              handlePromptChange(v);
-              if (selectedSnippetId) setSelectedSnippetId(null);
+        // Center Panel: Canvas
+        canvas={
+          <StudioCanvas
+            // Layout Control
+            leftPanelOpen={showLeftPanel}
+            rightPanelOpen={showRightPanel}
+            onToggleLeftPanel={() => setShowLeftPanel(!showLeftPanel)}
+            onToggleRightPanel={() => setShowRightPanel(!showRightPanel)}
+
+            // Garment Data
+            garmentItems={garmentItems}
+            addGarmentFiles={addGarmentFiles}
+            removeGarmentItem={removeGarmentItem}
+            onReorderGarments={reorderGarmentItems}
+            onClearGarments={clearGarmentImages}
+
+            // User Assets
+            userAssets={userAssets}
+            userAssetsLoading={userAssetsLoading}
+            hasMoreUserAssets={userAssetsHasMore}
+            onLoadMoreUserAssets={handleLoadMoreUserAssets}
+            onSelectUserAsset={(url) => {
+              if (garmentItems.length >= MAX_GARMENT_IMAGES) {
+                alert(`最多只能上传 ${MAX_GARMENT_IMAGES} 张衣服图`);
+                return;
+              }
+              setGarmentItems(prev => [...prev, { id: url, type: 'url', url }]);
+              flashNotice("已添加到衣服图列表");
             }}
-            autoStylePrompt={autoStylePrompt}
+
+            // Recipe Bar
             styleLabel={activeStyleName}
-            onGenerate={onGenerate}
-            creating={creating}
-            estimatedCreditsCost={estimatedCreditsCost}
-            balance={balance}
-            creditsLoaded={creditsLoaded}
-            notice={workbenchNotice}
-            promptSnippets={promptSnippets}
-            promptSnippetsLoading={promptSnippetsLoading}
-            promptSnippetsBusy={promptSnippetsBusy}
-            selectedSnippetId={selectedSnippetId}
-            onSelectSnippet={(id) => {
-              const snippet = promptSnippets.find((x) => x.id === id);
-              setSelectedSnippetId(id);
-              if (snippet) setUserPrompt(snippet.text);
-              setSnippetRemark("");
-            }}
-            onSaveSnippet={() => void savePromptSnippet(snippetRemark)}
-            onDeleteSnippet={() => {
-              if (!selectedSnippetId) return;
-              void removePromptSnippet(selectedSnippetId);
-            }}
-            snippetRemark={snippetRemark}
-            setSnippetRemark={setSnippetRemark}
-            // New Props for Interactivity
-            isFocused={isFocused}
-            onInteraction={() => {
-              // Keep random interaction for fun, or remove if user only wants style-driven
-              // setBackgroundVariant((prev) => prev); 
-            }}
             poseCount={selectedPoseIds.length}
-            faceRemark={activeFace?.description || activeFace?.name}
-            onClear={clearWorkbench}
-            clearDisabled={!canClearWorkbench}
+            faceRemark={selectedFaceIds.length > 0 ? `${selectedFaceIds.length} faces selected` : undefined}
+            onClearStyle={onClearStyle}
+            onClearPoses={onClearPoses}
+            onClearFace={onClearFace}
             onOptimizePrompt={handleOptimizePrompt}
-            optimizeBusy={promptOptimizeBusy}
-            optimizeDisabled={!canOptimizePrompt}
             onUndoOptimize={handleUndoOptimize}
             canUndoOptimize={promptUndoSnapshot !== null}
+            optimizeBusy={promptOptimizeBusy}
+            // Prompt Engine
+            prompt={userPrompt}
+            setPrompt={handlePromptChange}
+            baseStyle={activeStyleName}
+            basePrompt={activeStylePrompt}
+            snippets={promptSnippets}
+            snippetsLoading={promptSnippetsLoading}
+            selectedSnippetId={selectedSnippetId}
+            onSelectSnippet={setSelectedSnippetId}
+            onSaveSnippet={savePromptSnippet}
+            onDeleteSnippet={handleDeleteSnippet}
+            snippetRemark={snippetRemark}
+            setSnippetRemark={setSnippetRemark}
+            promptBusy={promptSnippetsBusy}
+
+            onClearWorkbench={clearWorkbench}
+            hasWorkbenchState={hasWorkbenchState}
+
+            // Generate
+            onGenerate={handleGenerateTask}
+            generating={creating}
+            creditCost={estimatedCreditsCost}
+            balance={balance}
+            creditsLoaded={creditsLoaded}
           />
-        </div>
-      </div>
+        }
 
-      {/* Mid Desktop Toggle (Queue/Settings) */}
-      <div className="hidden lg:flex xl:hidden absolute top-6 right-6 z-30 gap-2">
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="h-8 px-3 text-xs"
-          onClick={() => {
-            setShowRightPanel(false);
-            setShowLeftPanel(true);
-          }}
-        >
-          素材库
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="h-8 px-3 text-xs"
-          onClick={() => {
-            setShowLeftPanel(false);
-            setShowRightPanel(true);
-          }}
-        >
-          队列/设置
-        </Button>
-      </div>
-
-      {/* 2. Left Sidebar: Asset Library (Z-Index 20) */}
-      <div
-        className={cn(
-          "hidden xl:flex absolute top-4 left-4 bottom-4 w-[clamp(240px,20vw,320px)] z-20 flex-col pointer-events-none transition-all duration-500 ease-in-out",
-          "opacity-100"
-        )}
-      >
-        <GlassPanel className="flex-1 flex flex-col pointer-events-auto h-full overflow-hidden shadow-2xl" intensity="medium">
-          {assetPanelContent}
-        </GlassPanel>
-      </div>
-
-      {/* 3. Right Sidebar: Queue & Settings (Z-Index 20) */}
-      <div
-        className={cn(
-          "hidden xl:flex absolute top-4 right-4 bottom-4 w-[clamp(240px,20vw,320px)] z-20 pointer-events-none flex-col gap-4 transition-all duration-500 ease-in-out",
-          "opacity-100"
-        )}
-      >
-        {/* Queue Panel */}
-        {queuePanel}
-
-        {/* Advanced Settings (Floating Panel) */}
-        {settingsPanel}
-      </div>
-
-      {/* Mobile/Tablet Overlay: Asset Library */}
-      {showLeftPanel && (
-        <div className="fixed inset-0 z-50 flex xl:hidden">
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            onClick={() => setShowLeftPanel(false)}
-          />
-          <div className="relative m-4 w-[340px] max-w-[90vw] h-[calc(100%-2rem)]">
-            <GlassPanel className="flex flex-col pointer-events-auto h-full overflow-hidden shadow-2xl" intensity="medium">
-              <div className="flex items-center justify-between px-3 py-2 border-b border-white/20 bg-white/70">
-                <span className="text-sm font-semibold text-slate-700">素材库</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-xs"
-                  onClick={() => setShowLeftPanel(false)}
-                >
-                  关闭
-                </Button>
-              </div>
-              {assetPanelContent}
-            </GlassPanel>
-          </div>
-        </div>
-      )}
-
-      {/* Overlay: Queue & Settings */}
-      {showRightPanel && (
-        <div className="fixed inset-0 z-50 flex xl:hidden">
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            onClick={() => setShowRightPanel(false)}
-          />
-          <div className="relative ml-auto m-4 w-[340px] max-w-[90vw] h-[calc(100%-2rem)] flex flex-col gap-3">
-            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/70 border border-white/20 shadow-sm backdrop-blur">
-              <span className="text-sm font-semibold text-slate-700">队列/设置</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-8 px-2 text-xs"
-                onClick={() => setShowRightPanel(false)}
-              >
-                关闭
-              </Button>
-            </div>
-            <div className="flex-1 min-h-0 flex flex-col gap-4">
-              {queuePanel}
-              {settingsPanel}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Hidden Inputs */}
-      <input ref={styleInputRef} type="file" accept="image/*" multiple className="hidden"
-        onChange={(e) => {
-          const files = Array.from(e.target.files || []).slice(0, MAX_STYLE_LEARN_IMAGES);
-          e.currentTarget.value = "";
-          void onLearnStyle(files);
-        }}
-      />
-      <input ref={poseInputRef} type="file" accept="image/*" className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.currentTarget.value = "";
-          if (file) void onLearnPose(file);
-        }}
+        // Right Panel: Control Hub
+        controlHub={
+          <ControlHub
+            isOpen={showRightPanel}
+            onClose={() => setShowRightPanel(false)}
+            headerAction={LayoutModeToggle}
+            queueContent={
+              <QueueSection
+                queueTasks={queueTaskCards}
+                favoriteTasks={favoriteTaskCards}
+                onReuseTask={reuseFromTaskId}
+                onViewDetail={handleViewDetail}
+                onClearCompleted={() => {
+                  setQueue(prev => prev.filter(q => {
+                    const t = tasksById[q.taskId];
+                    return !t || (t.status !== "COMPLETED" && t.status !== "FAILED");
+                  }));
+                }}
+                onDeleteTask={(id) => {
+                  setQueue(prev => prev.filter(q => q.taskId !== id));
+                }}
+                onRetryTask={retryQueueTask}
+                favoriteIds={favoriteTaskIds}
+                onToggleFavorite={toggleQueueFavorite}
+                queueTotal={queueTotal}
+                queueBaseLimit={DIRECT_QUEUE_PAGE_SIZE}
+                showAll={queueViewAll}
+                onToggleShowAll={() => setQueueViewAll((prev) => !prev)}
+                tab={queueTab}
+                onTabChange={setQueueTab}
+                currentTaskId={null}
+                onImageClick={(taskId, url) => {
+                  setLightboxImages([{ id: taskId, url }]);
+                  setLightboxInitialIndex(0);
+                  setLightboxTaskId(taskId);
+                  setLightboxOpen(true);
+                }}
+              />
+            }
+          >
+            <ParameterSection
+              seed={seedAuto ? 0 : Number(seedRaw)}
+              setSeed={(s) => { setSeedRaw(String(s)); setSeedAuto(false); }}
+              randomSeed={seedAuto}
+              setRandomSeed={setSeedAuto}
+              aspectRatio={aspectRatio}
+              setAspectRatio={(value) => {
+                if (isAspectRatio(value)) {
+                  setAspectRatio(value);
+                }
+              }}
+              outputCount={shotCount}
+              setOutputCount={setShotCount}
+              resolution={resolution}
+              setResolution={setResolution}
+              includeThoughts={includeThoughts}
+              setIncludeThoughts={setIncludeThoughts}
+              temperature={temperatureRaw}
+              setTemperature={setTemperatureRaw}
+              collapsed={parameterCollapsed}
+              onCollapsedChange={setParameterCollapsed}
+            />
+          </ControlHub >
+        }
       />
 
-      {/* Lightbox & Dialogs */}
+      {/* Overlays / Dialogs */}
+      <Dialog
+        open={taskDetailOpen}
+        onOpenChange={(open) => {
+          setTaskDetailOpen(open);
+          if (!open) {
+            setTaskDetail(null);
+            setTaskDetailError(null);
+            setTaskDetailLoading(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>任务详情</DialogTitle>
+          </DialogHeader>
+          {taskDetailLoading && (
+            <div className="py-6 text-sm text-slate-500 animate-pulse">加载中...</div>
+          )}
+          {!taskDetailLoading && taskDetailError && (
+            <div className="py-6 text-sm text-rose-500">{taskDetailError}</div>
+          )}
+          {!taskDetailLoading && !taskDetailError && taskDetail && (
+            <div className="space-y-3">
+              {detailRows.map((row) => (
+                <div key={row.label} className="flex gap-3 text-sm">
+                  <div className="w-24 shrink-0 text-slate-500">{row.label}</div>
+                  <div className={cn("text-slate-800", row.label === "提示词" && "whitespace-pre-wrap")}>
+                    {row.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {!taskDetailLoading && !taskDetailError && !taskDetail && (
+            <div className="py-6 text-sm text-slate-500">暂无任务详情</div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       <ImageLightbox
-        images={lightboxImages}
-        initialIndex={lightboxInitialIndex}
         open={lightboxOpen}
         onOpenChange={setLightboxOpen}
+        images={lightboxImages}
+        initialIndex={lightboxInitialIndex}
+        onRegenerate={retryQueueTask}
+        isRegenerating={!!queueRetryingTaskId}
         watermarkTaskId={lightboxTaskId}
-        onRegenerate={() => void onRegenerateInLightbox()}
-        isRegenerating={lightboxRegenerating}
-        regenerateLabel="重新生成"
       />
 
-      <Dialog open={faceDialogOpen} onOpenChange={setFaceDialogOpen}>
-        <DialogContent className="max-w-6xl">
-          <DialogHeader>
-            <DialogTitle>选择/管理人脸模特（最多 3 张）</DialogTitle>
-          </DialogHeader>
-          <div className="max-h-[70vh] overflow-y-auto pr-2">
-            <FacePresetSelector selectedIds={selectedFaceIds} onSelect={setSelectedFaceIds} maxSelection={3} />
-          </div>
-        </DialogContent>
-      </Dialog>
       <Dialog open={promptOptimizeOpen} onOpenChange={setPromptOptimizeOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-2xl bg-white/90 backdrop-blur-xl border-white/20 p-6 rounded-2xl shadow-2xl">
           <DialogHeader>
-            <DialogTitle>提示词自动优化</DialogTitle>
+            <DialogTitle>
+              <span className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-indigo-500" />
+                AI 提示词优化结果
+              </span>
+            </DialogTitle>
           </DialogHeader>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-muted-foreground">原始提示词</label>
-              <Textarea value={promptOptimizeOriginal} readOnly className="min-h-[160px]" />
+          <div className="space-y-4 py-4">
+            <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-100/50 text-sm text-slate-700 leading-relaxed overflow-y-auto max-h-[300px]">
+              {promptOptimizeResult}
             </div>
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-muted-foreground">优化结果</label>
-              <Textarea value={promptOptimizeResult} readOnly className="min-h-[160px]" />
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" className="text-slate-500" onClick={() => setPromptOptimizeOpen(false)}>取消</Button>
+              <Button variant="outline" className="border-indigo-200 text-indigo-600 hover:bg-indigo-50" onClick={() => applyOptimizedPrompt("append")}>追加到末尾</Button>
+              <Button className="bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-200" onClick={() => applyOptimizedPrompt("replace")}>直接替换</Button>
             </div>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setPromptOptimizeOpen(false)}>
-              取消
-            </Button>
-            <Button variant="secondary" onClick={() => applyOptimizedPrompt("append")}>
-              追加
-            </Button>
-            <Button onClick={() => applyOptimizedPrompt("replace")}>
-              替换
-            </Button>
           </div>
         </DialogContent>
       </Dialog>
-      <UserAssetLibraryDialog
-        open={assetDialogOpen}
-        onOpenChange={setAssetDialogOpen}
-        selectedUrls={garmentAssetUrls}
-        onConfirm={setGarmentAssetUrls}
-        maxSelection={assetDialogMaxSelection}
-        title="服装素材库"
-      />
-    </div>
+
+      {/* Notice Toast */}
+      {
+        workbenchNotice && (
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-black/80 text-white px-4 py-2 rounded-full text-sm animate-in fade-in zoom-in slide-in-from-top-4">
+            {workbenchNotice}
+          </div>
+        )
+      }
+    </>
   );
 }
