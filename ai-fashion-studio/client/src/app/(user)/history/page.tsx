@@ -34,6 +34,7 @@ import api from '@/lib/api';
 import { BACKEND_ORIGIN } from '@/lib/api';
 import { smartWithTencentCi } from '@/lib/image-ci';
 import { useAuth } from '@/hooks/use-auth';
+import { downloadImageWithOptionalTaskWatermark } from '@/lib/watermark';
 
 interface Task {
     id: string;
@@ -65,6 +66,7 @@ export default function HistoryPage() {
     const [tasks, setTasks] = useState<Task[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
+    const [batchDownloading, setBatchDownloading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
     const [viewMode, setViewMode] = useState<ViewMode>('grid');
@@ -196,6 +198,69 @@ export default function HistoryPage() {
         return ci ? smartWithTencentCi(raw, ci) : raw;
     };
 
+    const getDownloadFilename = (taskId: string, url: string) => {
+        const raw = String(url || '').trim();
+        const base = raw.split('?')[0].split('#')[0];
+        const last = base.split('/').pop() || '';
+        const extMatch = last.match(/\.([a-zA-Z0-9]+)$/);
+        const ext = extMatch ? extMatch[1] : 'jpg';
+        return `task_${taskId}_${Date.now()}.${ext}`;
+    };
+
+    const downloadTaskImage = async (task: Task, options?: { silent?: boolean }) => {
+        const preview = getPreviewImageUrl(task);
+        if (!preview) {
+            if (!options?.silent) {
+                alert('当前任务没有可下载的图片');
+            }
+            return false;
+        }
+        const url = toImgSrc(preview);
+        const filename = getDownloadFilename(task.id, url);
+        try {
+            await downloadImageWithOptionalTaskWatermark({ taskId: task.id, url, filename });
+            return true;
+        } catch (err) {
+            console.error('下载失败:', err);
+            if (!options?.silent) {
+                alert('下载失败：图片跨域限制或网络错误。若需水印下载，请确保 COS 已开启 CORS。');
+            }
+            return false;
+        }
+    };
+
+    const handleBatchDownload = async () => {
+        if (selectedTasks.size === 0 || batchDownloading) return;
+        const selected = tasks.filter((task) => selectedTasks.has(task.id));
+        const downloadable = selected.filter((task) => task.status === 'COMPLETED' && getPreviewImageUrl(task));
+        const skipped = selected.length - downloadable.length;
+
+        if (downloadable.length === 0) {
+            alert('当前选中的任务没有可下载的已完成图片');
+            return;
+        }
+
+        setBatchDownloading(true);
+        try {
+            let success = 0;
+            let failed = 0;
+            for (const task of downloadable) {
+                const ok = await downloadTaskImage(task, { silent: true });
+                if (ok) success += 1;
+                else failed += 1;
+            }
+
+            if (failed > 0 || skipped > 0) {
+                let message = `已下载 ${success} 个`;
+                if (failed > 0) message += `，失败 ${failed} 个`;
+                if (skipped > 0) message += `，跳过 ${skipped} 个（未完成或无图片）`;
+                alert(message);
+            }
+        } finally {
+            setBatchDownloading(false);
+        }
+    };
+
     return (
         <div className="container py-8 max-w-screen-2xl min-h-screen">
             {/* Header */}
@@ -272,15 +337,31 @@ export default function HistoryPage() {
 
                         {/* Batch Actions */}
                         {selectedTasks.size > 0 && (
-                            <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={handleBatchDelete}
-                                className="h-10"
-                            >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                删除 ({selectedTasks.size})
-                            </Button>
+                            <div className="flex gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleBatchDownload}
+                                    className="h-10"
+                                    disabled={batchDownloading}
+                                >
+                                    {batchDownloading ? (
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Download className="h-4 w-4 mr-2" />
+                                    )}
+                                    下载 ({selectedTasks.size})
+                                </Button>
+                                <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={handleBatchDelete}
+                                    className="h-10"
+                                >
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    删除 ({selectedTasks.size})
+                                </Button>
+                            </div>
                         )}
                     </div>
                 </CardContent>
@@ -406,7 +487,7 @@ export default function HistoryPage() {
                                                                 size="sm"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
-                                                                    // TODO: Download
+                                                                    void downloadTaskImage(task);
                                                                 }}
                                                             >
                                                                 <Download className="h-3 w-3" />
