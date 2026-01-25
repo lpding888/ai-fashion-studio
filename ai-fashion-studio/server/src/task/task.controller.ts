@@ -48,6 +48,50 @@ const GetTasksQuerySchema = z
     userId: z.string().uuid().optional(),
     // Optional search keyword (id/requirements). ADMIN-only semantics are handled in service.
     q: z.string().trim().max(200).optional(),
+    directOnly: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'number') return v === 1;
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true' || s === '1' || s === 'yes') return true;
+        if (s === 'false' || s === '0' || s === 'no') return false;
+      }
+      return undefined;
+    }, z.boolean().optional()),
+    direct_only: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'number') return v === 1;
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true' || s === '1' || s === 'yes') return true;
+        if (s === 'false' || s === '0' || s === 'no') return false;
+      }
+      return undefined;
+    }, z.boolean().optional()),
+    favoriteOnly: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'number') return v === 1;
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true' || s === '1' || s === 'yes') return true;
+        if (s === 'false' || s === '0' || s === 'no') return false;
+      }
+      return undefined;
+    }, z.boolean().optional()),
+    favorite_only: z.preprocess((v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'number') return v === 1;
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true' || s === '1' || s === 'yes') return true;
+        if (s === 'false' || s === '0' || s === 'no') return false;
+      }
+      return undefined;
+    }, z.boolean().optional()),
     // Optional status filter. (Keep explicit enum to avoid typos silently failing.)
     status: z
       .enum([
@@ -178,6 +222,12 @@ const DirectMessageBodySchema = z
 const ApproveTaskBodySchema = z
   .object({
     editedPrompts: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
+const ToggleFavoriteBodySchema = z
+  .object({
+    favorite: z.boolean(),
   })
   .strict();
 
@@ -444,6 +494,8 @@ export class TaskController {
     const pageNum = query?.page ?? 1;
     const limitNum = query?.limit ?? 20;
     const scope = query?.scope;
+    const directOnly = query?.directOnly ?? query?.direct_only;
+    const favoriteOnly = query?.favoriteOnly ?? query?.favorite_only;
     const result = await this.taskService.getAllTasks(
       user,
       pageNum,
@@ -453,6 +505,8 @@ export class TaskController {
         userId: query?.userId,
         q: query?.q,
         status: query?.status,
+        directOnly,
+        favoriteOnly,
       },
     );
     return {
@@ -605,6 +659,18 @@ export class TaskController {
   async deleteTask(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
     return this.taskService.deleteTask(id);
+  }
+
+  @Patch(':id/favorite')
+  async toggleFavorite(
+    @CurrentUser() user: UserModel,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ToggleFavoriteBodySchema))
+    body: z.infer<typeof ToggleFavoriteBodySchema>,
+  ) {
+    await this.taskAccess.requireWritableTask(id, user);
+    const task = await this.taskService.setTaskFavorite(id, body.favorite);
+    return this.sanitizeTask(task);
   }
 
   private toRecord(input: unknown): Record<string, unknown> {

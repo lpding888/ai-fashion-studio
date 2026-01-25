@@ -98,7 +98,13 @@ export class TaskService {
     page: number = 1,
     limit: number = 20,
     scope?: 'all' | 'mine',
-    filters?: { userId?: string; q?: string; status?: string },
+    filters?: {
+      userId?: string;
+      q?: string;
+      status?: string;
+      directOnly?: boolean;
+      favoriteOnly?: boolean;
+    },
   ) {
     return this.crud.getAllTasks(viewer, page, limit, scope, filters);
   }
@@ -159,5 +165,13 @@ export class TaskService {
    */
   async deleteTask(taskId: string): Promise<boolean> {
     return this.crud.deleteTask(taskId);
+  }
+
+  async setTaskFavorite(taskId: string, favorite: boolean): Promise<TaskModel> {
+    const updated = await this.crud.setTaskFavorite(taskId, favorite);
+    if (!updated) {
+      throw new NotFoundException(`Task ${taskId} not found`);
+    }
+    return updated;
   }
 }

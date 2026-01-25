@@ -7,7 +7,7 @@ import {
 import * as crypto from 'crypto';
 import { DbService } from '../db/db.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { UserModel } from '../db/models';
+import { TaskModel, UserModel } from '../db/models';
 
 @Injectable()
 export class TaskCrudService {
@@ -30,7 +30,13 @@ export class TaskCrudService {
     page: number = 1,
     limit: number = 20,
     scope?: 'all' | 'mine',
-    filters?: { userId?: string; q?: string; status?: string },
+    filters?: {
+      userId?: string;
+      q?: string;
+      status?: string;
+      directOnly?: boolean;
+      favoriteOnly?: boolean;
+    },
   ) {
     const allTasks = await this.db.getAllTasks();
     const isAdmin = viewer.role === 'ADMIN';
@@ -63,6 +69,14 @@ export class TaskCrudService {
           return hay.includes(q);
         });
       }
+    }
+
+    if (filters?.directOnly) {
+      filtered = filtered.filter((t) => this.isDirectTask(t));
+    }
+
+    if (filters?.favoriteOnly) {
+      filtered = filtered.filter((t) => typeof t.favoriteAt === 'number');
     }
 
     // Sort by creation time (newest first)
@@ -146,5 +160,28 @@ export class TaskCrudService {
     }
 
     return deleted;
+  }
+
+  async setTaskFavorite(taskId: string, favorite: boolean): Promise<TaskModel | null> {
+    const task = await this.db.getTask(taskId);
+    if (!task) return null;
+    if (favorite) {
+      task.favoriteAt = Date.now();
+    } else {
+      delete (task as Partial<TaskModel>).favoriteAt;
+    }
+    await this.db.saveTask(task);
+    return task;
+  }
+
+  private isDirectTask(task: TaskModel) {
+    const shots = Array.isArray(task.shots)
+      ? (task.shots as Array<{ type?: string }>)
+      : [];
+    return (
+      !!task.directPrompt ||
+      task.scene === 'Direct' ||
+      shots.some((shot) => shot?.type === 'DirectPrompt')
+    );
   }
 }

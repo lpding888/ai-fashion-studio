@@ -177,6 +177,9 @@ export interface TaskModel {
   // Status
   status: TaskStatus;
 
+  // 用户收藏（仅对任务 owner 生效）
+  favoriteAt?: number;
+
   resultImages: string[];
 
   brainPlan?: BrainPlan;

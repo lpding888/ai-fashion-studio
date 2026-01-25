@@ -154,6 +154,15 @@ export const directRegenerateTask = async (taskId: string) => {
     return response.data;
 };
 
+export const toggleTaskFavorite = async (taskId: string, favorite: boolean) => {
+    const response = await api.patch(
+        `/tasks/${taskId}/favorite`,
+        { favorite },
+        { headers: { 'Content-Type': 'application/json' } },
+    );
+    return response.data;
+};
+
 export const directMessageTask = async (taskId: string, message: string) => {
     const response = await api.post(`/tasks/${taskId}/direct-message`, { message });
     return response.data;
