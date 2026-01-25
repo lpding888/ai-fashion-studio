@@ -73,11 +73,12 @@ export class StylePresetController {
     return !hasMeaningfulValue(analysis);
   }
 
-  private requireOwnerOrAdmin(preset: StylePreset, user: UserModel) {
+  private requireOwnerOrAdmin(preset: StylePreset, user: UserModel, allowSystem = false) {
     if (!preset) throw new BadRequestException('Preset not found');
 
     // 兼容旧数据：未标记 userId 的预设只允许管理员访问，避免“历史数据全员可见”
     if (!(preset as any).userId) {
+      if (allowSystem) return;
       if (!user || user.role !== 'ADMIN') {
         throw new ForbiddenException('需要管理员权限');
       }
@@ -158,7 +159,7 @@ export class StylePresetController {
         this.logger.warn(`Failed to parse tags: ${tagsStr}`, e);
         // 清理已上传的文件
         for (const file of files) {
-          await fs.remove(file.path).catch(() => {});
+          await fs.remove(file.path).catch(() => { });
         }
         throw new BadRequestException(
           'Invalid tags format (must be JSON array)',
@@ -188,7 +189,7 @@ export class StylePresetController {
           this.logger.log(`✅ Uploaded to COS: ${cosKey} -> ${cosUrl}`);
 
           // 删除本地临时文件
-          await fs.remove(file.path).catch(() => {});
+          await fs.remove(file.path).catch(() => { });
         } catch (error) {
           this.logger.error(
             `Failed to upload to COS: ${file.originalname}`,
@@ -245,8 +246,8 @@ export class StylePresetController {
     const presets = await this.db.getAllStylePresets();
     const styles = presets.filter((p: any) => p?.kind !== 'POSE');
     if (user.role === 'ADMIN') return styles;
-    // 兼容旧数据：不带 userId 的默认不返回给普通用户
-    return styles.filter((p: any) => p?.userId === user.id);
+    // 允许查看自己和系统的风格
+    return styles.filter((p: any) => !p?.userId || p?.userId === user.id);
   }
 
   /**
@@ -262,7 +263,7 @@ export class StylePresetController {
     if ((preset as any).kind === 'POSE') {
       throw new BadRequestException('Preset not found');
     }
-    this.requireOwnerOrAdmin(preset, user);
+    this.requireOwnerOrAdmin(preset, user, true); // Allow system presets for viewing
     return preset;
   }
 
@@ -364,11 +365,6 @@ export class StylePresetController {
   }
 
   /**
-   * 风格反推 (Style Ingestion)
-   * 上传一张图片，返回 AI 分析的 6 维风格参数
-   */
-
-  /**
    * AI 风格学习：上传图片，AI 分析并自动入库
    */
   @Post('learn')
@@ -424,7 +420,7 @@ export class StylePresetController {
           this.logger.log(`✅ Uploaded learned style image to COS: ${cosKey}`);
 
           // 删除本地临时文件
-          await fs.remove(file.path).catch(() => {});
+          await fs.remove(file.path).catch(() => { });
         } catch (error) {
           this.logger.error(
             `Failed to upload to COS: ${file.originalname}`,
@@ -530,7 +526,7 @@ export class StylePresetController {
         const v = String(p || '').trim();
         if (!v) continue;
         if (v.startsWith('http://') || v.startsWith('https://')) continue;
-        await fs.remove(v).catch(() => {});
+        await fs.remove(v).catch(() => { });
       }
       this.logger.error('Style Learning failed', error);
       throw new BadRequestException(

@@ -72,11 +72,15 @@ export class PosePresetController {
     }
   }
 
-  private requireOwnerOrAdmin(preset: any, user: UserModel) {
+  private requireOwnerOrAdmin(preset: any, user: UserModel, allowSystem = false) {
     if (!preset) throw new BadRequestException('Preset not found');
     if (user.role === 'ADMIN') return;
     const ownerId = preset.userId;
-    if (!ownerId || ownerId !== user.id) {
+    if (!ownerId) {
+      if (allowSystem) return;
+      throw new ForbiddenException('需要管理员权限');
+    }
+    if (ownerId !== user.id) {
       throw new ForbiddenException('无权访问该姿势预设');
     }
   }
@@ -126,7 +130,7 @@ export class PosePresetController {
         const key = `pose-presets/${presetId}${ext}`;
         await this.cos.uploadFile(key, file.path);
         imageUrlOrPath = this.cos.getImageUrl(key);
-        await fs.remove(file.path).catch(() => {});
+        await fs.remove(file.path).catch(() => { });
       } catch (e: any) {
         this.logger.warn(
           `COS upload failed for pose preset ${presetId}`,
@@ -202,7 +206,8 @@ export class PosePresetController {
     const all = await this.db.getAllStylePresets();
     const pose = all.filter((p: any) => p?.kind === 'POSE');
     if (user.role === 'ADMIN') return pose;
-    return pose.filter((p: any) => p?.userId === user.id);
+    // 允许查看自己和系统的姿势
+    return pose.filter((p: any) => !p?.userId || p?.userId === user.id);
   }
 
   @Get(':id')
@@ -211,7 +216,7 @@ export class PosePresetController {
     if (!preset || (preset as any).kind !== 'POSE') {
       throw new BadRequestException('Preset not found');
     }
-    this.requireOwnerOrAdmin(preset, user);
+    this.requireOwnerOrAdmin(preset, user, true); // Allow system
     return preset;
   }
 
@@ -328,7 +333,7 @@ export class PosePresetController {
       if (!v) continue;
       if (v.startsWith('http://') || v.startsWith('https://')) continue;
       if (await fs.pathExists(v)) {
-        await fs.remove(v).catch(() => {});
+        await fs.remove(v).catch(() => { });
       }
     }
 

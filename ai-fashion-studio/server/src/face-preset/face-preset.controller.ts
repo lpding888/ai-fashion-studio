@@ -70,11 +70,11 @@ export class FacePresetController {
     }
   }
 
-  private requireOwnerOrAdmin(preset: FacePreset, user: UserModel) {
+  private requireOwnerOrAdmin(preset: FacePreset, user: UserModel, allowSystem = false) {
     if (!preset) throw new BadRequestException('Preset not found');
 
-    // 兼容旧数据：未标记 userId 的预设只允许管理员访问，避免“历史数据全员可见”
     if (!preset.userId) {
+      if (allowSystem) return;
       this.requireAdmin(user);
       return;
     }
@@ -182,7 +182,8 @@ export class FacePresetController {
   async list(@CurrentUser() user: UserModel) {
     const presets = await this.db.getAllFacePresets();
     if (user.role === 'ADMIN') return presets;
-    return presets.filter((p) => p.userId === user.id);
+    // 允许查看自己和系统的模特
+    return presets.filter((p) => !p.userId || p.userId === user.id);
   }
 
   /**
@@ -194,7 +195,7 @@ export class FacePresetController {
     if (!preset) {
       throw new BadRequestException('Preset not found');
     }
-    this.requireOwnerOrAdmin(preset, user);
+    this.requireOwnerOrAdmin(preset, user, true); // Allow system
     return preset;
   }
 
