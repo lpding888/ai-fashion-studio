@@ -13,40 +13,47 @@ export function FluidBackground({ className, variant = "default" }: FluidBackgro
         switch (variant) {
             case "warm":
                 return {
+                    base: "from-[#FFF1E8] via-[#FFE4D1] to-[#FFF5E8]",
                     b1: "bg-orange-300/40",
                     b2: "bg-rose-300/40",
                     b3: "bg-amber-200/40"
                 };
             case "cool":
                 return {
+                    base: "from-[#EEF6FF] via-[#E9F9FF] to-[#F2F1FF]",
                     b1: "bg-blue-300/40",
                     b2: "bg-cyan-300/40",
                     b3: "bg-indigo-300/40"
                 };
             case "cyber":
                 return {
+                    base: "from-[#F5E9FF] via-[#F0E7FF] to-[#EAF0FF]",
                     b1: "bg-fuchsia-400/40",
                     b2: "bg-violet-500/40",
                     b3: "bg-blue-500/40"
                 };
             case "mint":
                 return {
+                    base: "from-[#EFFFF5] via-[#EAFDF7] to-[#E9F7FF]",
                     b1: "bg-emerald-300/40",
                     b2: "bg-teal-300/40",
                     b3: "bg-sky-300/40"
                 };
             case "sunset":
                 return {
+                    base: "from-[#FFF0EC] via-[#FFE9DD] to-[#FFF3D6]",
                     b1: "bg-rose-300/40",
                     b2: "bg-orange-300/40",
                     b3: "bg-amber-300/40"
                 };
-            default: // "default" - Warm/Soft logic from original
+            default: // "default" - Coral Trend (Warm/Vibrant)
                 return {
-                    b1: "bg-purple-300/30",
-                    b2: "bg-orange-300/30",
-                    b3: "bg-pink-300/30"
+                    base: "from-[#F8F9FA] via-[#FFF5F0] to-[#F0FFF4]",
+                    b1: "bg-[#FF7F50]/30", // Coral
+                    b2: "bg-[#FF4500]/20", // Persimmon
+                    b3: "bg-[#9ACD32]/20"  // Yellow Green
                 };
+
         }
     };
 
@@ -56,7 +63,7 @@ export function FluidBackground({ className, variant = "default" }: FluidBackgro
 
     return (
         <div className={cn("absolute inset-0 z-0 pointer-events-none overflow-hidden transition-colors duration-1000", className)}>
-            <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 via-purple-50/50 to-pink-50/50 opacity-80" />
+            <div className={cn("absolute inset-0 bg-gradient-to-br opacity-80", colors.base)} />
 
             {/* Animated Blobs with dynamic colors */}
             <div className={cn("absolute top-[-20%] left-[-10%] w-[70vw] h-[70vw] rounded-full blur-[120px] mix-blend-multiply animate-blob transition-colors duration-1000", colors.b1)} />

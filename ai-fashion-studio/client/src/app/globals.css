@@ -4,44 +4,71 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 :root {
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+  /* Core Colors */
+  --color-coral: #FF7F50;
+  --color-persimmon: #FF4500;
+  --color-yellow-green: #9ACD32;
+  --color-lavender: #D8B4FE;
+  --color-cloud-dancer: #F8F9FA;
+  --color-dark-grey: #333333;
+  --color-light-grey: #E9ECEF;
+  --color-white: #FFFFFF;
+
+  /* Semantic Mapping */
+  --background: var(--color-cloud-dancer);
+  --foreground: var(--color-dark-grey);
+
+  --card: var(--color-white);
+  --card-foreground: var(--color-dark-grey);
+
+  --popover: var(--color-white);
+  --popover-foreground: var(--color-dark-grey);
+
+  --primary: var(--color-coral);
+  --primary-foreground: var(--color-white);
+
+  --secondary: var(--color-yellow-green);
+  --secondary-foreground: var(--color-white);
+
+  --muted: var(--color-light-grey);
+  --muted-foreground: #666666;
+  /* Slightly darker than light grey for text */
+
+  /* Using Persimmon for Accent/Destructive/Highlight */
+  --accent: var(--color-persimmon);
+  --accent-foreground: var(--color-white);
+
+  --destructive: var(--color-persimmon);
+  --destructive-foreground: var(--color-white);
+
+  --border: var(--color-light-grey);
+  /* Default border, Use lavender for inputs explicitly */
+  --input: var(--color-light-grey);
+  --ring: var(--color-coral);
+
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+
+  /* Chart Colors (reused from palette) */
+  --chart-1: var(--color-coral);
+  --chart-2: var(--color-persimmon);
+  --chart-3: var(--color-yellow-green);
+  --chart-4: var(--color-lavender);
+  --chart-5: #FFD700;
+
+  /* Sidebar Specifics */
+  --sidebar: var(--color-cloud-dancer);
+  --sidebar-foreground: var(--color-dark-grey);
+  --sidebar-primary: var(--color-coral);
+  --sidebar-primary-foreground: var(--color-white);
+  --sidebar-accent: var(--color-white);
+  --sidebar-accent-foreground: var(--color-coral);
+  --sidebar-border: var(--color-light-grey);
+  --sidebar-ring: var(--color-coral);
 }
 
 .dark {
@@ -165,6 +192,40 @@
   }
 }
 
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes bounce-slow {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 .animate-blob {
   animation: blob 7s infinite;
 }
@@ -179,6 +240,18 @@
 
 .animate-shake {
   animation: shake 0.3s ease-in-out;
+}
+
+.animate-shimmer {
+  animation: shimmer 2s linear infinite;
+}
+
+.animate-bounce-slow {
+  animation: bounce-slow 3s infinite ease-in-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.5s ease-out forwards;
 }
 
 @keyframes jelly {
@@ -296,4 +369,21 @@
   border-color: rgba(255, 255, 255, 0.15);
   transform: translateY(-2px);
   transition: all 0.3s ease;
+}
+
+/* Utility Utilities */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.mask-fade-right {
+  mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
 }

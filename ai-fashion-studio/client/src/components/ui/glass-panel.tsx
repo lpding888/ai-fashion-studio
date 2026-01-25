@@ -10,9 +10,9 @@ export const GlassPanel = React.forwardRef<HTMLDivElement, GlassPanelProps>(
     ({ className, hoverEffect = false, intensity = 'medium', children, ...props }, ref) => {
 
         const intensityMap = {
-            low: 'bg-white/[0.02] border-white/5 backdrop-blur-md',
-            medium: 'bg-white/[0.05] border-white/10 backdrop-blur-lg',
-            high: 'bg-white/[0.08] border-white/15 backdrop-blur-xl',
+            low: 'bg-white/10 border-white/10 backdrop-blur-md shadow-sm',
+            medium: 'bg-white/30 border-white/30 backdrop-blur-lg shadow-md',
+            high: 'bg-white/50 border-white/40 backdrop-blur-xl shadow-xl saturate-150',
         };
 
         return (

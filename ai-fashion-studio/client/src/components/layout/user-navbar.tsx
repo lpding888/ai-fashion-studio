@@ -28,11 +28,11 @@ export function UserNavbar() {
     ];
 
     return (
-        <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
+        <header className="sticky top-0 z-50 w-full border-b border-[#FF7F50] bg-[#FF7F50] shadow-md transition-colors duration-300">
             <div className="container flex h-14 max-w-screen-2xl items-center justify-between px-4">
                 {/* Logo */}
                 <div className="flex items-center gap-2 mr-4">
-                    <Link href="/" className="flex items-center gap-2 font-bold text-xl bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent transition-opacity hover:opacity-80">
+                    <Link href="/" className="flex items-center gap-2 font-bold text-xl text-white transition-opacity hover:opacity-90 tracking-tight">
                         <span>AI Fashion Studio</span>
                     </Link>
                 </div>
@@ -48,8 +48,8 @@ export function UserNavbar() {
                                 key={item.href}
                                 href={item.href}
                                 className={cn(
-                                    "flex items-center gap-1.5 transition-colors hover:text-foreground/80",
-                                    isActive ? "text-foreground font-semibold" : "text-foreground/60"
+                                    "flex items-center gap-1.5 transition-colors hover:text-white/90 hover:bg-white/10 px-3 py-1.5 rounded-full",
+                                    isActive ? "bg-white text-[#FF7F50] font-bold shadow-sm" : "text-white/80"
                                 )}
                             >
                                 <Icon className="h-4 w-4" />
@@ -63,17 +63,16 @@ export function UserNavbar() {
                 <div className="flex items-center gap-4">
                     {/* 积分显示 */}
                     {isAuthenticated && (
-                        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-full border border-amber-500/20">
-                            <Coins className="h-4 w-4 text-amber-500" />
-                            <span className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 rounded-full border border-white/30 hover:bg-white/30 transition-colors">
+                            <Coins className="h-4 w-4 text-white" />
+                            <span className="text-sm font-bold text-white">
                                 {creditsLoading ? '...' : balance}
                             </span>
-                            <span className="text-xs text-muted-foreground">积分</span>
                         </div>
                     )}
 
                     <Link href="/settings">
-                        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full">
+                        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-white hover:bg-white/20 hover:text-white">
                             <Settings className="h-5 w-5" />
                             <span className="sr-only">设置</span>
                         </Button>
@@ -82,14 +81,14 @@ export function UserNavbar() {
                     {isAuthenticated ? (
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" className="h-9 px-2 gap-2 rounded-full">
-                                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">
+                                <Button variant="ghost" className="h-9 px-2 gap-2 rounded-full text-white hover:bg-white/20 hover:text-white">
+                                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#FF7F50] text-xs font-bold ring-2 ring-white/20">
                                         {(user?.nickname || user?.username || 'U').slice(0, 1).toUpperCase()}
                                     </span>
                                     <span className="text-sm font-medium max-w-[120px] truncate">
                                         {user?.nickname || user?.username || '用户'}
                                     </span>
-                                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                    <ChevronDown className="h-4 w-4 text-white/70" />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-48">
@@ -113,7 +112,7 @@ export function UserNavbar() {
                         </DropdownMenu>
                     ) : (
                         <Link href="/login">
-                            <Button variant="outline" size="sm" className="gap-2">
+                            <Button variant="secondary" size="sm" className="gap-2 bg-white text-[#FF7F50] hover:bg-white/90 border-0 font-bold">
                                 <LogIn className="h-4 w-4" />
                                 登录
                             </Button>
