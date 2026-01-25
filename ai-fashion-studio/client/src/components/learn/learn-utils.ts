@@ -17,9 +17,23 @@ export type TaskStatus =
 
 export function toImgSrc(pathOrUrl: string): string {
   if (!pathOrUrl) return "";
-  const normalized = String(pathOrUrl).replace(/\\/g, "/");
-  if (normalized.startsWith("http://") || normalized.startsWith("https://"))
+  const raw = String(pathOrUrl).trim();
+  if (!raw) return "";
+  if (raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
+  const normalized = raw.replace(/\\/g, "/");
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
     return normalized;
+  }
+  const lower = normalized.toLowerCase();
+  const uploadsIndex = lower.lastIndexOf("/uploads/");
+  if (uploadsIndex >= 0) {
+    const rel = normalized.slice(uploadsIndex + 1);
+    return `${BACKEND_ORIGIN}/${rel.replace(/^\/+/, "")}`;
+  }
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    const stripped = normalized.replace(/^[a-zA-Z]:/, "");
+    return `${BACKEND_ORIGIN}/${stripped.replace(/^\/+/, "")}`;
+  }
   return `${BACKEND_ORIGIN}/${normalized.replace(/^\/+/, "")}`;
 }
 
