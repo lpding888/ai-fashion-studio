@@ -313,6 +313,7 @@ export function LearnGeneratePage() {
   const [lightboxImages, setLightboxImages] = React.useState<LightboxItem[]>([]);
   const [lightboxInitialIndex, setLightboxInitialIndex] = React.useState(0);
   const [lightboxTaskId, setLightboxTaskId] = React.useState<string | undefined>(undefined);
+  const lightboxRequestRef = React.useRef<string | null>(null);
   const [taskDetailOpen, setTaskDetailOpen] = React.useState(false);
   const [taskDetailLoading, setTaskDetailLoading] = React.useState(false);
   const [taskDetailError, setTaskDetailError] = React.useState<string | null>(null);
@@ -1077,20 +1078,56 @@ export function LearnGeneratePage() {
     });
   };
 
+  const pickTaskResultUrl = React.useCallback((task?: TaskApi) => {
+    const direct = String(task?.resultImages?.[0] || "").trim();
+    if (direct) return toImgSrc(direct);
+    const shots = Array.isArray(task?.shots) ? task.shots : [];
+    const firstShot = shots.find((shot) => {
+      const raw = String(shot?.imageUrl || shot?.imagePath || "").trim();
+      return !!raw;
+    });
+    const raw = String(firstShot?.imageUrl || firstShot?.imagePath || "").trim();
+    return raw ? toImgSrc(raw) : undefined;
+  }, []);
+
   const buildTaskCard = React.useCallback(
-    (task: TaskApi | undefined, fallback: { id: string; createdAt: number }) => {
-      const resultUrl = task?.resultImages?.[0];
-      return {
-        id: task?.id ?? fallback.id,
-        status: task?.status || "PENDING",
-        createdAt: task?.createdAt || fallback.createdAt,
-        progress: task?.progress,
-        resultUrl: resultUrl ? toImgSrc(resultUrl) : undefined,
-        prompt: task?.directPrompt || task?.requirements || "正在生成任务...",
-      };
-    },
-    [],
+    (task: TaskApi | undefined, fallback: { id: string; createdAt: number }) => ({
+      id: task?.id ?? fallback.id,
+      status: task?.status || "PENDING",
+      createdAt: task?.createdAt || fallback.createdAt,
+      progress: task?.progress,
+      resultUrl: pickTaskResultUrl(task),
+      prompt: task?.directPrompt || task?.requirements || "正在生成任务...",
+    }),
+    [pickTaskResultUrl],
   );
+
+  const buildLightboxImages = React.useCallback((task: TaskApi | undefined): LightboxItem[] => {
+    if (!task) return [];
+    const shots = Array.isArray(task.shots) ? task.shots : [];
+    const shotImages = shots
+      .map((shot, idx) => {
+        const raw = String(shot?.imageUrl || shot?.imagePath || "").trim();
+        if (!raw) return null;
+        const id = String(shot?.id || shot?.shotCode || `${task.id}-${idx + 1}`);
+        return {
+          id,
+          url: toImgSrc(raw),
+          prompt: shot?.promptEn || shot?.prompt,
+        };
+      })
+      .filter(Boolean) as LightboxItem[];
+    if (shotImages.length) return shotImages;
+
+    const resultImages = Array.isArray(task.resultImages) ? task.resultImages : [];
+    return resultImages
+      .map((raw, idx) => {
+        const url = toImgSrc(String(raw || "").trim());
+        if (!url) return null;
+        return { id: `${task.id}-${idx + 1}`, url };
+      })
+      .filter(Boolean) as LightboxItem[];
+  }, []);
 
   const queueTaskCards = React.useMemo(
     () => queue.map((item) => buildTaskCard(tasksById[item.taskId], { id: item.taskId, createdAt: item.createdAt })),
@@ -1556,11 +1593,32 @@ export function LearnGeneratePage() {
                 tab={queueTab}
                 onTabChange={setQueueTab}
                 currentTaskId={null}
-                onImageClick={(taskId, url) => {
-                  setLightboxImages([{ id: taskId, url }]);
-                  setLightboxInitialIndex(0);
+                onImageClick={async (taskId) => {
+                  if (!taskId) return;
+                  lightboxRequestRef.current = taskId;
                   setLightboxTaskId(taskId);
-                  setLightboxOpen(true);
+                  setLightboxInitialIndex(0);
+                  try {
+                    const detail = await loadTaskDetail(taskId);
+                    if (lightboxRequestRef.current !== taskId) return;
+                    const images = buildLightboxImages(detail);
+                    if (images.length) {
+                      setLightboxImages(images);
+                      setLightboxOpen(true);
+                      return;
+                    }
+                  } catch (error) {
+                    if (lightboxRequestRef.current !== taskId) return;
+                    console.error(error);
+                  }
+                  if (lightboxRequestRef.current !== taskId) return;
+                  const fallback = buildLightboxImages(tasksById[taskId]);
+                  if (fallback.length) {
+                    setLightboxImages(fallback);
+                    setLightboxOpen(true);
+                    return;
+                  }
+                  flashNotice("暂无可预览图片");
                 }}
               />
             }
@@ -1636,7 +1694,9 @@ export function LearnGeneratePage() {
         onOpenChange={setLightboxOpen}
         images={lightboxImages}
         initialIndex={lightboxInitialIndex}
-        onRegenerate={retryQueueTask}
+        onRegenerate={() => {
+          if (lightboxTaskId) retryQueueTask(lightboxTaskId);
+        }}
         isRegenerating={!!queueRetryingTaskId}
         watermarkTaskId={lightboxTaskId}
       />

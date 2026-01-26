@@ -27,7 +27,7 @@ interface QueueSectionProps {
     onRetryTask?: (taskId: string) => void;
     onReuseTask?: (taskId: string) => void;
     onViewDetail?: (task: Task) => void;
-    onImageClick?: (taskId: string, imageUrl: string) => void;
+    onImageClick?: (taskId: string) => void;
     currentTaskId?: string | null;
     // Favorites
     favoriteIds?: string[];
@@ -201,7 +201,7 @@ export function QueueSection({
                                     onRetry={() => onRetryTask?.(task.id)}
                                     onReuse={() => onReuseTask?.(task.id)}
                                     onViewDetail={() => onViewDetail?.(task)}
-                                    onImageClick={() => task.resultUrl && onImageClick?.(task.id, task.resultUrl)}
+                                    onImageClick={() => task.resultUrl && onImageClick?.(task.id)}
                                     isCurrent={task.id === currentTaskId}
                                     isFavorite={favoriteIds.includes(task.id)}
                                     onToggleFavorite={() => onToggleFavorite?.(task.id)}
