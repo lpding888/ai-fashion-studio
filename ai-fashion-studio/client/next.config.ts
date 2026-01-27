@@ -13,8 +13,11 @@ const nextConfig: NextConfig = {
   // 并让输出追踪（standalone / output tracing）稳定在仓库根目录内。
   outputFileTracingRoot: path.join(configDir, '..'),
   
-  // 配置 API 代理，解决本地开发跨域和端口问题
+  // 仅在开发环境配置 API 代理，避免影响生产
   async rewrites() {
+    if (process.env.NODE_ENV !== 'development') {
+      return [];
+    }
     return [
       {
         source: '/api/:path*',
