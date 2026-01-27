@@ -237,7 +237,7 @@ export function StudioLayout({
                 <div
                     ref={containerRef}
                     className={cn(
-                        "flex-1 overflow-hidden",
+                        "flex-1 min-h-0 overflow-hidden",
                         // Desktop (>= 1024px): Resizable 3-column grid + resizers
                         "xl:grid xl:gap-0 xl:p-4",
                         "lg:max-xl:grid lg:max-xl:gap-0 lg:max-xl:p-3",
@@ -248,7 +248,7 @@ export function StudioLayout({
                         gridTemplateColumns: `minmax(${MIN_LEFT_WIDTH}px, ${effectiveLeft}px) ${RESIZER_WIDTH}px minmax(0, 1fr) ${RESIZER_WIDTH}px minmax(${MIN_RIGHT_WIDTH}px, ${effectiveRight}px)`,
                     }}
                 >
-                    <div className="min-w-0 h-full">
+                    <div className="min-w-0 min-h-0 h-full">
                         {resourcePanel}
                     </div>
                     <div
@@ -262,7 +262,7 @@ export function StudioLayout({
                     >
                         <div className="h-[60%] w-0.5 rounded-full bg-slate-300/70" />
                     </div>
-                    <div className="min-w-0 h-full">
+                    <div className="min-w-0 min-h-0 h-full">
                         {canvas}
                     </div>
                     <div
@@ -276,7 +276,7 @@ export function StudioLayout({
                     >
                         <div className="h-[60%] w-0.5 rounded-full bg-slate-300/70" />
                     </div>
-                    <div className="min-w-0 h-full">
+                    <div className="min-w-0 min-h-0 h-full">
                         {controlHub}
                     </div>
                 </div>

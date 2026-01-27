@@ -132,7 +132,7 @@ export function StudioCanvas({
     return (
         <main
             className={cn(
-                "relative flex flex-col h-full overflow-hidden",
+                "relative flex flex-col h-full min-h-0 overflow-hidden",
                 "lg:rounded-2xl lg:border lg:border-white/40 lg:bg-white/30 lg:backdrop-blur-sm lg:shadow-sm",
                 "max-lg:w-full max-lg:h-full",
                 className
@@ -169,7 +169,7 @@ export function StudioCanvas({
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-6">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-6">
                 {/* 1. Garment Board */}
                 <div className="flex-1 min-h-[300px]">
                     <GarmentBoard
