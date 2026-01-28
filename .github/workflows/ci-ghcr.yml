@@ -57,7 +57,15 @@ jobs:
 
       - name: Save images to tar
         run: |
-          docker save -o ai-fashion-images.tar             ai-fashion-server:latest             ai-fashion-server-migrator:latest             ai-fashion-client:latest
+          docker save -o ai-fashion-images.tar \
+            ai-fashion-server:latest \
+            ai-fashion-server-migrator:latest \
+            ai-fashion-client:latest
+
+      - name: Fix tar permissions
+        run: |
+          ls -l ai-fashion-images.tar
+          chmod 644 ai-fashion-images.tar
 
       - name: Upload images to server
         uses: appleboy/scp-action@v0.1.7
@@ -100,7 +108,7 @@ jobs:
             for img in ai-fashion-server ai-fashion-server-migrator ai-fashion-client; do
               if docker image inspect "${img}:latest" >/dev/null 2>&1; then
                 docker tag "${img}:latest" "${img}:rollback-${ROLLBACK_TAG}"
-                id="$(docker image inspect "${img}:rollback-${ROLLBACK_TAG}" --format {{.Id}} 2>/dev/null || true)"
+                id="$(docker image inspect "${img}:rollback-${ROLLBACK_TAG}" --format '{{.Id}}' 2>/dev/null || true)"
                 echo "${img}:rollback-${ROLLBACK_TAG} ${id}" >> "${ROLLBACK_TMP}"
               else
                 echo "${img}:latest (not found)" >> "${ROLLBACK_TMP}"
