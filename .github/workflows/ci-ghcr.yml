@@ -107,15 +107,15 @@ jobs:
               fi
             done
 
-            cat >> "${ROLLBACK_TMP}" <<EOF
-
-Rollback commands:
-  cd ${SERVER_PATH}
-  docker tag ai-fashion-server:rollback-${ROLLBACK_TAG} ai-fashion-server:latest
-  docker tag ai-fashion-server-migrator:rollback-${ROLLBACK_TAG} ai-fashion-server-migrator:latest
-  docker tag ai-fashion-client:rollback-${ROLLBACK_TAG} ai-fashion-client:latest
-  docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate server client caddy
-EOF
+            {
+              echo ""
+              echo "Rollback commands:"
+              echo "  cd ${SERVER_PATH}"
+              echo "  docker tag ai-fashion-server:rollback-${ROLLBACK_TAG} ai-fashion-server:latest"
+              echo "  docker tag ai-fashion-server-migrator:rollback-${ROLLBACK_TAG} ai-fashion-server-migrator:latest"
+              echo "  docker tag ai-fashion-client:rollback-${ROLLBACK_TAG} ai-fashion-client:latest"
+              echo "  docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate server client caddy"
+            } >> "${ROLLBACK_TMP}"
 
             cp -f "${ROLLBACK_TMP}" "${ROLLBACK_FILE}"
             rm -f "${ROLLBACK_TMP}"
