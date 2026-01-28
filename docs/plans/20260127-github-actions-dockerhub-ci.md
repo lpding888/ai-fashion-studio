@@ -1,11 +1,11 @@
-# ExecPlan - GitHub Actions + GHCR CI/CD
+# ExecPlan - GitHub Actions + SCP 直连部署
 
 ## 1) Goal（plain language）
-- 用 GitHub Actions 在 x86 Runner 上构建镜像并推送到 GHCR，让生产服务器只负责拉取镜像与重启服务。
+- 用 GitHub Actions 在 x86 Runner 上构建镜像并通过 SCP 传到服务器，再加载镜像并滚动更新。
 
 ## 2) Scope
 - In-scope：
-  - 新增 GitHub Actions workflow（构建/推送 client/server/migrator 镜像到 GHCR）
+  - 新增 GitHub Actions workflow（构建镜像并 SCP 到服务器）
   - 新增部署脚本（服务器侧拉取镜像 + 迁移 + compose up）
   - 文档说明（Secrets 配置与部署流程）
 - Out-of-scope：
@@ -14,7 +14,7 @@
   - 生产域名/反代规则修改
 
 ## 3) Files to change（最小集合）
-- `.github/workflows/ci-ghcr.yml`: CI 构建/推送镜像
+- `.github/workflows/ci-ghcr.yml`: CI 构建镜像并部署
 - `ai-fashion-studio/deploy/`: 复用现有 compose/env/caddy
 - `docs/runbooks/`: 增加 CI/CD 与部署步骤说明
 
@@ -29,9 +29,9 @@
 - Rollback：只回滚镜像标签/服务重启
 
 ## 6) Implementation steps（小步快跑）
-1) 新增 GitHub Actions workflow，使用 buildx 构建 linux/amd64 镜像并推送 GHCR。
-2) 增加部署脚本（服务器拉取镜像、运行 migrate、compose up -d）。
-3) 更新文档：GHCR 权限/登录、部署流程、回滚指引。
+1) 新增 GitHub Actions workflow，使用 buildx 构建 linux/amd64 镜像并通过 SCP 传输。
+2) 服务器加载镜像、运行 migrate、compose up -d。
+3) 更新文档：SSH secrets、部署流程、回滚指引。
 
 ## 7) Test plan
 - unit：不新增
@@ -49,5 +49,5 @@
 
 ## 9) Open questions（do not guess）
 - Q1：GitHub 仓库 owner 是否为 lpding888？
-- Q2：镜像命名是否固定为 ai-fashion-client/server/migrator？
+- Q2：服务器是否允许 GitHub Actions 通过 SSH 访问？
 - Q3：部署时使用 root 还是 ubuntu 用户？
