@@ -1210,9 +1210,14 @@ export function LearnGeneratePage() {
 
     setPromptSnippetsBusy("create");
     try {
-      // 1. 生成并保存
       const res = await createPromptSnippet({ text: text, name: nameOverride });
-      const created = res?.status === 201 || res?.data ? (res.data as PromptSnippet) : null;
+      const created =
+        res && typeof res === "object"
+          ? ("id" in res
+            ? (res as PromptSnippet)
+            : ((res as { data?: PromptSnippet; snippet?: PromptSnippet }).snippet
+              ?? (res as { data?: PromptSnippet }).data))
+          : null;
       if (created) {
         setPromptSnippets((prev) => [created, ...prev]);
         setSelectedSnippetId(created.id);

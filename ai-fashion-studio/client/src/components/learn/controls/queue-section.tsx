@@ -4,13 +4,6 @@ import * as React from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
 import { Loader2, CheckCircle2, AlertCircle, Clock, Trash2, Repeat, Info, Heart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
@@ -150,15 +143,37 @@ export function QueueSection({
 
                 <div className="flex items-center gap-1">
                     {activeTab === "queue" && queueBaseLimit && onToggleShowAll && (
-                        <Select value={queueViewMode} onValueChange={handleQueueViewModeChange}>
-                            <SelectTrigger className={cn("text-slate-500 px-2 bg-white/70 border-slate-200/50", isCompact ? "h-5 text-[9px]" : "h-6 text-[10px]")}>
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="recent">最近 {queueBaseLimit} 条</SelectItem>
-                                <SelectItem value="all">显示全部{typeof queueTotal === "number" ? ` (${queueTotal})` : ""}</SelectItem>
-                            </SelectContent>
-                        </Select>
+                        <div className={cn(
+                            "flex items-center bg-white/70 border border-slate-200/50 rounded-md p-0.5",
+                            isCompact ? "text-[9px]" : "text-[10px]"
+                        )}>
+                            <button
+                                type="button"
+                                onClick={() => handleQueueViewModeChange("recent")}
+                                className={cn(
+                                    "px-2 py-0.5 rounded transition-all font-semibold",
+                                    isCompact ? "h-5" : "h-6",
+                                    queueViewMode === "recent"
+                                        ? "bg-white text-[#FF7F50] shadow-sm ring-1 ring-black/5"
+                                        : "text-slate-500 hover:text-slate-700"
+                                )}
+                            >
+                                最近 {queueBaseLimit} 条
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleQueueViewModeChange("all")}
+                                className={cn(
+                                    "px-2 py-0.5 rounded transition-all font-semibold",
+                                    isCompact ? "h-5" : "h-6",
+                                    queueViewMode === "all"
+                                        ? "bg-white text-[#FF7F50] shadow-sm ring-1 ring-black/5"
+                                        : "text-slate-500 hover:text-slate-700"
+                                )}
+                            >
+                                显示全部{typeof queueTotal === "number" ? ` (${queueTotal})` : ""}
+                            </button>
+                        </div>
                     )}
                     {activeTab === "queue" && onClearCompleted && queueItems.some(t => t.status === "COMPLETED" || t.status === "FAILED") && (
                         <Button
@@ -323,8 +338,8 @@ function TaskItem({
                                     onToggleFavorite();
                                 }}
                                 className={cn(
-                                    "p-1 rounded transition-colors group-hover:opacity-100",
-                                    isFavorite ? "opacity-100 text-[#FF4500]" : "opacity-0 text-slate-300 hover:text-[#FF4500]"
+                                    "p-1 rounded transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100",
+                                    isFavorite ? "text-[#FF4500]" : "text-slate-300 hover:text-[#FF4500]"
                                 )}
                                 title={isFavorite ? "取消收藏" : "收藏"}
                             >

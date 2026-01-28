@@ -266,7 +266,7 @@ export function GarmentBoard({
             {totalCount > 0 ? (
                 /* Grid View */
                 <div className="w-full h-full p-4 overflow-y-auto">
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 animate-in fade-in zoom-in-95 duration-300">
+                    <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(120px,1fr))] place-content-start animate-in fade-in zoom-in-95 duration-300">
                         {/* Unified Items List */}
                         <DndContext
                             sensors={sensors}

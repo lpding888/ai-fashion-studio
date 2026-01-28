@@ -477,7 +477,7 @@ export function ResourcePanel({
                         </div>
                     )}
 
-                    <StaggerContainer key={activeTab} className={cn("grid gap-2 pb-12", isCompact ? "grid-cols-1" : "grid-cols-2")}>
+                    <StaggerContainer key={activeTab} className={cn("grid gap-2 pb-12", isCompact ? "grid-cols-1" : "grid-cols-3")}>
                         {/* @ts-expect-error - activeItems is a union type, handled correctly at runtime */}
                         {orderBySelection(activeItems,
                             activeTab === "styles" ? selectedStyleIds :
@@ -535,7 +535,7 @@ export function ResourcePanel({
                 {/* Footer Actions */}
                 <div className="p-3 border-t border-white/20 bg-white/40 shrink-0 space-y-2 min-h-[100px]">
                     {!batchMode ? (
-                        <div className={cn("grid gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300", isCompact ? "grid-cols-1" : "grid-cols-2")}>
+                        <div className={cn("grid gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300", isCompact ? "grid-cols-1" : "grid-cols-3")}>
                             <Button
                                 variant="outline"
                                 className={cn("w-full justify-start gap-2 bg-white/50 hover:bg-white/80 transition-colors", isCompact && "h-8 text-[10px]")}
