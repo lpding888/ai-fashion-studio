@@ -1,12 +1,34 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { json, urlencoded } from 'express';
 import { AdminLogService } from './admin-log/admin-log.service';
 import { StreamLogger } from './admin-log/stream-logger';
 import { config as loadEnv } from 'dotenv';
+import { AdminAnalyticsModule } from './admin-analytics/admin-analytics.module';
+import { AdminLogModule } from './admin-log/admin-log.module';
+import { AuthModule } from './auth/auth.module';
+import { BrainPromptModule } from './brain-prompt/brain-prompt.module';
+import { BrainRoutingModule } from './brain-routing/brain-routing.module';
+import { CosModule } from './cos/cos.module';
+import { CreditModule } from './credit/credit.module';
+import { DirectPromptModule } from './direct-prompt/direct-prompt.module';
+import { FacePresetModule } from './face-preset/face-preset.module';
+import { LearnPromptModule } from './learn-prompt/learn-prompt.module';
+import { McpModule } from './mcp/mcp.module';
+import { ModelProfileModule } from './model-profile/model-profile.module';
+import { PosePresetModule } from './pose-preset/pose-preset.module';
+import { PresetCollectionModule } from './preset-collection/preset-collection.module';
+import { PresetMetaModule } from './preset-meta/preset-meta.module';
+import { PromptOptimizerModule } from './prompt-optimizer/prompt-optimizer.module';
+import { PromptSnippetModule } from './prompt-snippet/prompt-snippet.module';
+import { StylePresetModule } from './style-preset/style-preset.module';
+import { TaskModule } from './task/task.module';
+import { UserAssetModule } from './user-asset/user-asset.module';
+import { WorkflowPromptModule } from './workflow-prompt/workflow-prompt.module';
 
 const loadEnvFiles = () => {
   const serverRoot = resolve(__dirname, '..', '..');
@@ -58,9 +80,47 @@ async function bootstrap() {
   // ✅ 设置全局API前缀
   app.setGlobalPrefix('api');
 
+  const isProd = process.env.NODE_ENV === 'production';
+  const enableSwagger = process.env.ENABLE_SWAGGER === 'true';
+  if (enableSwagger && !isProd) {
+    const config = new DocumentBuilder()
+      .setTitle('AI Fashion Studio API')
+      .setDescription('API 文档（Phase 2：核心 + 扩展模块）')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .addServer('/api')
+      .build();
+    const document = SwaggerModule.createDocument(app, config, {
+      include: [
+        AuthModule,
+        CreditModule,
+        TaskModule,
+        CosModule,
+        FacePresetModule,
+        StylePresetModule,
+        PosePresetModule,
+        ModelProfileModule,
+        BrainPromptModule,
+        BrainRoutingModule,
+        DirectPromptModule,
+        LearnPromptModule,
+        WorkflowPromptModule,
+        PromptSnippetModule,
+        PromptOptimizerModule,
+        PresetMetaModule,
+        PresetCollectionModule,
+        UserAssetModule,
+        AdminLogModule,
+        AdminAnalyticsModule,
+        McpModule,
+      ],
+      deepScanRoutes: true,
+    });
+    SwaggerModule.setup('api-docs', app, document);
+  }
+
   // Serve Static Assets
   // ⚠️ 生产环境仅暴露 uploads，避免静态暴露源码/环境变量等敏感文件
-  const isProd = process.env.NODE_ENV === 'production';
   const staticRoot = isProd
     ? join(process.cwd(), 'uploads')
     : join(process.cwd());
