@@ -7,6 +7,9 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { AppService } from './app.service';
+import { ZodValidationPipe } from './common/zod-validation.pipe';
+import { TestConnectionBodySchema } from './contracts/api.schemas';
+import { z } from 'zod';
 
 @Controller()
 export class AppController {
@@ -19,7 +22,8 @@ export class AppController {
 
   @Post('test-connection')
   async testConnection(
-    @Body() body: { gateway: string; apiKey: string; model?: string },
+    @Body(new ZodValidationPipe(TestConnectionBodySchema))
+    body: z.infer<typeof TestConnectionBodySchema>,
   ) {
     const axios = require('axios');
 

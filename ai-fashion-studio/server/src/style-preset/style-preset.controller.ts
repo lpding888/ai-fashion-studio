@@ -13,6 +13,14 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { DbService } from '../db/db.service';
 import { StylePreset } from '../db/models';
 import * as crypto from 'crypto';
@@ -28,21 +36,16 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { z } from 'zod';
+import {
+  StylePresetRelearnBodySchema,
+  StylePresetUpdateBodySchema,
+} from '../contracts/api.schemas';
 
 const STYLE_PRESETS_DIR = './uploads/style-presets';
 const MAX_FILES = 3; // 单个预设最多 3 张图
 
-const UpdateStylePresetBodySchema = z
-  .object({
-    name: z.string().trim().min(1).optional(),
-    description: z.string().trim().optional(),
-    tags: z.string().trim().optional(), // JSON 字符串
-    styleHint: z.string().trim().optional(),
-  })
-  .strict();
-
-const RelearnBodySchema = z.object({}).strict();
-
+@ApiTags('StylePresets')
+@ApiBearerAuth()
 @Controller('style-presets')
 export class StylePresetController {
   private logger = new Logger(StylePresetController.name);
@@ -95,6 +98,22 @@ export class StylePresetController {
    * 创建新的风格预设（支持多图上传）
    */
   @Post()
+  @ApiOperation({ summary: '创建风格预设' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        images: { type: 'array', items: { type: 'string', format: 'binary' } },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        tags: { type: 'string', description: 'JSON 数组字符串' },
+        styleHint: { type: 'string' },
+        analysis: { type: 'string', description: 'JSON 字符串' },
+      },
+      required: ['images', 'name'],
+    },
+  })
   @UseInterceptors(
     FilesInterceptor('images', MAX_FILES, {
       storage: diskStorage({
@@ -242,6 +261,7 @@ export class StylePresetController {
    * 获取所有风格预设
    */
   @Get()
+  @ApiOperation({ summary: '获取风格预设列表' })
   async list(@CurrentUser() user: UserModel) {
     const presets = await this.db.getAllStylePresets();
     const styles = presets.filter((p: any) => p?.kind !== 'POSE');
@@ -254,6 +274,8 @@ export class StylePresetController {
    * 获取单个风格预设
    */
   @Get(':id')
+  @ApiOperation({ summary: '获取风格预设详情' })
+  @ApiParam({ name: 'id', type: String })
   async getOne(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getStylePreset(id);
     if (!preset) {
@@ -271,11 +293,24 @@ export class StylePresetController {
    * 更新风格预设（仅元数据，不包括图片）
    */
   @Patch(':id')
+  @ApiOperation({ summary: '更新风格预设' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        description: { type: 'string' },
+        tags: { type: 'string', description: 'JSON 数组字符串' },
+        styleHint: { type: 'string' },
+      },
+    },
+  })
   async update(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(UpdateStylePresetBodySchema))
-    body: z.infer<typeof UpdateStylePresetBodySchema>,
+    @Body(new ZodValidationPipe(StylePresetUpdateBodySchema))
+    body: z.infer<typeof StylePresetUpdateBodySchema>,
   ) {
     const existing = await this.db.getStylePreset(id);
     if (!existing || (existing as any).kind === 'POSE') {
@@ -326,6 +361,8 @@ export class StylePresetController {
    * 删除风格预设
    */
   @Delete(':id')
+  @ApiOperation({ summary: '删除风格预设' })
+  @ApiParam({ name: 'id', type: String })
   async delete(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getStylePreset(id);
     if (!preset) {
@@ -368,6 +405,17 @@ export class StylePresetController {
    * AI 风格学习：上传图片，AI 分析并自动入库
    */
   @Post('learn')
+  @ApiOperation({ summary: '风格学习（上传图片）' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        images: { type: 'array', items: { type: 'string', format: 'binary' } },
+      },
+      required: ['images'],
+    },
+  })
   @UseInterceptors(
     FilesInterceptor('images', 5, {
       // Allow up to 5 images
@@ -540,11 +588,14 @@ export class StylePresetController {
    * 说明：用于“场景学习不够强/想换更强提示词后重跑”等场景。
    */
   @Post(':id/relearn')
+  @ApiOperation({ summary: '风格学习重试' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({ schema: { type: 'object' } })
   async relearn(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(RelearnBodySchema))
-    _body: z.infer<typeof RelearnBodySchema>,
+    @Body(new ZodValidationPipe(StylePresetRelearnBodySchema))
+    _body: z.infer<typeof StylePresetRelearnBodySchema>,
   ) {
     const existing = await this.db.getStylePreset(id);
     if (!existing || (existing as any).kind === 'POSE') {
@@ -636,6 +687,7 @@ export class StylePresetController {
    * 获取迁移状态
    */
   @Get('migration/status')
+  @ApiOperation({ summary: '获取迁移状态' })
   async getMigrationStatus() {
     return this.migrationService.getMigrationStatus();
   }
@@ -644,6 +696,7 @@ export class StylePresetController {
    * 执行批量迁移到COS
    */
   @Post('migration/execute')
+  @ApiOperation({ summary: '执行迁移到 COS' })
   async executeMigration() {
     return this.migrationService.migrateToCoS();
   }

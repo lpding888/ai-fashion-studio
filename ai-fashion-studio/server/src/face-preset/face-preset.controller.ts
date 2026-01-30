@@ -13,6 +13,14 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { DbService } from '../db/db.service';
 import { CosService } from '../cos/cos.service';
 import { FacePresetMigrationService } from './face-preset-migration.service';
@@ -25,32 +33,15 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { z } from 'zod';
+import {
+  CreateFacePresetBodySchema,
+  UpdateFacePresetBodySchema,
+} from '../contracts/api.schemas';
 
 const FACE_PRESETS_DIR = './uploads/face-presets';
-const FacePresetGenderSchema = z.enum(['female', 'male', 'other']);
 
-const CreateFacePresetBodySchema = z
-  .object({
-    name: z.string().trim().min(1),
-    gender: FacePresetGenderSchema.optional(),
-    height: z.string().trim().optional(),
-    weight: z.string().trim().optional(),
-    measurements: z.string().trim().optional(),
-    description: z.string().trim().optional(),
-  })
-  .strict();
-
-const UpdateFacePresetBodySchema = z
-  .object({
-    name: z.string().trim().min(1).optional(),
-    gender: FacePresetGenderSchema.optional(),
-    height: z.union([z.string().trim(), z.number()]).optional(),
-    weight: z.union([z.string().trim(), z.number()]).optional(),
-    measurements: z.string().trim().optional(),
-    description: z.string().trim().optional(),
-  })
-  .strict();
-
+@ApiTags('FacePresets')
+@ApiBearerAuth()
 @Controller('face-presets')
 export class FacePresetController {
   private logger = new Logger(FacePresetController.name);
@@ -89,6 +80,23 @@ export class FacePresetController {
    * Create new face preset
    */
   @Post()
+  @ApiOperation({ summary: '创建模特预设' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', format: 'binary' },
+        name: { type: 'string' },
+        gender: { type: 'string', enum: ['female', 'male', 'other'] },
+        height: { type: 'string' },
+        weight: { type: 'string' },
+        measurements: { type: 'string' },
+        description: { type: 'string' },
+      },
+      required: ['image', 'name'],
+    },
+  })
   @UseInterceptors(
     FileInterceptor('image', {
       storage: memoryStorage(), // 使用内存存储
@@ -179,6 +187,7 @@ export class FacePresetController {
    * Get all face presets
    */
   @Get()
+  @ApiOperation({ summary: '获取模特预设列表' })
   async list(@CurrentUser() user: UserModel) {
     const presets = await this.db.getAllFacePresets();
     if (user.role === 'ADMIN') return presets;
@@ -190,6 +199,8 @@ export class FacePresetController {
    * Get single face preset
    */
   @Get(':id')
+  @ApiOperation({ summary: '获取模特预设详情' })
+  @ApiParam({ name: 'id', type: String })
   async getOne(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getFacePreset(id);
     if (!preset) {
@@ -203,6 +214,21 @@ export class FacePresetController {
    * Update face preset (rename)
    */
   @Patch(':id')
+  @ApiOperation({ summary: '更新模特预设' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        gender: { type: 'string', enum: ['female', 'male', 'other'] },
+        height: { type: 'string' },
+        weight: { type: 'string' },
+        measurements: { type: 'string' },
+        description: { type: 'string' },
+      },
+    },
+  })
   async update(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
@@ -252,6 +278,8 @@ export class FacePresetController {
    * Delete face preset
    */
   @Delete(':id')
+  @ApiOperation({ summary: '删除模特预设' })
+  @ApiParam({ name: 'id', type: String })
   async delete(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getFacePreset(id);
     if (!preset) {
@@ -277,6 +305,7 @@ export class FacePresetController {
    * GET /face-presets/migration/status
    */
   @Get('migration/status')
+  @ApiOperation({ summary: '获取迁移状态' })
   async getMigrationStatus(@CurrentUser() user: UserModel) {
     this.requireAdmin(user);
     return this.migrationService.getMigrationStatus();
@@ -287,6 +316,7 @@ export class FacePresetController {
    * POST /face-presets/migration/execute
    */
   @Post('migration/execute')
+  @ApiOperation({ summary: '执行迁移到 COS' })
   async executeMigration(@CurrentUser() user: UserModel) {
     this.requireAdmin(user);
     return this.migrationService.migrateToCoS();

@@ -8,23 +8,25 @@ import {
   Logger,
   ForbiddenException,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { CreditService } from './credit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import {
+  AdminOverviewQuerySchema,
+  AdminRechargeBodySchema,
+} from '../contracts/api.schemas';
 
-const AdminOverviewQuerySchema = z.object({
-  topN: z.coerce.number().int().min(1).max(100).optional(),
-  recentN: z.coerce.number().int().min(1).max(500).optional(),
-});
-
-const AdminRechargeBodySchema = z.object({
-  userId: z.string().uuid(),
-  amount: z.coerce.number().int().positive(),
-  reason: z.string().trim().min(1).max(200).optional(),
-});
-
+@ApiTags('Credits')
+@ApiBearerAuth()
 @Controller('credits')
 export class CreditController {
   private logger = new Logger(CreditController.name);
@@ -36,6 +38,8 @@ export class CreditController {
    * GET /api/credits?userId=xxx
    */
   @Get()
+  @ApiOperation({ summary: '获取积分余额' })
+  @ApiQuery({ name: 'userId', required: false, type: String })
   async getUserCredits(
     @CurrentUser() user: UserModel,
     @Query('userId') userId?: string,
@@ -49,6 +53,10 @@ export class CreditController {
    * GET /api/credits/transactions?userId=xxx&page=1&limit=20
    */
   @Get('transactions')
+  @ApiOperation({ summary: '获取积分流水' })
+  @ApiQuery({ name: 'userId', required: false, type: String })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
   async getTransactions(
     @CurrentUser() user: UserModel,
     @Query('userId') userId: string,
@@ -71,6 +79,9 @@ export class CreditController {
    * GET /api/credits/check?userId=xxx&shotCount=4
    */
   @Get('check')
+  @ApiOperation({ summary: '检查积分是否足够' })
+  @ApiQuery({ name: 'userId', required: false, type: String })
+  @ApiQuery({ name: 'shotCount', required: true, type: Number })
   async checkCredits(
     @CurrentUser() user: UserModel,
     @Query('userId') userId: string,
@@ -86,6 +97,18 @@ export class CreditController {
    * POST /api/credits/admin/recharge
    */
   @Post('admin/recharge')
+  @ApiOperation({ summary: '管理员充值积分' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string' },
+        amount: { type: 'number' },
+        reason: { type: 'string' },
+      },
+      required: ['userId', 'amount'],
+    },
+  })
   async adminRecharge(
     @CurrentUser() admin: UserModel,
     @Body(new ZodValidationPipe(AdminRechargeBodySchema))
@@ -119,6 +142,9 @@ export class CreditController {
    * GET /api/credits/admin/overview
    */
   @Get('admin/overview')
+  @ApiOperation({ summary: '积分概览（管理员）' })
+  @ApiQuery({ name: 'topN', required: false, type: Number })
+  @ApiQuery({ name: 'recentN', required: false, type: Number })
   async getAdminOverview(
     @CurrentUser() admin: UserModel,
     @Query(new ZodValidationPipe(AdminOverviewQuerySchema))

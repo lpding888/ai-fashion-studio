@@ -17,6 +17,15 @@ import {
   AnyFilesInterceptor,
   FilesInterceptor,
 } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { TaskService } from './task.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { diskStorage } from 'multer';
@@ -29,208 +38,221 @@ import type { TaskModel, UserModel } from '../db/models';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { z } from 'zod';
 import { TaskAccessService } from './task-access.service';
+import {
+  MAX_DIRECT_SHOTS,
+  MAX_TOTAL_IMAGES,
+  DIRECT_LAYOUT_MODES_ARRAY,
+} from './task.constants';
+import {
+  ApproveTaskBodySchema,
+  ClaimTaskBodySchema,
+  CreateDirectTaskBodySchema,
+  CreateDirectUrlsTaskBodySchema,
+  DirectMessageBodySchema,
+  DirectRegenerateBodySchema,
+  EditShotBodySchema,
+  GetTasksQuerySchema,
+  TaskApproveResponseSchema,
+  TaskCreateResponseSchema,
+  TaskDeleteResponseSchema,
+  TaskListResponseSchema,
+  TaskModelSchema,
+  TaskRetryResponseSchema,
+  TaskUpdateShotPromptResponseSchema,
+  EditShotResponseSchema,
+  ToggleFavoriteBodySchema,
+} from '../contracts/api.schemas';
+import { assertResponse } from '../common/response-contract';
+import { normalizeTaskResponse } from './task-response';
 
-const MAX_TOTAL_IMAGES = 14;
-const MAX_DIRECT_SHOTS = 6;
-const DIRECT_LAYOUT_MODES = ['Individual', 'Grid'] as const;
+const CreateTaskSwaggerSchema = {
+  type: 'object',
+  properties: {
+    files: {
+      type: 'array',
+      items: { type: 'string', format: 'binary' },
+      description: '衣服参考图文件（multipart/form-data）',
+    },
+    face_refs: {
+      type: 'array',
+      items: { type: 'string', format: 'binary' },
+      description: '人脸参考图文件（可选）',
+    },
+    style_refs: {
+      type: 'array',
+      items: { type: 'string', format: 'binary' },
+      description: '风格参考图文件（可选）',
+    },
+    file_urls: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '衣服参考图 URL（可选）',
+    },
+    face_ref_urls: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '人脸参考图 URL（可选）',
+    },
+    style_ref_urls: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '风格参考图 URL（可选）',
+    },
+    requirements: { type: 'string', description: '任务需求描述' },
+    shot_count: { type: 'number', minimum: 1 },
+    shotCount: { type: 'number', minimum: 1 },
+    layout_mode: { type: 'string', enum: DIRECT_LAYOUT_MODES_ARRAY },
+    layoutMode: { type: 'string', enum: DIRECT_LAYOUT_MODES_ARRAY },
+    scene: { type: 'string', description: '场景（Auto/Direct 等）' },
+    resolution: { type: 'string', enum: ['1K', '2K', '4K'] },
+    autoApprove: { type: 'boolean' },
+    workflow: { type: 'string', enum: ['legacy', 'hero_storyboard'] },
+    autoApproveHero: { type: 'boolean' },
+    location: { type: 'string' },
+    style_direction: { type: 'string' },
+    garment_focus: {
+      type: 'string',
+      enum: ['top', 'bottom', 'footwear', 'accessories', 'full_outfit'],
+    },
+    aspect_ratio: {
+      type: 'string',
+      enum: ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    },
+    aspectRatio: {
+      type: 'string',
+      enum: ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    },
+    face_preset_ids: {
+      type: 'string',
+      description: '人脸预设 ID（逗号分隔）',
+    },
+    style_preset_ids: {
+      type: 'string',
+      description: '风格预设 ID（逗号分隔）',
+    },
+  },
+};
 
-const ClaimTaskBodySchema = z.object({
-  claimToken: z.string().trim().min(1, 'claimToken 不能为空'),
-});
+const CreateDirectTaskSwaggerSchema = {
+  type: 'object',
+  properties: {
+    garment_images: {
+      type: 'array',
+      items: { type: 'string', format: 'binary' },
+      description: '衣服图片（最多 6 张）',
+    },
+    prompt: { type: 'string' },
+    resolution: { type: 'string', enum: ['1K', '2K', '4K'] },
+    aspect_ratio: {
+      type: 'string',
+      enum: ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    },
+    aspectRatio: {
+      type: 'string',
+      enum: ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    },
+    style_preset_ids: {
+      type: 'string',
+      description: '风格预设 ID（逗号分隔，最多 1 个）',
+    },
+    pose_preset_ids: {
+      type: 'string',
+      description: '姿势预设 ID（逗号分隔，最多 4 个）',
+    },
+    face_preset_ids: {
+      type: 'string',
+      description: '人脸预设 ID（逗号分隔，最多 3 个）',
+    },
+    layout_mode: { type: 'string', enum: DIRECT_LAYOUT_MODES_ARRAY },
+    layoutMode: { type: 'string', enum: DIRECT_LAYOUT_MODES_ARRAY },
+    shot_count: {
+      type: 'number',
+      minimum: 1,
+      maximum: MAX_DIRECT_SHOTS,
+    },
+    shotCount: {
+      type: 'number',
+      minimum: 1,
+      maximum: MAX_DIRECT_SHOTS,
+    },
+    includeThoughts: { type: 'boolean' },
+    seed: { type: 'number' },
+    temperature: { type: 'number', minimum: 0, maximum: 2 },
+  },
+  required: ['prompt'],
+};
 
-const GetTasksQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-    // ADMIN only: all | mine；非管理员忽略该字段
-    scope: z.enum(['all', 'mine']).optional(),
-    // ADMIN only: filter tasks by owner userId
-    userId: z.string().uuid().optional(),
-    // Optional search keyword (id/requirements). ADMIN-only semantics are handled in service.
-    q: z.string().trim().max(200).optional(),
-    directOnly: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      if (typeof v === 'boolean') return v;
-      if (typeof v === 'number') return v === 1;
-      if (typeof v === 'string') {
-        const s = v.trim().toLowerCase();
-        if (s === 'true' || s === '1' || s === 'yes') return true;
-        if (s === 'false' || s === '0' || s === 'no') return false;
-      }
-      return undefined;
-    }, z.boolean().optional()),
-    direct_only: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      if (typeof v === 'boolean') return v;
-      if (typeof v === 'number') return v === 1;
-      if (typeof v === 'string') {
-        const s = v.trim().toLowerCase();
-        if (s === 'true' || s === '1' || s === 'yes') return true;
-        if (s === 'false' || s === '0' || s === 'no') return false;
-      }
-      return undefined;
-    }, z.boolean().optional()),
-    favoriteOnly: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      if (typeof v === 'boolean') return v;
-      if (typeof v === 'number') return v === 1;
-      if (typeof v === 'string') {
-        const s = v.trim().toLowerCase();
-        if (s === 'true' || s === '1' || s === 'yes') return true;
-        if (s === 'false' || s === '0' || s === 'no') return false;
-      }
-      return undefined;
-    }, z.boolean().optional()),
-    favorite_only: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      if (typeof v === 'boolean') return v;
-      if (typeof v === 'number') return v === 1;
-      if (typeof v === 'string') {
-        const s = v.trim().toLowerCase();
-        if (s === 'true' || s === '1' || s === 'yes') return true;
-        if (s === 'false' || s === '0' || s === 'no') return false;
-      }
-      return undefined;
-    }, z.boolean().optional()),
-    // Optional status filter. (Keep explicit enum to avoid typos silently failing.)
-    status: z
-      .enum([
-        'DRAFT',
-        'PENDING',
-        'QUEUED',
-        'PLANNING',
-        'AWAITING_APPROVAL',
-        'RENDERING',
-        'COMPLETED',
-        'FAILED',
-        'HERO_RENDERING',
-        'AWAITING_HERO_APPROVAL',
-        'STORYBOARD_PLANNING',
-        'STORYBOARD_READY',
-        'SHOTS_RENDERING',
-      ])
-      .optional(),
-  })
-  .passthrough();
+const CreateDirectUrlsTaskSwaggerSchema = {
+  type: 'object',
+  properties: {
+    garmentUrls: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '衣服图片 URL（至少 1 张）',
+    },
+    prompt: { type: 'string' },
+    resolution: { type: 'string', enum: ['1K', '2K', '4K'] },
+    aspect_ratio: {
+      type: 'string',
+      enum: ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    },
+    aspectRatio: {
+      type: 'string',
+      enum: ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    },
+    stylePresetIds: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '风格预设 ID（最多 1 个）',
+    },
+    posePresetIds: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '姿势预设 ID（最多 4 个）',
+    },
+    facePresetIds: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '人脸预设 ID（最多 3 个）',
+    },
+    layout_mode: { type: 'string', enum: DIRECT_LAYOUT_MODES_ARRAY },
+    layoutMode: { type: 'string', enum: DIRECT_LAYOUT_MODES_ARRAY },
+    shot_count: {
+      type: 'number',
+      minimum: 1,
+      maximum: MAX_DIRECT_SHOTS,
+    },
+    shotCount: {
+      type: 'number',
+      minimum: 1,
+      maximum: MAX_DIRECT_SHOTS,
+    },
+    includeThoughts: { type: 'boolean' },
+    seed: { type: 'number' },
+    temperature: { type: 'number', minimum: 0, maximum: 2 },
+  },
+  required: ['prompt', 'garmentUrls'],
+};
 
-const EditShotBodySchema = z
-  .object({
-    maskImage: z.string().trim().min(1, 'maskImage 不能为空'),
-    referenceImage: z.string().trim().min(1).optional(),
-    referenceImages: z.array(z.string().trim().min(1)).max(12).optional(),
-    prompt: z.string().trim().min(1, 'prompt 不能为空'),
-    editMode: z.string().trim().min(1).optional(),
-  })
-  .strict();
+const EditShotSwaggerSchema = {
+  type: 'object',
+  properties: {
+    maskImage: { type: 'string', description: 'base64 mask' },
+    referenceImage: { type: 'string', description: '单张参考图 base64' },
+    referenceImages: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '多张参考图 base64',
+    },
+    prompt: { type: 'string' },
+    editMode: { type: 'string' },
+  },
+  required: ['maskImage', 'prompt'],
+};
 
-const CreateDirectTaskBodySchema = z
-  .object({
-    prompt: z.string().trim().min(1, 'prompt 不能为空'),
-    resolution: z.enum(['1K', '2K', '4K']).optional(),
-    aspectRatio: z
-      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
-      .optional(),
-    aspect_ratio: z
-      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
-      .optional(),
-    style_preset_ids: z.string().trim().optional(), // comma-separated
-    pose_preset_ids: z.string().trim().optional(), // comma-separated
-    face_preset_ids: z.string().trim().optional(), // comma-separated
-    layout_mode: z.enum(DIRECT_LAYOUT_MODES).optional(),
-    layoutMode: z.enum(DIRECT_LAYOUT_MODES).optional(),
-    shot_count: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      return Number(v);
-    }, z.number().int().min(1).max(MAX_DIRECT_SHOTS).optional()),
-    shotCount: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      return Number(v);
-    }, z.number().int().min(1).max(MAX_DIRECT_SHOTS).optional()),
-    includeThoughts: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      if (typeof v === 'boolean') return v;
-      if (typeof v !== 'string' && typeof v !== 'number') return undefined;
-      const s = String(v).trim().toLowerCase();
-      if (s === 'true' || s === '1' || s === 'yes') return true;
-      if (s === 'false' || s === '0' || s === 'no') return false;
-      return undefined;
-    }, z.boolean().optional()),
-    seed: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      return Number(v);
-    }, z.number().int().optional()),
-    temperature: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      return Number(v);
-    }, z.number().min(0).max(2).optional()),
-  })
-  .strict();
 
-const CreateDirectUrlsTaskBodySchema = z
-  .object({
-    prompt: z.string().trim().min(1, 'prompt 不能为空'),
-    garmentUrls: z
-      .array(z.string().trim().min(1))
-      .min(1, '至少需要 1 张衣服图片')
-      .max(14),
-    resolution: z.enum(['1K', '2K', '4K']).optional(),
-    aspectRatio: z
-      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
-      .optional(),
-    aspect_ratio: z
-      .enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
-      .optional(),
-    stylePresetIds: z.array(z.string().trim().min(1)).max(1).optional(),
-    posePresetIds: z.array(z.string().trim().min(1)).max(4).optional(),
-    facePresetIds: z.array(z.string().trim().min(1)).max(3).optional(),
-    layoutMode: z.enum(DIRECT_LAYOUT_MODES).optional(),
-    layout_mode: z.enum(DIRECT_LAYOUT_MODES).optional(),
-    shotCount: z.coerce.number().int().min(1).max(MAX_DIRECT_SHOTS).optional(),
-    shot_count: z.coerce.number().int().min(1).max(MAX_DIRECT_SHOTS).optional(),
-    includeThoughts: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      if (typeof v === 'boolean') return v;
-      if (typeof v !== 'string' && typeof v !== 'number') return undefined;
-      const s = String(v).trim().toLowerCase();
-      if (s === 'true' || s === '1' || s === 'yes') return true;
-      if (s === 'false' || s === '0' || s === 'no') return false;
-      return undefined;
-    }, z.boolean().optional()),
-    seed: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      return Number(v);
-    }, z.number().int().optional()),
-    temperature: z.preprocess((v) => {
-      if (v === undefined || v === null || v === '') return undefined;
-      return Number(v);
-    }, z.number().min(0).max(2).optional()),
-  })
-  .strict();
-
-const DirectRegenerateBodySchema = z
-  .object({
-    prompt: z.string().trim().min(1).optional(),
-  })
-  .strict();
-
-const DirectMessageBodySchema = z
-  .object({
-    message: z.string().trim().min(1, 'message 不能为空'),
-  })
-  .strict();
-
-const ApproveTaskBodySchema = z
-  .object({
-    editedPrompts: z.record(z.string(), z.string()).optional(),
-  })
-  .strict();
-
-const ToggleFavoriteBodySchema = z
-  .object({
-    favorite: z.boolean(),
-  })
-  .strict();
-
+@ApiTags('Tasks')
+@ApiBearerAuth()
 @Controller('tasks')
 export class TaskController {
   private readonly logger = new Logger(TaskController.name);
@@ -242,6 +264,14 @@ export class TaskController {
 
   @Post()
   @Public()
+  @ApiOperation({
+    summary: '创建任务（Legacy/Storyboard，支持文件或 URL，公开）',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: CreateTaskSwaggerSchema,
+    description: '同时支持 multipart/form-data 与 JSON（file_urls 等字段）',
+  })
   @UseInterceptors(
     AnyFilesInterceptor({
       storage: diskStorage({
@@ -366,7 +396,12 @@ export class TaskController {
     try {
       const { task, claimToken } = await this.taskService.createTask(dto);
       const safeTask = this.sanitizeTask(task);
-      return claimToken ? { ...safeTask, claimToken } : safeTask;
+      const response = claimToken ? { ...safeTask, claimToken } : safeTask;
+      return assertResponse(
+        TaskCreateResponseSchema,
+        response,
+        'TaskController.create',
+      );
     } catch (e) {
       const errorMessage = this.resolveErrorMessage(e, '创建任务失败');
       this.logger.warn('CreateTask failed', {
@@ -391,6 +426,9 @@ export class TaskController {
    * - 仅登录用户可用（会写入 Task 以便队列/相册/重绘）
    */
   @Post('direct')
+  @ApiOperation({ summary: '直出图（上传文件，需登录）' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: CreateDirectTaskSwaggerSchema })
   @UseInterceptors(
     FilesInterceptor('garment_images', 6, {
       storage: diskStorage({
@@ -444,7 +482,11 @@ export class TaskController {
       facePresetIds: toIdList(body.face_preset_ids),
     });
 
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.createDirect',
+    );
   }
 
   /**
@@ -453,6 +495,8 @@ export class TaskController {
    * - 返回 taskId 后后台异步出图（前端轮询 /tasks/:id）
    */
   @Post('direct-urls')
+  @ApiOperation({ summary: '直出图（URL，需登录）' })
+  @ApiBody({ schema: CreateDirectUrlsTaskSwaggerSchema })
   async createDirectUrls(
     @CurrentUser() user: UserModel,
     @Body(new ZodValidationPipe(CreateDirectUrlsTaskBodySchema))
@@ -479,13 +523,52 @@ export class TaskController {
       facePresetIds: body.facePresetIds,
     });
 
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.createDirectUrls',
+    );
   }
 
   /**
    * Get all tasks (with pagination)
    */
   @Get()
+  @ApiOperation({ summary: '获取任务列表（分页）' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'scope', required: false, enum: ['all', 'mine'] })
+  @ApiQuery({ name: 'userId', required: false, type: String })
+  @ApiQuery({ name: 'q', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: [
+      'DRAFT',
+      'PENDING',
+      'QUEUED',
+      'PLANNING',
+      'AWAITING_APPROVAL',
+      'RENDERING',
+      'COMPLETED',
+      'FAILED',
+      'HERO_RENDERING',
+      'AWAITING_HERO_APPROVAL',
+      'STORYBOARD_PLANNING',
+      'STORYBOARD_READY',
+      'SHOTS_RENDERING',
+    ],
+  })
+  @ApiQuery({
+    name: 'directOnly',
+    required: false,
+    description: '可用 directOnly 或 direct_only',
+  })
+  @ApiQuery({
+    name: 'favoriteOnly',
+    required: false,
+    description: '可用 favoriteOnly 或 favorite_only',
+  })
   async findAll(
     @CurrentUser() user: UserModel,
     @Query(new ZodValidationPipe(GetTasksQuerySchema))
@@ -509,19 +592,43 @@ export class TaskController {
         favoriteOnly,
       },
     );
-    return {
+    const response = {
       ...result,
       tasks: result.tasks.map((t) => this.sanitizeTask(t)),
     };
+    return assertResponse(
+      TaskListResponseSchema,
+      response,
+      'TaskController.findAll',
+    );
   }
 
   @Get(':id')
+  @ApiOperation({ summary: '获取任务详情' })
+  @ApiParam({ name: 'id', type: String })
   async findOne(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const task = await this.taskAccess.requireReadableTask(id, user);
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.findOne',
+    );
   }
 
   @Post(':id/approve')
+  @ApiOperation({ summary: '确认并开始渲染（Legacy）' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        editedPrompts: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+        },
+      },
+    },
+  })
   async approveTask(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
@@ -529,10 +636,27 @@ export class TaskController {
     body: z.infer<typeof ApproveTaskBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(id, user);
-    return this.taskService.approveAndRender(id, body.editedPrompts);
+    const result = await this.taskService.approveAndRender(
+      id,
+      body.editedPrompts,
+    );
+    return assertResponse(
+      TaskApproveResponseSchema,
+      result,
+      'TaskController.approveTask',
+    );
   }
 
   @Post(':id/claim')
+  @ApiOperation({ summary: '认领任务（claimToken）' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { claimToken: { type: 'string' } },
+      required: ['claimToken'],
+    },
+  })
   async claimTask(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
@@ -540,20 +664,40 @@ export class TaskController {
     body: z.infer<typeof ClaimTaskBodySchema>,
   ) {
     const task = await this.taskService.claimTask(id, user, body.claimToken);
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.claimTask',
+    );
   }
 
   @Post(':id/start')
+  @ApiOperation({ summary: '开始任务（Legacy）' })
+  @ApiParam({ name: 'id', type: String })
   async startTask(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
     const task = await this.taskService.startTask(id, user);
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.startTask',
+    );
   }
 
   /**
    * Update prompt for a specific shot
    */
   @Patch(':id/shots/:shotId/prompt')
+  @ApiOperation({ summary: '更新分镜提示词' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiParam({ name: 'shotId', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { prompt: { type: 'string' } },
+      required: ['prompt'],
+    },
+  })
   async updateShotPrompt(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
@@ -561,13 +705,26 @@ export class TaskController {
     @Body() body: { prompt: string },
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
-    return this.taskService.updateShotPrompt(taskId, shotId, body.prompt);
+    const result = await this.taskService.updateShotPrompt(
+      taskId,
+      shotId,
+      body.prompt,
+    );
+    return assertResponse(
+      TaskUpdateShotPromptResponseSchema,
+      result,
+      'TaskController.updateShotPrompt',
+    );
   }
 
   /**
    * Edit a specific shot with mask-based editing
    */
   @Post(':id/shots/:shotId/edit')
+  @ApiOperation({ summary: '编辑分镜（遮罩编辑）' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiParam({ name: 'shotId', type: String })
+  @ApiBody({ schema: EditShotSwaggerSchema })
   async editShot(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
@@ -576,13 +733,26 @@ export class TaskController {
     body: z.infer<typeof EditShotBodySchema>,
   ) {
     await this.taskAccess.requireWritableTask(taskId, user);
-    return this.taskService.editShot(taskId, shotId, body);
+    const result = await this.taskService.editShot(taskId, shotId, body);
+    return assertResponse(
+      EditShotResponseSchema,
+      result,
+      'TaskController.editShot',
+    );
   }
 
   /**
    * 直出图：重绘（追加版本相册）
    */
   @Post(':id/direct-regenerate')
+  @ApiOperation({ summary: '直出图重绘（不支持修改 prompt）' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { prompt: { type: 'string' } },
+    },
+  })
   async directRegenerate(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
@@ -596,13 +766,26 @@ export class TaskController {
       );
     }
     const task = await this.taskService.regenerateDirectTask(taskId, user);
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.directRegenerate',
+    );
   }
 
   /**
    * 直出图：对话追加（在同一任务上追加指令进行迭代生成）
    */
   @Post(':id/direct-message')
+  @ApiOperation({ summary: '直出图对话追加' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { message: { type: 'string' } },
+      required: ['message'],
+    },
+  })
   async directMessage(
     @CurrentUser() user: UserModel,
     @Param('id') taskId: string,
@@ -615,7 +798,11 @@ export class TaskController {
       user,
       body.message,
     );
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.directMessage',
+    );
   }
 
   /**
@@ -623,45 +810,82 @@ export class TaskController {
    * If shotId is provided via query, only retry that shot
    */
   @Post(':id/retry')
+  @ApiOperation({ summary: '重试失败分镜（可选 shotId）' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiQuery({ name: 'shotId', required: false, type: String })
   async retryFailedShots(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
     @Query('shotId') shotId?: string,
   ) {
     await this.taskAccess.requireWritableTask(id, user);
-    return this.taskService.retryFailedShots(id, shotId);
+    const result = await this.taskService.retryFailedShots(id, shotId);
+    return assertResponse(
+      TaskRetryResponseSchema,
+      this.isTaskModel(result) ? this.sanitizeTask(result) : result,
+      'TaskController.retryFailedShots',
+    );
   }
 
   /**
    * Retry Brain planning (legacy)
    */
   @Post(':id/retry-brain')
+  @ApiOperation({ summary: '重试 Brain 规划（Legacy）' })
+  @ApiParam({ name: 'id', type: String })
   async retryBrain(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
     const task = await this.taskService.retryBrain(id);
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.retryBrain',
+    );
   }
 
   /**
    * Retry Painter rendering (legacy)
    */
   @Post(':id/retry-render')
+  @ApiOperation({ summary: '重试 Painter 渲染（Legacy）' })
+  @ApiParam({ name: 'id', type: String })
   async retryRender(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
     const task = await this.taskService.retryRender(id);
-    return this.isTaskModel(task) ? this.sanitizeTask(task) : task;
+    const response = this.isTaskModel(task) ? this.sanitizeTask(task) : task;
+    return assertResponse(
+      TaskRetryResponseSchema,
+      response,
+      'TaskController.retryRender',
+    );
   }
 
   /**
    * Delete a task and all associated files
    */
   @Delete(':id')
+  @ApiOperation({ summary: '删除任务' })
+  @ApiParam({ name: 'id', type: String })
   async deleteTask(@CurrentUser() user: UserModel, @Param('id') id: string) {
     await this.taskAccess.requireWritableTask(id, user);
-    return this.taskService.deleteTask(id);
+    const result = await this.taskService.deleteTask(id);
+    return assertResponse(
+      TaskDeleteResponseSchema,
+      result,
+      'TaskController.deleteTask',
+    );
   }
 
   @Patch(':id/favorite')
+  @ApiOperation({ summary: '收藏/取消收藏' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { favorite: { type: 'boolean' } },
+      required: ['favorite'],
+    },
+  })
   async toggleFavorite(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
@@ -670,7 +894,11 @@ export class TaskController {
   ) {
     await this.taskAccess.requireWritableTask(id, user);
     const task = await this.taskService.setTaskFavorite(id, body.favorite);
-    return this.sanitizeTask(task);
+    return assertResponse(
+      TaskModelSchema,
+      this.sanitizeTask(task),
+      'TaskController.toggleFavorite',
+    );
   }
 
   private toRecord(input: unknown): Record<string, unknown> {
@@ -743,6 +971,9 @@ export class TaskController {
     if (!task) return task;
     const { claimTokenHash, ...rest } = task;
     void claimTokenHash;
-    return rest;
+    return normalizeTaskResponse(rest as TaskModel) as
+      | Omit<TaskModel, 'claimTokenHash'>
+      | null
+      | undefined;
   }
 }

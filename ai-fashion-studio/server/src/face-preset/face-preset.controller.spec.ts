@@ -47,8 +47,8 @@ describe('FacePresetController', () => {
     ]);
 
     const res = await controller.list({ id: 'u1', role: 'USER' } as any);
-    expect(res).toHaveLength(1);
-    expect(res[0].id).toBe('a');
+    expect(res).toHaveLength(2);
+    expect(res.map((item) => item.id)).toEqual(['a', 'c']);
   });
 
   it('returns all face presets for admin', async () => {

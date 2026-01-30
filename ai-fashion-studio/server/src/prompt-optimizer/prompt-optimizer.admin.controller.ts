@@ -7,26 +7,31 @@ import {
   Param,
   Post,
 } from '@nestjs/common';
-import { z } from 'zod';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AuthService } from '../auth/auth.service';
 import { UserDbService } from '../db/user-db.service';
 import { PromptOptimizerPromptService } from './prompt-optimizer-prompt.service';
+import {
+  AdminPromptOptimizerCreateVersionBodySchema,
+  AdminPromptOptimizerPublishBodySchema,
+  PromptOptimizerPromptActiveResponseSchema,
+  PromptOptimizerPromptListResponseSchema,
+  PromptOptimizerPromptGetVersionResponseSchema,
+  PromptOptimizerPromptCreateVersionResponseSchema,
+  PromptOptimizerPromptPublishResponseSchema,
+} from '../contracts/api.schemas';
+import { z } from 'zod';
+import { assertResponse } from '../common/response-contract';
 
-const CreateVersionBodySchema = z
-  .object({
-    content: z.string().trim().min(1),
-    note: z.string().trim().optional(),
-    publish: z.boolean().optional(),
-  })
-  .strict();
-
-const PublishBodySchema = z
-  .object({
-    versionId: z.string().trim().min(1),
-  })
-  .strict();
-
+@ApiTags('PromptOptimizerAdmin')
+@ApiBearerAuth()
 @Controller('admin/prompt-optimizer-prompts')
 export class PromptOptimizerAdminController {
   constructor(
@@ -55,20 +60,32 @@ export class PromptOptimizerAdminController {
   }
 
   @Get('active')
+  @ApiOperation({ summary: '获取当前生效版本' })
   async getActive(@Headers('authorization') authorization: string) {
     await this.requireAdmin(authorization);
     const active = await this.promptStore.getActive();
-    return { success: true, ...active };
+    return assertResponse(
+      PromptOptimizerPromptActiveResponseSchema,
+      { success: true, ...active },
+      'PromptOptimizerAdminController.getActive',
+    );
   }
 
   @Get('versions')
+  @ApiOperation({ summary: '获取版本列表' })
   async listVersions(@Headers('authorization') authorization: string) {
     await this.requireAdmin(authorization);
     const versions = await this.promptStore.listVersions();
-    return { success: true, versions };
+    return assertResponse(
+      PromptOptimizerPromptListResponseSchema,
+      { success: true, versions },
+      'PromptOptimizerAdminController.listVersions',
+    );
   }
 
   @Get('versions/:versionId')
+  @ApiOperation({ summary: '获取指定版本' })
+  @ApiParam({ name: 'versionId', type: String })
   async getVersion(
     @Headers('authorization') authorization: string,
     @Param('versionId') versionId: string,
@@ -76,14 +93,30 @@ export class PromptOptimizerAdminController {
     await this.requireAdmin(authorization);
     const version = await this.promptStore.getVersion(versionId);
     if (!version) throw new BadRequestException('版本不存在');
-    return { success: true, version };
+    return assertResponse(
+      PromptOptimizerPromptGetVersionResponseSchema,
+      { success: true, version },
+      'PromptOptimizerAdminController.getVersion',
+    );
   }
 
   @Post('versions')
+  @ApiOperation({ summary: '创建版本' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string' },
+        note: { type: 'string' },
+        publish: { type: 'boolean' },
+      },
+      required: ['content'],
+    },
+  })
   async createVersion(
     @Headers('authorization') authorization: string,
-    @Body(new ZodValidationPipe(CreateVersionBodySchema))
-    body: z.infer<typeof CreateVersionBodySchema>,
+    @Body(new ZodValidationPipe(AdminPromptOptimizerCreateVersionBodySchema))
+    body: z.infer<typeof AdminPromptOptimizerCreateVersionBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
@@ -93,17 +126,29 @@ export class PromptOptimizerAdminController {
         body.note,
         body.publish,
       );
-      return { success: true, version: meta };
+      return assertResponse(
+        PromptOptimizerPromptCreateVersionResponseSchema,
+        { success: true, version: meta },
+        'PromptOptimizerAdminController.createVersion',
+      );
     } catch (e: any) {
       throw new BadRequestException(e.message || '创建版本失败');
     }
   }
 
   @Post('publish')
+  @ApiOperation({ summary: '发布版本' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { versionId: { type: 'string' } },
+      required: ['versionId'],
+    },
+  })
   async publish(
     @Headers('authorization') authorization: string,
-    @Body(new ZodValidationPipe(PublishBodySchema))
-    body: z.infer<typeof PublishBodySchema>,
+    @Body(new ZodValidationPipe(AdminPromptOptimizerPublishBodySchema))
+    body: z.infer<typeof AdminPromptOptimizerPublishBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
@@ -112,7 +157,11 @@ export class PromptOptimizerAdminController {
         admin,
       );
       const { content: _content, ...safeVersion } = version;
-      return { success: true, ref, version: safeVersion };
+      return assertResponse(
+        PromptOptimizerPromptPublishResponseSchema,
+        { success: true, ref, version: safeVersion },
+        'PromptOptimizerAdminController.publish',
+      );
     } catch (e: any) {
       throw new BadRequestException(e.message || '发布失败');
     }

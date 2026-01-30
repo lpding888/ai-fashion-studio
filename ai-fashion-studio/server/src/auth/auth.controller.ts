@@ -12,43 +12,36 @@ import {
   Logger,
   Query,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { UserDbService } from '../db/user-db.service';
 import { InviteCodeModel, UserModel } from '../db/models';
 import * as bcrypt from 'bcrypt';
-import { z } from 'zod';
 import { Public } from './decorators/public.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { CreditService } from '../credit/credit.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  AdminCreateInviteBodySchema,
+  AdminUsersSummaryQuerySchema,
+  AdminUpdateMeBodySchema,
+  AdminCreateUserBodySchema,
+  AdminUpdateUserBodySchema,
+  LoginBodySchema,
+  RegisterBodySchema,
+} from '../contracts/api.schemas';
+import { z } from 'zod';
 
-const RegisterBodySchema = z.object({
-  username: z.string().trim().min(1, '用户名不能为空'),
-  password: z.string().min(6, '密码至少6位'),
-  nickname: z.string().trim().optional(),
-  email: z.string().trim().email('邮箱格式不正确').optional(),
-  inviteCode: z.string().trim().optional(),
-});
 
-const LoginBodySchema = z.object({
-  username: z.string().trim().min(1, '用户名不能为空'),
-  password: z.string().min(1, '密码不能为空'),
-});
-
-const CreateInviteBodySchema = z.object({
-  note: z.string().trim().optional(),
-});
-
-const AdminUsersSummaryQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-    q: z.string().trim().max(100).optional(),
-    role: z.enum(['USER', 'ADMIN']).optional(),
-    status: z.enum(['ACTIVE', 'DISABLED', 'PENDING']).optional(),
-  })
-  .strict();
-
+@ApiTags('Auth')
+@ApiBearerAuth()
 @Controller('auth')
 export class AuthController {
   private logger = new Logger(AuthController.name);
@@ -63,6 +56,20 @@ export class AuthController {
   // 注册（邀请码，一次性）
   @Public()
   @Post('register')
+  @ApiOperation({ summary: '注册（公开）' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        username: { type: 'string' },
+        password: { type: 'string', minLength: 6 },
+        nickname: { type: 'string' },
+        email: { type: 'string' },
+        inviteCode: { type: 'string' },
+      },
+      required: ['username', 'password'],
+    },
+  })
   async register(
     @Body(new ZodValidationPipe(RegisterBodySchema))
     body: z.infer<typeof RegisterBodySchema>,
@@ -95,6 +102,17 @@ export class AuthController {
   // 登录
   @Public()
   @Post('login')
+  @ApiOperation({ summary: '登录（公开）' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        username: { type: 'string' },
+        password: { type: 'string' },
+      },
+      required: ['username', 'password'],
+    },
+  })
   async login(
     @Body(new ZodValidationPipe(LoginBodySchema))
     body: z.infer<typeof LoginBodySchema>,
@@ -135,6 +153,7 @@ export class AuthController {
 
   // 获取当前用户信息
   @Get('me')
+  @ApiOperation({ summary: '获取当前用户信息' })
   async getCurrentUser(@Headers('authorization') authorization: string) {
     const token = this.authService.extractTokenFromHeader(authorization);
 
@@ -169,6 +188,7 @@ export class AuthController {
   // 登出（前端删除token即可，服务端无需处理）
   @Public()
   @Post('logout')
+  @ApiOperation({ summary: '登出（公开）' })
   async logout() {
     return {
       success: true,
@@ -179,10 +199,17 @@ export class AuthController {
   // ========== 管理员API ==========
 
   @Post('admin/invite-codes')
+  @ApiOperation({ summary: '创建邀请码（管理员）' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { note: { type: 'string' } },
+    },
+  })
   async createInviteCode(
     @Headers('authorization') authorization: string,
-    @Body(new ZodValidationPipe(CreateInviteBodySchema))
-    body: z.infer<typeof CreateInviteBodySchema>,
+    @Body(new ZodValidationPipe(AdminCreateInviteBodySchema))
+    body: z.infer<typeof AdminCreateInviteBodySchema>,
   ) {
     const admin = await this.verifyAdmin(authorization);
 
@@ -203,6 +230,7 @@ export class AuthController {
   }
 
   @Get('admin/invite-codes')
+  @ApiOperation({ summary: '获取邀请码列表（管理员）' })
   async listInviteCodes(@Headers('authorization') authorization: string) {
     await this.verifyAdmin(authorization);
 
@@ -214,6 +242,8 @@ export class AuthController {
   }
 
   @Delete('admin/invite-codes/:inviteId')
+  @ApiOperation({ summary: '撤销邀请码（管理员）' })
+  @ApiParam({ name: 'inviteId', type: String })
   async revokeInviteCode(
     @Headers('authorization') authorization: string,
     @Param('inviteId') inviteId: string,
@@ -230,16 +260,23 @@ export class AuthController {
 
   // 更新当前管理员账号信息（自助改账号/改密）
   @Put('admin/me')
+  @ApiOperation({ summary: '更新管理员自身信息' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        currentPassword: { type: 'string' },
+        username: { type: 'string' },
+        password: { type: 'string' },
+        nickname: { type: 'string' },
+        email: { type: 'string' },
+      },
+    },
+  })
   async updateAdminMe(
     @Headers('authorization') authorization: string,
-    @Body()
-    body: {
-      currentPassword?: string;
-      username?: string;
-      password?: string;
-      nickname?: string;
-      email?: string;
-    },
+    @Body(new ZodValidationPipe(AdminUpdateMeBodySchema))
+    body: z.infer<typeof AdminUpdateMeBodySchema>,
   ) {
     const admin = await this.verifyAdmin(authorization);
 
@@ -294,19 +331,27 @@ export class AuthController {
 
   // 创建用户（管理员用）
   @Post('admin/create-user')
+  @ApiOperation({ summary: '创建用户（管理员）' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        username: { type: 'string' },
+        password: { type: 'string' },
+        nickname: { type: 'string' },
+        email: { type: 'string' },
+        role: { type: 'string', enum: ['USER', 'ADMIN'] },
+        status: { type: 'string', enum: ['ACTIVE', 'DISABLED', 'PENDING'] },
+        credits: { type: 'number' },
+        notes: { type: 'string' },
+      },
+      required: ['username', 'password'],
+    },
+  })
   async createUser(
     @Headers('authorization') authorization: string,
-    @Body()
-    body: {
-      username: string;
-      password: string;
-      nickname?: string;
-      email?: string;
-      role?: 'USER' | 'ADMIN';
-      status?: 'ACTIVE' | 'DISABLED' | 'PENDING';
-      credits?: number;
-      notes?: string;
-    },
+    @Body(new ZodValidationPipe(AdminCreateUserBodySchema))
+    body: z.infer<typeof AdminCreateUserBodySchema>,
   ) {
     // 验证管理员权限
     const admin = await this.verifyAdmin(authorization);
@@ -344,6 +389,7 @@ export class AuthController {
 
   // 获取所有用户（管理员用）
   @Get('admin/users')
+  @ApiOperation({ summary: '获取用户列表（管理员）' })
   async getAllUsers(@Headers('authorization') authorization: string) {
     await this.verifyAdmin(authorization);
 
@@ -362,6 +408,16 @@ export class AuthController {
    * - balance：以 user.credits 为准
    */
   @Get('admin/users/summary')
+  @ApiOperation({ summary: '用户列表（含汇总指标，管理员）' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'q', required: false, type: String })
+  @ApiQuery({ name: 'role', required: false, enum: ['USER', 'ADMIN'] })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['ACTIVE', 'DISABLED', 'PENDING'],
+  })
   async getAdminUsersSummary(
     @Headers('authorization') authorization: string,
     @Query(new ZodValidationPipe(AdminUsersSummaryQuerySchema))
@@ -446,20 +502,28 @@ export class AuthController {
 
   // 更新用户（管理员用）
   @Put('admin/update-user/:userId')
+  @ApiOperation({ summary: '更新用户（管理员）' })
+  @ApiParam({ name: 'userId', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        username: { type: 'string' },
+        password: { type: 'string' },
+        nickname: { type: 'string' },
+        email: { type: 'string' },
+        role: { type: 'string', enum: ['USER', 'ADMIN'] },
+        status: { type: 'string', enum: ['ACTIVE', 'DISABLED', 'PENDING'] },
+        credits: { type: 'number' },
+        notes: { type: 'string' },
+      },
+    },
+  })
   async updateUser(
     @Headers('authorization') authorization: string,
     @Param('userId') userId: string,
-    @Body()
-    body: {
-      username?: string;
-      password?: string;
-      nickname?: string;
-      email?: string;
-      role?: 'USER' | 'ADMIN';
-      status?: 'ACTIVE' | 'DISABLED' | 'PENDING';
-      credits?: number;
-      notes?: string;
-    },
+    @Body(new ZodValidationPipe(AdminUpdateUserBodySchema))
+    body: z.infer<typeof AdminUpdateUserBodySchema>,
   ) {
     const admin = await this.verifyAdmin(authorization);
 
@@ -540,6 +604,8 @@ export class AuthController {
 
   // 删除用户（管理员用）
   @Delete('admin/delete-user/:userId')
+  @ApiOperation({ summary: '删除用户（管理员）' })
+  @ApiParam({ name: 'userId', type: String })
   async deleteUser(
     @Headers('authorization') authorization: string,
     @Param('userId') userId: string,

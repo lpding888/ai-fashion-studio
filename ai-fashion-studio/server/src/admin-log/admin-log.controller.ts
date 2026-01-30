@@ -1,26 +1,36 @@
 import { Controller, Get, Headers, Query, Req, Res } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiProduces,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Request, Response } from 'express';
-import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AdminLogService } from './admin-log.service';
+import { AdminLogsRecentQuerySchema } from '../contracts/api.schemas';
+import { z } from 'zod';
 
-const RecentQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(2000).default(200),
-});
-
+@ApiTags('AdminLogs')
+@ApiBearerAuth()
 @Controller('admin/logs')
 export class AdminLogController {
   constructor(private readonly logs: AdminLogService) {}
 
   @Get('recent')
+  @ApiOperation({ summary: '获取最近日志' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
   async recent(
-    @Query(new ZodValidationPipe(RecentQuerySchema))
-    query: z.infer<typeof RecentQuerySchema>,
+    @Query(new ZodValidationPipe(AdminLogsRecentQuerySchema))
+    query: z.infer<typeof AdminLogsRecentQuerySchema>,
   ) {
     return { success: true, items: this.logs.recent(query.limit) };
   }
 
   @Get('stream')
+  @ApiOperation({ summary: '日志流（NDJSON）' })
+  @ApiProduces('application/x-ndjson')
   async stream(
     @Req() req: Request,
     @Res() res: Response,

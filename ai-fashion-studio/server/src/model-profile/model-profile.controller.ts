@@ -9,45 +9,26 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { AuthService } from '../auth/auth.service';
 import { UserDbService } from '../db/user-db.service';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { z } from 'zod';
 import { ModelProfileService } from './model-profile.service';
+import {
+  AdminCreateModelProfileBodySchema,
+  AdminUpdateModelProfileBodySchema,
+  AdminSetActiveModelProfileBodySchema,
+} from '../contracts/api.schemas';
+import { z } from 'zod';
 
-const ProviderSchema = z.enum(['GEMINI', 'OPENAI_COMPAT']);
-
-const CreateModelProfileBodySchema = z
-  .object({
-    kind: z.enum(['BRAIN', 'PAINTER']),
-    provider: ProviderSchema.optional(),
-    name: z.string().trim().min(1),
-    gateway: z.string().trim().min(1),
-    model: z.string().trim().min(1),
-    apiKey: z.string().trim().min(1),
-  })
-  .strict();
-
-const UpdateModelProfileBodySchema = z
-  .object({
-    provider: ProviderSchema.optional(),
-    name: z.string().trim().min(1).optional(),
-    gateway: z.string().trim().min(1).optional(),
-    model: z.string().trim().min(1).optional(),
-    apiKey: z.string().trim().min(1).optional(),
-    disabled: z.boolean().optional(),
-  })
-  .strict();
-
-const SetActiveBodySchema = z
-  .object({
-    brainProfileId: z.string().trim().min(1).optional(),
-    painterProfileId: z.string().trim().min(1).optional(),
-    brainProfileIds: z.array(z.string().trim().min(1)).optional(),
-    painterProfileIds: z.array(z.string().trim().min(1)).optional(),
-  })
-  .strict();
-
+@ApiTags('ModelProfiles')
+@ApiBearerAuth()
 @Controller('admin/model-profiles')
 export class ModelProfileController {
   constructor(
@@ -75,6 +56,7 @@ export class ModelProfileController {
   }
 
   @Get()
+  @ApiOperation({ summary: '获取模型配置列表' })
   async list(@Headers('authorization') authorization: string) {
     await this.requireAdmin(authorization);
     try {
@@ -86,10 +68,25 @@ export class ModelProfileController {
   }
 
   @Post()
+  @ApiOperation({ summary: '创建模型配置' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['BRAIN', 'PAINTER'] },
+        provider: { type: 'string', enum: ['GEMINI', 'OPENAI_COMPAT'] },
+        name: { type: 'string' },
+        gateway: { type: 'string' },
+        model: { type: 'string' },
+        apiKey: { type: 'string' },
+      },
+      required: ['kind', 'name', 'gateway', 'model', 'apiKey'],
+    },
+  })
   async create(
     @Headers('authorization') authorization: string,
-    @Body(new ZodValidationPipe(CreateModelProfileBodySchema))
-    body: z.infer<typeof CreateModelProfileBodySchema>,
+    @Body(new ZodValidationPipe(AdminCreateModelProfileBodySchema))
+    body: z.infer<typeof AdminCreateModelProfileBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
@@ -101,11 +98,26 @@ export class ModelProfileController {
   }
 
   @Patch(':id')
+  @ApiOperation({ summary: '更新模型配置' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string', enum: ['GEMINI', 'OPENAI_COMPAT'] },
+        name: { type: 'string' },
+        gateway: { type: 'string' },
+        model: { type: 'string' },
+        apiKey: { type: 'string' },
+        disabled: { type: 'boolean' },
+      },
+    },
+  })
   async update(
     @Headers('authorization') authorization: string,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(UpdateModelProfileBodySchema))
-    body: z.infer<typeof UpdateModelProfileBodySchema>,
+    @Body(new ZodValidationPipe(AdminUpdateModelProfileBodySchema))
+    body: z.infer<typeof AdminUpdateModelProfileBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
@@ -117,6 +129,8 @@ export class ModelProfileController {
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: '删除模型配置' })
+  @ApiParam({ name: 'id', type: String })
   async remove(
     @Headers('authorization') authorization: string,
     @Param('id') id: string,
@@ -131,10 +145,22 @@ export class ModelProfileController {
   }
 
   @Post('set-active')
+  @ApiOperation({ summary: '设置激活模型' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        brainProfileId: { type: 'string' },
+        painterProfileId: { type: 'string' },
+        brainProfileIds: { type: 'array', items: { type: 'string' } },
+        painterProfileIds: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  })
   async setActive(
     @Headers('authorization') authorization: string,
-    @Body(new ZodValidationPipe(SetActiveBodySchema))
-    body: z.infer<typeof SetActiveBodySchema>,
+    @Body(new ZodValidationPipe(AdminSetActiveModelProfileBodySchema))
+    body: z.infer<typeof AdminSetActiveModelProfileBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {
@@ -166,6 +192,8 @@ export class ModelProfileController {
   }
 
   @Post(':id/test')
+  @ApiOperation({ summary: '测试模型配置连通性' })
+  @ApiParam({ name: 'id', type: String })
   async test(
     @Headers('authorization') authorization: string,
     @Param('id') id: string,

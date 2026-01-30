@@ -8,65 +8,65 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { z } from 'zod';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { UserAssetService } from './user-asset.service';
+import {
+  UserAssetCreateBodySchema,
+  UserAssetListQuerySchema,
+} from '../contracts/api.schemas';
+import { z } from 'zod';
 
-const CreateUserAssetItemSchema = z
-  .object({
-    url: z.string().trim().min(1),
-    sha256: z
-      .string()
-      .trim()
-      .regex(/^[a-f0-9]{64}$/i, 'sha256 无效'),
-    cosKey: z.string().trim().optional(),
-    fileName: z.string().trim().optional(),
-    mimeType: z.string().trim().optional(),
-    size: z.coerce.number().int().positive().optional(),
-    width: z.coerce.number().int().positive().optional(),
-    height: z.coerce.number().int().positive().optional(),
-  })
-  .strict();
-
-const CreateUserAssetBodySchema = z
-  .object({
-    items: z.array(CreateUserAssetItemSchema).min(1),
-  })
-  .strict();
-
-const ListUserAssetQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(48),
-  })
-  .strict();
-
+@ApiTags('Assets')
+@ApiBearerAuth()
 @Controller('assets')
 export class UserAssetController {
   constructor(private readonly assets: UserAssetService) {}
 
   @Get()
+  @ApiOperation({ summary: '获取素材列表' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
   async list(
     @CurrentUser() user: UserModel,
-    @Query(new ZodValidationPipe(ListUserAssetQuerySchema))
-    query: z.infer<typeof ListUserAssetQuerySchema>,
+    @Query(new ZodValidationPipe(UserAssetListQuerySchema))
+    query: z.infer<typeof UserAssetListQuerySchema>,
   ) {
     return this.assets.listByUser(user.id, query.page, query.limit);
   }
 
   @Post('batch')
+  @ApiOperation({ summary: '批量创建素材' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        items: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['items'],
+    },
+  })
   async createBatch(
     @CurrentUser() user: UserModel,
-    @Body(new ZodValidationPipe(CreateUserAssetBodySchema))
-    body: z.infer<typeof CreateUserAssetBodySchema>,
+    @Body(new ZodValidationPipe(UserAssetCreateBodySchema))
+    body: z.infer<typeof UserAssetCreateBodySchema>,
   ) {
     const items = await this.assets.createMany(user.id, body.items);
     return { items };
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: '删除素材' })
+  @ApiParam({ name: 'id', type: String })
   async remove(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const assetId = String(id || '').trim();
     if (!assetId) throw new BadRequestException('素材不存在');

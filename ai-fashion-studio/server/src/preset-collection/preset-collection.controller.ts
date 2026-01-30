@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -17,16 +18,27 @@ const RenamePresetCollectionBodySchema = z
   })
   .strict();
 
+@ApiTags('PresetCollections')
+@ApiBearerAuth()
 @Controller('preset-collections')
 export class PresetCollectionController {
   constructor(private readonly collections: PresetCollectionService) {}
 
   @Get()
+  @ApiOperation({ summary: '获取收藏夹列表' })
   async list(@CurrentUser() user: UserModel) {
     return { items: await this.collections.listByUser(user.id) };
   }
 
   @Post()
+  @ApiOperation({ summary: '创建收藏夹' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  })
   async create(
     @CurrentUser() user: UserModel,
     @Body(new ZodValidationPipe(CreatePresetCollectionBodySchema))
@@ -37,6 +49,15 @@ export class PresetCollectionController {
   }
 
   @Patch(':id')
+  @ApiOperation({ summary: '重命名收藏夹' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  })
   async rename(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
@@ -51,6 +72,8 @@ export class PresetCollectionController {
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: '删除收藏夹' })
+  @ApiParam({ name: 'id', type: String })
   async remove(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const collectionId = String(id || '').trim();
     if (!collectionId) throw new BadRequestException('收藏夹不存在');

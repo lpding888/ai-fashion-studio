@@ -1,8 +1,18 @@
 import { Controller, Post, Body, Logger } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CosService } from './cos.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import {
+  CosCredentialsBodySchema,
+  CosImageUrlBodySchema,
+  CosOptimizedUrlBodySchema,
+} from '../contracts/api.schemas';
+import { z } from 'zod';
 
+@ApiTags('Cos')
+@ApiBearerAuth()
 @Controller('cos')
 export class CosController {
   private logger = new Logger(CosController.name);
@@ -14,9 +24,17 @@ export class CosController {
    * POST /api/cos/credentials
    */
   @Post('credentials')
+  @ApiOperation({ summary: '获取 COS 临时密钥' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { userId: { type: 'string' } },
+    },
+  })
   async getCredentials(
     @CurrentUser() user: UserModel,
-    @Body() _body: { userId?: string } = {},
+    @Body(new ZodValidationPipe(CosCredentialsBodySchema))
+    _body: z.infer<typeof CosCredentialsBodySchema> = {},
   ) {
     try {
       this.logger.log(`请求临时密钥，用户ID: ${user.id}`);
@@ -36,14 +54,22 @@ export class CosController {
    * POST /api/cos/image-url
    */
   @Post('image-url')
-  getImageUrl(
-    @Body()
-    body: {
-      key: string;
-      format?: 'webp' | 'avif' | 'heif';
-      quality?: number;
-      width?: number;
+  @ApiOperation({ summary: '生成图片处理 URL' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        format: { type: 'string', enum: ['webp', 'avif', 'heif'] },
+        quality: { type: 'number' },
+        width: { type: 'number' },
+      },
+      required: ['key'],
     },
+  })
+  getImageUrl(
+    @Body(new ZodValidationPipe(CosImageUrlBodySchema))
+    body: z.infer<typeof CosImageUrlBodySchema>,
   ) {
     return {
       url: this.cosService.getImageUrl(body.key, body),
@@ -55,7 +81,18 @@ export class CosController {
    * POST /api/cos/optimized-url
    */
   @Post('optimized-url')
-  getOptimizedUrl(@Body() body: { key: string }) {
+  @ApiOperation({ summary: '生成优化后的 URL' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      required: ['key'],
+    },
+  })
+  getOptimizedUrl(
+    @Body(new ZodValidationPipe(CosOptimizedUrlBodySchema))
+    body: z.infer<typeof CosOptimizedUrlBodySchema>,
+  ) {
     return {
       url: this.cosService.getOptimizedUrl(body.key),
     };

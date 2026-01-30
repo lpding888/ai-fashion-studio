@@ -1,4 +1,11 @@
 import { Controller, Get, Param, Res } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiProduces,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Response } from 'express';
 import archiver from 'archiver';
 import * as fs from 'fs-extra';
@@ -7,11 +14,16 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { TaskAccessService } from './task-access.service';
 
+@ApiTags('Tasks')
+@ApiBearerAuth()
 @Controller('tasks')
 export class ExportController {
   constructor(private readonly taskAccess: TaskAccessService) {}
 
   @Get(':id/export')
+  @ApiOperation({ summary: '导出任务为 ZIP' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiProduces('application/zip')
   async exportTask(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,

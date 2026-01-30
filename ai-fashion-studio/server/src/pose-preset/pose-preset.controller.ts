@@ -13,6 +13,14 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import * as crypto from 'crypto';
 import * as fs from 'fs-extra';
@@ -26,18 +34,15 @@ import { BrainService } from '../brain/brain.service';
 import { CosService } from '../cos/cos.service';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { BrainRoutingService } from '../brain-routing/brain-routing.service';
+import {
+  PosePresetRelearnBodySchema,
+  PosePresetUpdateBodySchema,
+} from '../contracts/api.schemas';
 
 const POSE_PRESETS_DIR = './uploads/pose-presets';
 
-const UpdatePosePresetBodySchema = z
-  .object({
-    name: z.string().trim().min(1).optional(),
-    description: z.string().trim().optional(),
-  })
-  .strict();
-
-const RelearnPoseBodySchema = z.object({}).strict();
-
+@ApiTags('PosePresets')
+@ApiBearerAuth()
 @Controller('pose-presets')
 export class PosePresetController {
   private readonly logger = new Logger(PosePresetController.name);
@@ -94,6 +99,17 @@ export class PosePresetController {
    * AI 姿势学习：上传 1 张图片，AI 分析并自动入库（知识库卡片）
    */
   @Post('learn')
+  @ApiOperation({ summary: '姿势学习（上传 1 张图）' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', format: 'binary' },
+      },
+      required: ['image'],
+    },
+  })
   @UseInterceptors(
     FileInterceptor('image', {
       storage: diskStorage({
@@ -202,6 +218,7 @@ export class PosePresetController {
   }
 
   @Get()
+  @ApiOperation({ summary: '获取姿势预设列表' })
   async list(@CurrentUser() user: UserModel) {
     const all = await this.db.getAllStylePresets();
     const pose = all.filter((p: any) => p?.kind === 'POSE');
@@ -211,6 +228,8 @@ export class PosePresetController {
   }
 
   @Get(':id')
+  @ApiOperation({ summary: '获取姿势预设详情' })
+  @ApiParam({ name: 'id', type: String })
   async getOne(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getStylePreset(id);
     if (!preset || (preset as any).kind !== 'POSE') {
@@ -221,11 +240,22 @@ export class PosePresetController {
   }
 
   @Patch(':id')
+  @ApiOperation({ summary: '更新姿势预设' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        description: { type: 'string' },
+      },
+    },
+  })
   async update(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(UpdatePosePresetBodySchema))
-    body: z.infer<typeof UpdatePosePresetBodySchema>,
+    @Body(new ZodValidationPipe(PosePresetUpdateBodySchema))
+    body: z.infer<typeof PosePresetUpdateBodySchema>,
   ) {
     const preset = await this.db.getStylePreset(id);
     if (!preset || (preset as any).kind !== 'POSE') {
@@ -245,11 +275,14 @@ export class PosePresetController {
    * 姿势学习重试：复用已保存图片重新分析并覆盖写回 preset。
    */
   @Post(':id/relearn')
+  @ApiOperation({ summary: '姿势学习重试' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiBody({ schema: { type: 'object' } })
   async relearn(
     @CurrentUser() user: UserModel,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(RelearnPoseBodySchema))
-    _body: z.infer<typeof RelearnPoseBodySchema>,
+    @Body(new ZodValidationPipe(PosePresetRelearnBodySchema))
+    _body: z.infer<typeof PosePresetRelearnBodySchema>,
   ) {
     const preset = await this.db.getStylePreset(id);
     if (!preset || (preset as any).kind !== 'POSE') {
@@ -320,6 +353,8 @@ export class PosePresetController {
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: '删除姿势预设' })
+  @ApiParam({ name: 'id', type: String })
   async remove(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const preset = await this.db.getStylePreset(id);
     if (!preset || (preset as any).kind !== 'POSE') {

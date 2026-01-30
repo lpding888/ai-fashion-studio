@@ -1,27 +1,34 @@
 import { Controller, Get, ForbiddenException, Query } from '@nestjs/common';
-import { z } from 'zod';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { AdminAnalyticsService } from './admin-analytics.service';
+import {
+  AdminAnalyticsOverviewQuerySchema,
+} from '../contracts/api.schemas';
+import { z } from 'zod';
 
-const OverviewQuerySchema = z
-  .object({
-    days: z.coerce.number().int().min(1).max(90).default(7),
-    topN: z.coerce.number().int().min(1).max(50).default(10),
-    sampleN: z.coerce.number().int().min(10).max(500).default(200),
-  })
-  .strict();
-
+@ApiTags('AdminAnalytics')
+@ApiBearerAuth()
 @Controller('admin/analytics')
 export class AdminAnalyticsController {
   constructor(private readonly analytics: AdminAnalyticsService) {}
 
   @Get('overview')
+  @ApiOperation({ summary: '获取运营概览' })
+  @ApiQuery({ name: 'days', required: false, type: Number })
+  @ApiQuery({ name: 'topN', required: false, type: Number })
+  @ApiQuery({ name: 'sampleN', required: false, type: Number })
   async overview(
     @CurrentUser() user: UserModel,
-    @Query(new ZodValidationPipe(OverviewQuerySchema))
-    query: z.infer<typeof OverviewQuerySchema>,
+    @Query(new ZodValidationPipe(AdminAnalyticsOverviewQuerySchema))
+    query: z.infer<typeof AdminAnalyticsOverviewQuerySchema>,
   ) {
     if (!user || user.role !== 'ADMIN') {
       throw new ForbiddenException('需要管理员权限');

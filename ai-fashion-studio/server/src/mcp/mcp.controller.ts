@@ -1,8 +1,20 @@
 import { Controller, Get, Post, Body, Res, Req, Query } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiProduces,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Response, Request } from 'express';
 import { StyleAgent } from './style-agent';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { McpMessageBodySchema } from '../contracts/api.schemas';
 
+@ApiTags('Mcp')
+@ApiBearerAuth()
 @Controller('admin/mcp')
 export class McpController {
   private readonly transports = new Map<string, SSEServerTransport>();
@@ -10,6 +22,7 @@ export class McpController {
   constructor(private styleAgent: StyleAgent) {}
 
   @Get('status')
+  @ApiOperation({ summary: '获取 MCP 状态' })
   async status() {
     return {
       success: true,
@@ -22,6 +35,8 @@ export class McpController {
   }
 
   @Get('sse')
+  @ApiOperation({ summary: '建立 SSE 通道' })
+  @ApiProduces('text/event-stream')
   async handleSse(@Res() res: Response) {
     // Create a new transport for this connection
     // The endpoint "/api/mcp/messages" is where the client (Cursor/Gemini) sends POST messages
@@ -50,11 +65,14 @@ export class McpController {
   }
 
   @Post('messages')
+  @ApiOperation({ summary: '发送 MCP 消息' })
+  @ApiQuery({ name: 'sessionId', required: false, type: String })
+  @ApiBody({ schema: { type: 'object', additionalProperties: true } })
   async handleMessages(
     @Req() req: Request,
     @Res() res: Response,
     @Query('sessionId') sessionId?: string,
-    @Body() body?: unknown,
+    @Body(new ZodValidationPipe(McpMessageBodySchema)) body?: unknown,
   ) {
     // This endpoint handles the POST messages from the client
     // We need to route this to the active transport?

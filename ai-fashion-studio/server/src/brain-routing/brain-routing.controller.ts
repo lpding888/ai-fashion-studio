@@ -6,21 +6,16 @@ import {
   Headers,
   Post,
 } from '@nestjs/common';
-import { z } from 'zod';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from '../auth/auth.service';
 import { UserDbService } from '../db/user-db.service';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { BrainRoutingService } from './brain-routing.service';
+import { AdminBrainRoutingBodySchema } from '../contracts/api.schemas';
+import { z } from 'zod';
 
-const BrainRoutingBodySchema = z
-  .object({
-    defaultBrainProfileId: z.string().trim().optional().nullable(),
-    styleLearnProfileId: z.string().trim().optional().nullable(),
-    poseLearnProfileId: z.string().trim().optional().nullable(),
-    promptOptimizeProfileId: z.string().trim().optional().nullable(),
-  })
-  .strict();
-
+@ApiTags('BrainRouting')
+@ApiBearerAuth()
 @Controller('admin/brain-routing')
 export class BrainRoutingController {
   constructor(
@@ -48,6 +43,7 @@ export class BrainRoutingController {
   }
 
   @Get()
+  @ApiOperation({ summary: '获取路由配置' })
   async get(@Headers('authorization') authorization: string) {
     await this.requireAdmin(authorization);
     try {
@@ -59,10 +55,22 @@ export class BrainRoutingController {
   }
 
   @Post()
+  @ApiOperation({ summary: '更新路由配置' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        defaultBrainProfileId: { type: 'string', nullable: true },
+        styleLearnProfileId: { type: 'string', nullable: true },
+        poseLearnProfileId: { type: 'string', nullable: true },
+        promptOptimizeProfileId: { type: 'string', nullable: true },
+      },
+    },
+  })
   async update(
     @Headers('authorization') authorization: string,
-    @Body(new ZodValidationPipe(BrainRoutingBodySchema))
-    body: z.infer<typeof BrainRoutingBodySchema>,
+    @Body(new ZodValidationPipe(AdminBrainRoutingBodySchema))
+    body: z.infer<typeof AdminBrainRoutingBodySchema>,
   ) {
     const admin = await this.requireAdmin(authorization);
     try {

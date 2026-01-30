@@ -7,11 +7,24 @@ import {
   Param,
   Post,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { UserModel } from '../db/models';
 import { PromptSnippetService } from './prompt-snippet.service';
+import {
+  PromptSnippetListResponseSchema,
+  PromptSnippetCreateResponseSchema,
+  PromptSnippetDeleteResponseSchema,
+} from '../contracts/api.schemas';
+import { assertResponse } from '../common/response-contract';
 
 const CreatePromptSnippetBodySchema = z
   .object({
@@ -20,30 +33,60 @@ const CreatePromptSnippetBodySchema = z
   })
   .strict();
 
+@ApiTags('PromptSnippets')
+@ApiBearerAuth()
 @Controller('prompt-snippets')
 export class PromptSnippetController {
   constructor(private readonly promptSnippets: PromptSnippetService) {}
 
   @Get()
+  @ApiOperation({ summary: '获取提示词片段列表' })
   async list(@CurrentUser() user: UserModel) {
-    return this.promptSnippets.listByUser(user.id);
+    const result = await this.promptSnippets.listByUser(user.id);
+    return assertResponse(
+      PromptSnippetListResponseSchema,
+      result,
+      'PromptSnippetController.list',
+    );
   }
 
   @Post()
+  @ApiOperation({ summary: '创建提示词片段' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        text: { type: 'string' },
+      },
+      required: ['text'],
+    },
+  })
   async create(
     @CurrentUser() user: UserModel,
     @Body(new ZodValidationPipe(CreatePromptSnippetBodySchema))
     body: z.infer<typeof CreatePromptSnippetBodySchema>,
   ) {
-    return this.promptSnippets.createSnippet(user.id, body);
+    const result = await this.promptSnippets.createSnippet(user.id, body);
+    return assertResponse(
+      PromptSnippetCreateResponseSchema,
+      result,
+      'PromptSnippetController.create',
+    );
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: '删除提示词片段' })
+  @ApiParam({ name: 'id', type: String })
   async remove(@CurrentUser() user: UserModel, @Param('id') id: string) {
     const snippetId = String(id || '').trim();
     if (!snippetId) throw new BadRequestException('提示词不存在');
     const ok = await this.promptSnippets.deleteSnippet(user.id, snippetId);
     if (!ok) throw new BadRequestException('提示词不存在');
-    return { success: true, id: snippetId };
+    return assertResponse(
+      PromptSnippetDeleteResponseSchema,
+      { success: true, id: snippetId },
+      'PromptSnippetController.remove',
+    );
   }
 }
