@@ -49,10 +49,16 @@ if [[ "$BACKEND_ONLY" -eq 1 && "$CLIENT_ONLY" -eq 1 ]]; then
 fi
 
 # ====== 配置区域 ======
-SERVER_IP="43.139.187.166"
-SERVER_USER="root"
-SERVER_PATH="/opt/ai-fashion-studio"
-SERVER_STAGING="/root/ai-fashion-studio-upload"
+SERVER_IP="${SERVER_IP:-43.139.187.166}"
+SERVER_USER="${SERVER_USER:-root}"
+SERVER_PATH="${SERVER_PATH:-/opt/ai-fashion-studio}"
+if [[ -z "${SERVER_STAGING:-}" ]]; then
+  if [[ "$SERVER_USER" == "root" ]]; then
+    SERVER_STAGING="/root/ai-fashion-studio-upload"
+  else
+    SERVER_STAGING="/home/${SERVER_USER}/ai-fashion-studio-upload"
+  fi
+fi
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_IMAGE="node:24-bookworm-slim"
 NEXT_PUBLIC_API_URL="https://api.aizhao.icu"
@@ -256,13 +262,17 @@ SERVER_PATH="__SERVER_PATH__"
 SERVER_STAGING="__SERVER_STAGING__"
 RESTART_TARGETS="__RESTART_TARGETS__"
 DO_MIGRATE="__DO_MIGRATE__"
+SUDO=""
+if [[ "$(id -u)" -ne 0 ]]; then
+  SUDO="sudo"
+fi
 
-mkdir -p "${SERVER_PATH}/deploy"
-cp -f "${SERVER_STAGING}/deploy/docker-compose.prod.yml" "${SERVER_PATH}/deploy/docker-compose.prod.yml"
-cp -f "${SERVER_STAGING}/deploy/Caddyfile" "${SERVER_PATH}/deploy/Caddyfile"
-cp -f "${SERVER_STAGING}/deploy/.env.production.example" "${SERVER_PATH}/deploy/.env.production.example"
-cp -f "${SERVER_STAGING}/ai-fashion-images.tar" "${SERVER_PATH}/ai-fashion-images.tar"
-rm -rf "${SERVER_STAGING}"
+$SUDO mkdir -p "${SERVER_PATH}/deploy"
+$SUDO cp -f "${SERVER_STAGING}/deploy/docker-compose.prod.yml" "${SERVER_PATH}/deploy/docker-compose.prod.yml"
+$SUDO cp -f "${SERVER_STAGING}/deploy/Caddyfile" "${SERVER_PATH}/deploy/Caddyfile"
+$SUDO cp -f "${SERVER_STAGING}/deploy/.env.production.example" "${SERVER_PATH}/deploy/.env.production.example"
+$SUDO cp -f "${SERVER_STAGING}/ai-fashion-images.tar" "${SERVER_PATH}/ai-fashion-images.tar"
+$SUDO rm -rf "${SERVER_STAGING}"
 
 if [[ ! -f "${SERVER_PATH}/deploy/.env.production" ]]; then
   echo "✗ 缺少 deploy/.env.production，请先在服务器创建该文件（参考 deploy/.env.production.example）"
@@ -271,23 +281,23 @@ fi
 
 cd "${SERVER_PATH}"
 
-if docker compose version >/dev/null 2>&1; then
-  dc(){ docker compose "$@"; }
+if $SUDO docker compose version >/dev/null 2>&1; then
+  dc(){ $SUDO docker compose "$@"; }
 else
-  dc(){ docker-compose "$@"; }
+  dc(){ $SUDO docker-compose "$@"; }
 fi
 
 echo "加载新镜像..."
 ROLLBACK_TAG="$(date +%Y%m%d%H%M%S)"
-mkdir -p "${SERVER_PATH}/rollback"
+$SUDO mkdir -p "${SERVER_PATH}/rollback"
 ROLLBACK_FILE="${SERVER_PATH}/rollback/rollback-${ROLLBACK_TAG}.txt"
 ROLLBACK_TMP="$(mktemp)"
 
 echo "备份当前镜像标签（用于回滚）..."
 for img in ai-fashion-server ai-fashion-server-migrator ai-fashion-client; do
-  if docker image inspect "${img}:latest" >/dev/null 2>&1; then
-    docker tag "${img}:latest" "${img}:rollback-${ROLLBACK_TAG}"
-    id="$(docker image inspect "${img}:rollback-${ROLLBACK_TAG}" --format '{{.Id}}' 2>/dev/null || true)"
+  if $SUDO docker image inspect "${img}:latest" >/dev/null 2>&1; then
+    $SUDO docker tag "${img}:latest" "${img}:rollback-${ROLLBACK_TAG}"
+    id="$($SUDO docker image inspect "${img}:rollback-${ROLLBACK_TAG}" --format '{{.Id}}' 2>/dev/null || true)"
     echo "${img}:rollback-${ROLLBACK_TAG} ${id}" >> "${ROLLBACK_TMP}"
   else
     echo "${img}:latest (not found)" >> "${ROLLBACK_TMP}"
@@ -304,12 +314,12 @@ Rollback commands:
   docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate ${RESTART_TARGETS}
 __RB__
 
-cp -f "${ROLLBACK_TMP}" "${ROLLBACK_FILE}"
+$SUDO cp -f "${ROLLBACK_TMP}" "${ROLLBACK_FILE}"
 rm -f "${ROLLBACK_TMP}"
 
 echo "✓ 回滚备案: ${ROLLBACK_FILE}"
 
-docker load -i "${SERVER_PATH}/ai-fashion-images.tar"
+$SUDO docker load -i "${SERVER_PATH}/ai-fashion-images.tar"
 
 if [[ "${DO_MIGRATE}" = "1" ]]; then
   echo "启动 Postgres..."
@@ -322,7 +332,7 @@ fi
 echo "启动/滚动更新服务..."
 dc -f deploy/docker-compose.prod.yml up -d --force-recreate ${RESTART_TARGETS}
 
-rm -f "${SERVER_PATH}/ai-fashion-images.tar"
+$SUDO rm -f "${SERVER_PATH}/ai-fashion-images.tar"
 
 echo ""
 echo "部署完成！"

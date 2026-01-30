@@ -83,10 +83,18 @@ trap cleanup SIGINT SIGTERM
 cd server
 if [ ! -d "node_modules" ]; then
     echo -e "${YELLOW}📦 后端依赖未安装，正在安装...${NC}"
-    npm install
+    if command -v pnpm >/dev/null 2>&1; then
+        pnpm install
+    else
+        npm install
+    fi
 fi
 echo -e "${BLUE}📡 启动后端服务器...${NC}"
-npm run start:dev &
+if command -v pnpm >/dev/null 2>&1; then
+    pnpm run start:dev &
+else
+    npm run start:dev &
+fi
 SERVER_PID=$!
 
 # 等待后端启动
@@ -96,10 +104,18 @@ sleep 5
 cd ../client
 if [ ! -d "node_modules" ]; then
     echo -e "${YELLOW}📦 前端依赖未安装，正在安装...${NC}"
-    npm install --legacy-peer-deps
+    if command -v pnpm >/dev/null 2>&1; then
+        pnpm install
+    else
+        npm install --legacy-peer-deps
+    fi
 fi
 echo -e "${BLUE}📱 启动前端应用...${NC}"
-npm run dev &
+if command -v pnpm >/dev/null 2>&1; then
+    pnpm run dev &
+else
+    npm run dev &
+fi
 CLIENT_PID=$!
 
 # 等待进程
