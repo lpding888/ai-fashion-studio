@@ -47,16 +47,16 @@ npm run dev
 
 ## 访问地址
 
-- **前端**: http://localhost:3001
-- **后端 API**: http://localhost:3000/api
+- **前端**: http://localhost:3000
+- **后端 API**: http://localhost:3001/api
 - **数据库**: localhost:5432
 
 ---
 
-## 默认账号
+## 管理员账号（开发/生产）
 
-- **用户名**: `lpd520`
-- **密码**: `13112188769cc`
+- **开发环境**：首次启动会自动创建管理员账户（建议在 `server/.env` 中设置 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` 自定义；未设置时使用内置默认值，仅用于本地）
+- **生产环境**：必须设置 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD`
 
 ---
 

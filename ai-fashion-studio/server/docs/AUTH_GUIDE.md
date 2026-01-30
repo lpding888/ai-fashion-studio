@@ -12,9 +12,9 @@
 
 ## 🔑 管理员账户（开发 / 生产）
 
-- **开发环境**：首次启动会自动创建默认管理员账户（便于本地调试）
-  - 账号：`admin`
-  - 密码：`admin123`
+- **开发环境**：首次启动会自动创建管理员账户（便于本地调试）
+  - 建议通过 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` 自定义
+  - 未设置时使用内置默认值（仅用于本地）
 - **生产环境**：不会自动创建默认口令管理员；必须通过环境变量引导创建管理员：
   - `BOOTSTRAP_ADMIN_USERNAME`
   - `BOOTSTRAP_ADMIN_PASSWORD`（建议 ≥ 16 位）
@@ -32,8 +32,8 @@ POST /api/auth/login
 Content-Type: application/json
 
 {
-  "username": "admin",
-  "password": "admin123"
+  "username": "<admin_username>",
+  "password": "<admin_password>"
 }
 ```
 
@@ -232,15 +232,15 @@ npm run start:dev
 ### 2. 管理员登录
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/login \
+curl -X POST http://localhost:3001/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
+  -d '{"username":"<admin_username>","password":"<admin_password>"}'
 ```
 
 ### 3. 生成邀请码
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/admin/invite-codes \
+curl -X POST http://localhost:3001/api/auth/admin/invite-codes \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <admin_token>" \
   -d '{"note":"local test"}'
@@ -248,7 +248,7 @@ curl -X POST http://localhost:5000/api/auth/admin/invite-codes \
 
 ### 4. 使用邀请码注册
 ```bash
-curl -X POST http://localhost:5000/api/auth/register \
+curl -X POST http://localhost:3001/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username":"testuser","password":"test123","inviteCode":"<invite_code>"}'
 ```
@@ -256,7 +256,7 @@ curl -X POST http://localhost:5000/api/auth/register \
 ### 5. 测试用户登录
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/login \
+curl -X POST http://localhost:3001/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"testuser","password":"test123"}'
 ```
@@ -304,7 +304,7 @@ npm run start:dev
 ```
 
 **步骤2**：准备管理员账户
-- 开发环境：默认 `admin/admin123`
+- 开发环境：建议设置 `BOOTSTRAP_ADMIN_USERNAME/BOOTSTRAP_ADMIN_PASSWORD`
 - 生产环境：配置 `BOOTSTRAP_ADMIN_USERNAME/BOOTSTRAP_ADMIN_PASSWORD` 引导创建
 
 **步骤3**：生成邀请码

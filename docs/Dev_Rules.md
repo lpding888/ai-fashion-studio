@@ -10,8 +10,8 @@
 ### 前端 (Next.js App Router)
 - **Framework**: Next.js 15 (Stable)
 - **UI Library**: React 19
-- **Styling**: TailwindCSS (如果你需要快速布局) 或 CSS Modules (保持纯净) <- *建议先用 TailwindCSS 提高开发速度，配合 shadcn/ui 组件库*
-- **State Management**: Zustand (轻量级，适合本地应用状态) 或 React Query (管理服务端状态)
+- **Styling**: Tailwind CSS 4（配合 Shadcn/ui / Radix UI，避免引入第二套 UI 框架）
+- **State Management**: Zustand（本地应用状态）
 
 ### 后端 (NestJS)
 - **Framework**: NestJS 11
@@ -22,8 +22,8 @@
 - **Database**: PostgreSQL (Docker 部署)
 
 ### AI 交互层
-- **Client**: `openai` SDK (用于连接 Brain 的 Chat 接口)
-- **Client**: `google-auth-library` + `axios` (用于连接 Painter 的原生接口)
+- **Client (Brain)**: `openai` SDK（OpenAI 兼容接口）
+- **Client (Painter)**: `axios`（Gemini Image HTTP）
 
 ---
 
@@ -41,11 +41,16 @@ ai-fashion-studio/
 │   └── public/
 ├── server/                 # NestJS 后端服务
 │   ├── src/
-│   │   ├── modules/        # 业务模块 (Task, Shot, Brain, Painter)
-│   │   ├── prisma/         # 数据库 Schema
+│   │   ├── brain/          # Brain 相关
+│   │   ├── painter/        # Painter 相关
+│   │   ├── task/           # 任务编排
 │   │   └── main.ts
-│   └── docker-compose.yml  # 数据库编排文件
-└── docs/                   # 你的需求文档
+│   ├── prisma/             # 数据库 Schema
+│   └── scripts/
+├── scf-painter/            # Serverless 图像生成函数
+├── deploy/                 # 部署配置
+├── docker-compose.yml      # 数据库编排文件
+└── docs/                   # 需求/治理文档
 ```
 
 ---
@@ -60,13 +65,13 @@ ai-fashion-studio/
 - Brain 输出的 JSON 必须通过 Zod Schema 校验，校验失败直接抛错，**严禁在代码里做模糊兼容**。
 
 ### 规则 B：双模隔离 (Model Isolation)
-- **Brain 的代码**只能出现在 `server/src/modules/brain`，且只能调用 OpenAI 兼容接口。
-- **Painter 的代码**只能出现在 `server/src/modules/painter`，且必须实现 `layout_mode` 的拼图逻辑。
-- 两者通过 `TaskService` 协调，**严禁在一个函数里混写两个模型的调用逻辑**。
+- **Brain 的代码**只能出现在 `server/src/brain`，且只能调用 OpenAI 兼容接口。
+- **Painter 的代码**只能出现在 `server/src/painter`，且必须实现 `layout_mode` 的拼图逻辑。
+- 两者通过任务编排模块协调，**严禁在一个函数里混写两个模型的调用逻辑**。
 
 ### 规则 C：文件系统直写 (File System Direct)
 - 图片上传不存数据库，只存路径。
-- 图片**必须**存放在 `server/uploads/{taskId}/` 目录下，按 `ref_A.png`, `shot_01_v1.png` 命名，严禁乱码文件名。
+- 任务相关图片存放在 `server/uploads/tasks/{taskId}/`，其他资源按模块目录存放（如 `uploads/face-presets`）。
 
 ### 规则 D：错误处理 (Error Handling)
 - 所有的 AI 调用必须包裹在 `try-catch` 中。

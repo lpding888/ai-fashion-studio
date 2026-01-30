@@ -114,3 +114,8 @@
 - `garment_profile` 里看不见的必须填 `无法从图片确认`，禁止模型猜
 - 修复流程默认最多 2 次；超出提示“建议重生本张”
 - 每次生成/修复必须落一条记录：`model_id + inputs + prompt + config + output + timestamp`
+
+## 7) API 契约来源与测试
+- API 入参边界：`ai-fashion-studio/server/src/contracts/api.schemas.ts`（Controller 使用 ZodValidationPipe 引用）。
+- 契约测试入口：`ai-fashion-studio/server/src/contracts/contract-schemas.spec.ts`。
+- 变更接口或 DTO 时：同步更新对应 Zod schema 与契约测试，避免前后端静默不一致。

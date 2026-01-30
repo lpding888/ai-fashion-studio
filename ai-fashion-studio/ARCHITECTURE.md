@@ -8,16 +8,16 @@
 ## 📐 技术架构
 
 ### **前端（Frontend）**
-- **框架**：Next.js 14 (App Router)
+- **框架**：Next.js 15 (App Router, React 19)
 - **语言**：TypeScript
-- **UI库**：Shadcn/ui + Tailwind CSS
+- **UI库**：Shadcn/ui（基于 Radix UI）+ Tailwind CSS 4
 - **状态管理**：Zustand
 - **端口**：3000
 
 ### **后端（Backend）**
 - **框架**：NestJS
 - **语言**：TypeScript
-- **数据库ORM**：TypeORM
+- **数据库ORM**：Prisma 7
 - **数据库**：PostgreSQL
 - **端口**：3001
 

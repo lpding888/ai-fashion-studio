@@ -20,8 +20,8 @@ AI Fashion Studio 是一个基于 AI 生成时尚图像的全栈应用项目。�
 
 此脚本会自动：
 1. 启动 PostgreSQL 数据库（Docker 容器）
-2. 启动 NestJS 后端服务（3000 端口）
-3. 启动 Next.js 前端应用（3001 端口）
+2. 启动 NestJS 后端服务（3001 端口）
+3. 启动 Next.js 前端应用（3000 端口）
 
 ### 方式二：手动启动
 
@@ -39,7 +39,7 @@ cd server
 npm install
 npm run start:dev
 ```
-后端 API 地址: `http://localhost:3000`
+后端 API 地址: `http://localhost:3001/api`
 
 #### 3. 启动前端 (Client)
 ```bash
@@ -47,13 +47,13 @@ cd client
 npm install
 npm run dev
 ```
-前端访问地址: `http://localhost:3001`
+前端访问地址: `http://localhost:3000`
 
 ## 🛠️ 技术栈
 
 ### 前端 (Client)
 - **框架**: [Next.js 15](https://nextjs.org/) (React 19)
-- **UI 库**: Tailwind CSS 4, Radix UI, Lucide React
+- **UI 库**: Tailwind CSS 4, Shadcn/ui（基于 Radix UI）, Lucide React
 - **状态管理**: Zustand
 - **数据请求**: SWR, Axios
 - **动画**: Framer Motion
@@ -68,13 +68,12 @@ npm run dev
 ### 其他组件
 - **SCF Painter**: 位于 `scf-painter/`，用于处理图像生成的 Serverless 函数。
 
-## 🔑 默认账号信息
+## 🔑 管理员账号（开发/生产）
 
-开发环境默认管理员账号：
-- **用户名**: `lpd520`
-- **密码**: `13112188769cc`
+- **开发环境**：首次启动会自动创建管理员账户（建议在 `server/.env` 中设置 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` 自定义；未设置时使用内置默认值，仅用于本地）
+- **生产环境**：必须设置 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD`
 
-> ⚠️ 注意：生产环境请务必修改默认密码。
+> ⚠️ 注意：请勿在文档或代码中明文写入真实密码。
 
 ## 📂 目录结构
 
@@ -88,6 +87,11 @@ ai-fashion-studio/
 ├── dev.sh                  # 开发环境启动脚本
 └── docker-compose.yml      # 数据库容器编排
 ```
+
+## 📚 文档
+
+- 业务规则：`../docs/business-rules/`
+- API 文档（Swagger）：启动后端并设置 `ENABLE_SWAGGER=true`，访问 `http://localhost:3001/api-docs`（JSON：`/api-docs-json`，默认端口 3001）
 
 ## 🔧 常见问题与维护
 
