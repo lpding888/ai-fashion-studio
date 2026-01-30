@@ -97,6 +97,13 @@ function RecipeChip({ id, icon, label, subLabel, colorClass, onRemove }: RecipeC
                         e.stopPropagation();
                         onRemove();
                     }}
+                    onPointerDown={(e) => {
+                        // Prevent dnd-kit listeners on parent from swallowing the click
+                        e.stopPropagation();
+                    }}
+                    onMouseDown={(e) => {
+                        e.stopPropagation();
+                    }}
                     className="ml-1 p-0.5 rounded-full hover:bg-black/10 transition-colors"
                 >
                     <X className="w-3 h-3" />

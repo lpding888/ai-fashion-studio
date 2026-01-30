@@ -425,12 +425,13 @@ export function LearnGeneratePage() {
     if (!isAuthenticated) return;
     try {
       const wantAll = !!options?.all;
-      const pageLimit = wantAll ? DIRECT_QUEUE_MAX_LIMIT : DIRECT_QUEUE_PAGE_SIZE;
+      const pageLimit = DIRECT_QUEUE_PAGE_SIZE;
       const first = await fetchDirectQueuePage(1, pageLimit);
       let allTasks = first.tasks;
 
       if (wantAll && first.totalPages > 1) {
         for (let page = 2; page <= first.totalPages; page += 1) {
+          if (allTasks.length >= DIRECT_QUEUE_MAX_LIMIT) break;
           const next = await fetchDirectQueuePage(page, pageLimit);
           allTasks = [...allTasks, ...next.tasks];
         }
@@ -464,7 +465,7 @@ export function LearnGeneratePage() {
   const syncFavoriteTasks = React.useCallback(async () => {
     if (!isAuthenticated) return;
     try {
-      const pageLimit = DIRECT_QUEUE_MAX_LIMIT;
+      const pageLimit = DIRECT_QUEUE_PAGE_SIZE;
       const first = await fetchFavoriteTasksPage(1, pageLimit);
       let allTasks = first.tasks;
 

@@ -57,11 +57,20 @@ export function useStudioShortcuts({
 
     // Mod + Z: Undo Optimization
     useHotkeys("mod+z", (e) => {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName?.toUpperCase();
+        const isEditable =
+            tag === "INPUT"
+            || tag === "TEXTAREA"
+            || target?.isContentEditable;
+        if (isEditable) {
+            return; // Let browser handle native undo in inputs
+        }
         if (canUndoOptimize) {
             e.preventDefault();
             onUndoOptimize();
         }
-    }, formOptions); // Form tags enabled to allow undoing while editing prompt
+    }, { enableOnFormTags: true, preventDefault: false });
 
     // Mod + S: Save Snapshot (Future)
     useHotkeys("mod+s", (e) => {

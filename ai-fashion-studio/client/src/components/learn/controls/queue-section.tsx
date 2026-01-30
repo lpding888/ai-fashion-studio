@@ -8,6 +8,7 @@ import { Loader2, CheckCircle2, AlertCircle, Clock, Trash2, Repeat, Info, Heart 
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import { useStudioSound } from "@/hooks/use-studio-sound";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Task } from "@/components/learn/types";
 import { smartWithTencentCi } from "@/lib/image-ci";
 import { usePanelSizing } from "@/components/learn/layout/studio-layout";
@@ -96,7 +97,7 @@ export function QueueSection({
     };
 
     return (
-        <div className="flex flex-col h-full overflow-hidden">
+        <div className="flex flex-col h-full min-h-0 overflow-hidden">
             {/* Header / Tabs */}
             <div className="flex items-center justify-between mb-2">
                 <div className={cn("flex items-center gap-1 bg-slate-100/50 p-0.5 rounded-lg border border-slate-200/50", isCompact && "text-[9px]")}>
@@ -143,37 +144,22 @@ export function QueueSection({
 
                 <div className="flex items-center gap-1">
                     {activeTab === "queue" && queueBaseLimit && onToggleShowAll && (
-                        <div className={cn(
-                            "flex items-center bg-white/70 border border-slate-200/50 rounded-md p-0.5",
-                            isCompact ? "text-[9px]" : "text-[10px]"
-                        )}>
-                            <button
-                                type="button"
-                                onClick={() => handleQueueViewModeChange("recent")}
+                        <Select value={queueViewMode} onValueChange={handleQueueViewModeChange}>
+                            <SelectTrigger
                                 className={cn(
-                                    "px-2 py-0.5 rounded transition-all font-semibold",
-                                    isCompact ? "h-5" : "h-6",
-                                    queueViewMode === "recent"
-                                        ? "bg-white text-[#FF7F50] shadow-sm ring-1 ring-black/5"
-                                        : "text-slate-500 hover:text-slate-700"
+                                    "h-6 w-[120px] bg-white/70 border border-slate-200/50 px-2",
+                                    isCompact ? "h-5 text-[9px]" : "text-[10px]"
                                 )}
                             >
-                                最近 {queueBaseLimit} 条
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => handleQueueViewModeChange("all")}
-                                className={cn(
-                                    "px-2 py-0.5 rounded transition-all font-semibold",
-                                    isCompact ? "h-5" : "h-6",
-                                    queueViewMode === "all"
-                                        ? "bg-white text-[#FF7F50] shadow-sm ring-1 ring-black/5"
-                                        : "text-slate-500 hover:text-slate-700"
-                                )}
-                            >
-                                显示全部{typeof queueTotal === "number" ? ` (${queueTotal})` : ""}
-                            </button>
-                        </div>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="recent">最近 {queueBaseLimit} 条</SelectItem>
+                                <SelectItem value="all">
+                                    显示全部{typeof queueTotal === "number" ? ` (${queueTotal})` : ""}
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
                     )}
                     {activeTab === "queue" && onClearCompleted && queueItems.some(t => t.status === "COMPLETED" || t.status === "FAILED") && (
                         <Button
@@ -189,7 +175,7 @@ export function QueueSection({
             </div>
 
             {/* Task List */}
-            <ScrollArea className="flex-1 -mx-2 px-2">
+            <ScrollArea className="flex-1 min-h-0 -mx-2 px-2">
                 <div className={cn("pb-4", isCompact ? "space-y-2" : "space-y-3")}>
                     {displayTasks.length === 0 ? (
                         <div className={cn("text-center py-12 text-slate-400 flex flex-col items-center", isCompact ? "text-[10px]" : "text-xs")}>
