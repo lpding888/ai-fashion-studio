@@ -20,6 +20,7 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { TaskCommonService } from './task-common.service';
 import { TaskRenderingOrchestratorService } from './task-rendering-orchestrator.service';
 import { TaskCrudService } from './task-crud.service';
+import { isScfResultSuccess, pickScfImageUrl } from './scf-utils';
 import { MAX_TOTAL_IMAGES } from './task.constants';
 
 type LegacyShotEditInput = {
@@ -1404,10 +1405,11 @@ export class LegacyTaskService {
           let scfSuccessfulCount = 0;
           const normalizeScfResult = (input: unknown): ScfResult => {
             const record = this.toRecord(input);
+            const imageUrl = pickScfImageUrl(record);
             return {
-              shotId: this.toOptionalString(record.shotId),
-              success: Boolean(record.success),
-              imageUrl: this.toOptionalString(record.imageUrl),
+              shotId: this.toOptionalString(record.shotId ?? record.shot_id),
+              success: isScfResultSuccess(record, imageUrl),
+              imageUrl,
               error: this.toOptionalString(record.error),
             };
           };

@@ -7,6 +7,7 @@ import type { Shot, TaskModel } from '../db/models';
 import { PainterService } from '../painter/painter.service';
 import { CosService } from '../cos/cos.service';
 import { TaskBillingService } from './task-billing.service';
+import { isScfResultSuccess, pickScfImageUrl } from './scf-utils';
 
 type RenderingPlanShot = {
   shot_id?: string;
@@ -241,9 +242,9 @@ Continuity & Technical Requirements:
           config,
         })) as ScfShotResult[];
         const r = results[0];
-        const imageUrl =
-          r?.success && r?.imageUrl ? String(r.imageUrl).trim() : '';
-        if (!imageUrl) {
+        const imageUrl = pickScfImageUrl(r);
+        const isSuccess = isScfResultSuccess(r, imageUrl);
+        if (!isSuccess || !imageUrl) {
           throw new Error(r?.error || 'SCF grid rendering failed');
         }
 
@@ -491,9 +492,9 @@ Continuity & Technical Requirements:
           }
 
           const r = resultMap.get(String(shotId)) || results[i];
-          const imageUrl =
-            r?.success && r?.imageUrl ? String(r.imageUrl).trim() : '';
-          if (imageUrl) {
+          const imageUrl = pickScfImageUrl(r);
+          const isSuccess = isScfResultSuccess(r, imageUrl);
+          if (isSuccess && imageUrl) {
             scfGeneratedShots[i] = {
               ...target,
               status: 'RENDERED',

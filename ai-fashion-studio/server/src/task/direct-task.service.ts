@@ -27,6 +27,7 @@ import { CosService } from '../cos/cos.service';
 import { PresetMetaService } from '../preset-meta/preset-meta.service';
 import { TaskCommonService } from './task-common.service';
 import { TaskBillingService } from './task-billing.service';
+import { isScfResultSuccess, pickScfImageUrl } from './scf-utils';
 import { MAX_DIRECT_SHOTS, MAX_TOTAL_IMAGES } from './task.constants';
 
 type DirectTaskShot = Shot & {
@@ -1074,11 +1075,11 @@ export class DirectTaskService {
           for (let i = 0; i < shotMetas.length; i += 1) {
             const { shot: currentShot, shotId, userText } = shotMetas[i];
             const r = resultMap.get(shotId) || results[i];
-            const imageUrl =
-              r?.success && r?.imageUrl ? String(r.imageUrl).trim() : '';
+            const imageUrl = pickScfImageUrl(r);
+            const isSuccess = isScfResultSuccess(r, imageUrl);
             const shootLogText = r?.shootLogText || '';
 
-            if (imageUrl) {
+            if (isSuccess && imageUrl) {
               if (useSession && scfSession) {
                 const t = String(shootLogText || '').trim();
                 if (t) {
