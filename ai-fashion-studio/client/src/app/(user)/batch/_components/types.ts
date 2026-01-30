@@ -2,12 +2,13 @@ import api, {
     createDirectTaskFromUrls,
     BACKEND_ORIGIN
 } from '@/lib/api';
+import { TASK_CONSTRAINTS } from '@/config/task-constraints';
 
-export const MAX_GARMENT_IMAGES = 14;
-export const MAX_TOTAL_REF_IMAGES = 14;
+export const MAX_GARMENT_IMAGES = TASK_CONSTRAINTS.MAX_TOTAL_IMAGES;
+export const MAX_TOTAL_REF_IMAGES = TASK_CONSTRAINTS.MAX_TOTAL_IMAGES;
 export const MAX_POSE_SELECT = 4;
 export const MAX_STYLE_REF_IMAGES = 3;
-export const MAX_DIRECT_SHOTS = 6;
+export const MAX_DIRECT_SHOTS = TASK_CONSTRAINTS.MAX_DIRECT_SHOTS;
 export const DIRECT_STYLE_NONE = '__none__';
 export const DIRECT_RESOLUTION_OPTIONS = ['1K', '2K', '4K'] as const;
 export const DIRECT_ASPECT_RATIO_OPTIONS = ['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'] as const;

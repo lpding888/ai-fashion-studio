@@ -26,8 +26,9 @@ import { SavedConfigCards } from './saved-config-cards';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Textarea } from './ui/textarea';
 import { UserAssetLibraryDialog } from './user-asset-library-dialog';
+import { TASK_CONSTRAINTS } from '@/config/task-constraints';
 
-const MAX_TOTAL_IMAGES = 14;
+const MAX_TOTAL_IMAGES = TASK_CONSTRAINTS.MAX_TOTAL_IMAGES;
 const LAYOUT_MODE_OPTIONS = [
     { id: 'Individual', label: '单图模式', desc: 'Indiv' },
     { id: 'Grid', label: '拼图模式', desc: 'Grid' },
